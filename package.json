@@ -1,0 +1,25 @@
+{
+  "name": "imessage-boiler-plate",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Photon × Render agent starter — inbound text → Hello world 👋",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@spectrum-ts/express": "^12.7.0",
+    "express": "^5.1.0",
+    "spectrum-ts": "^12.7.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.30",
+    "typescript": "^5.8.3"
+  }
+}

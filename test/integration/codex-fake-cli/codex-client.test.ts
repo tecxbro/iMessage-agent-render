@@ -67,6 +67,7 @@ describe("Codex client through pinned SDK and fake CLI", () => {
       parentEnvironment: parentEnvironment(),
       codexPathOverride: fakeExecutable,
       safeTaskEnvironment: { AGENT_TASK_FAKE_CAPTURE_PATH: capturePath },
+      allowedTaskEnvironmentKeys: ["AGENT_TASK_FAKE_CAPTURE_PATH"],
     });
 
     const result = await client.runStructured({
@@ -106,6 +107,14 @@ describe("Codex client through pinned SDK and fake CLI", () => {
     expect(capture?.args).toContain('cli_auth_credentials_store="file"');
     expect(capture?.args).toContain('forced_login_method="chatgpt"');
     expect(capture?.args).toContain("hide_agent_reasoning=true");
+    expect(capture?.args).toContain('approvals_reviewer="user"');
+    expect(capture?.args).toContain('shell_environment_policy.inherit="none"');
+    expect(capture?.args).toContain(
+      "shell_environment_policy.ignore_default_excludes=false",
+    );
+    expect(capture?.args).toContain(
+      "shell_environment_policy.experimental_use_profile=false",
+    );
     expect(capture?.args).toContain(
       "sandbox_workspace_write.network_access=false",
     );
@@ -129,6 +138,7 @@ describe("Codex client through pinned SDK and fake CLI", () => {
       parentEnvironment: parentEnvironment(),
       codexPathOverride: fakeExecutable,
       safeTaskEnvironment: { AGENT_TASK_FAKE_CAPTURE_PATH: capturePath },
+      allowedTaskEnvironmentKeys: ["AGENT_TASK_FAKE_CAPTURE_PATH"],
     });
     await client.runStructured({
       prompt: "Return the acknowledgement.",
@@ -160,6 +170,7 @@ describe("Codex client through pinned SDK and fake CLI", () => {
       codexPathOverride: fakeExecutable,
       maximumOutputBytes: 2_048,
       safeTaskEnvironment: { AGENT_TASK_FAKE_MODE: mode },
+      allowedTaskEnvironmentKeys: ["AGENT_TASK_FAKE_MODE"],
     });
 
     await expect(
@@ -188,6 +199,11 @@ describe("Codex client through pinned SDK and fake CLI", () => {
         AGENT_TASK_FAKE_CAPTURE_PATH: capturePath,
         AGENT_TASK_FAKE_TERMINATION_PATH: terminationPath,
       },
+      allowedTaskEnvironmentKeys: [
+        "AGENT_TASK_FAKE_MODE",
+        "AGENT_TASK_FAKE_CAPTURE_PATH",
+        "AGENT_TASK_FAKE_TERMINATION_PATH",
+      ],
     });
     const controller = new AbortController();
     const running = client.runStructured({
@@ -222,6 +238,11 @@ describe("Codex client through pinned SDK and fake CLI", () => {
         AGENT_TASK_FAKE_CAPTURE_PATH: capturePath,
         AGENT_TASK_FAKE_TERMINATION_PATH: terminationPath,
       },
+      allowedTaskEnvironmentKeys: [
+        "AGENT_TASK_FAKE_MODE",
+        "AGENT_TASK_FAKE_CAPTURE_PATH",
+        "AGENT_TASK_FAKE_TERMINATION_PATH",
+      ],
     });
 
     const running =
@@ -271,6 +292,7 @@ describe("Codex client through pinned SDK and fake CLI", () => {
       parentEnvironment: parentEnvironment(),
       codexPathOverride: fakeExecutable,
       safeTaskEnvironment: { AGENT_TASK_FAKE_UNSUPPORTED_EFFORT: "max" },
+      allowedTaskEnvironmentKeys: ["AGENT_TASK_FAKE_UNSUPPORTED_EFFORT"],
     });
     const runner = createCodexPairRunner(client, directory);
 

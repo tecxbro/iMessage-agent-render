@@ -26,11 +26,12 @@ describe("Codex child environment boundaries", () => {
       codexHome,
       authMode: "chatgpt",
       safeTaskEnvironment: { AGENT_TASK_CORRELATION_ID: "safe-id" },
+      allowedTaskEnvironmentKeys: ["AGENT_TASK_CORRELATION_ID"],
     });
 
     expect(child).toEqual({
       PATH: "/usr/bin:/bin",
-      HOME: "/service-user",
+      HOME: codexHome,
       LANG: "en_US.UTF-8",
       CODEX_HOME: codexHome,
       AGENT_TASK_CORRELATION_ID: "safe-id",

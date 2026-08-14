@@ -568,9 +568,12 @@ export class OrchestrationRepository {
           chainState: chains.state,
           chainVersion: chains.version,
           canceledAt: chains.canceledAt,
+          deploymentId: spaces.deploymentId,
+          spaceId: spaces.id,
         })
         .from(executionTasks)
         .innerJoin(chains, eq(chains.id, executionTasks.chainId))
+        .innerJoin(spaces, eq(spaces.id, chains.spaceId))
         .innerJoin(agentThreads, eq(agentThreads.id, executionTasks.agentThreadId))
         .where(
           and(
@@ -623,20 +626,39 @@ export class OrchestrationRepository {
         })
         .where(eq(executionTasks.id, row.id));
 
+      const task = executionTaskSchema.parse({
+        id: row.logicalId,
+        agentName: row.agentName,
+        purpose: await this.options.decrypt(row.purpose),
+        instructions: await this.options.decrypt(row.instructionsCiphertext),
+        workspaceBinding: row.workspaceBinding,
+        modelProfile: modelProfileNameSchema.parse(row.modelProfile),
+        permissionProfile: permissionProfileNameSchema.parse(
+          row.permissionProfile,
+        ),
+        dependsOn: dependencies.map((dependency) => dependency.logicalId),
+      });
+      const currentCapabilities = await this.options.capabilities({
+        deploymentId: row.deploymentId,
+        ownerId: row.ownerId,
+        spaceId: row.spaceId,
+      });
+      const currentCapability = currentCapabilities.find(
+        (candidate) => candidate.workspaceBinding === row.workspaceBinding,
+      );
+      if (
+        currentCapability === undefined ||
+        !currentCapability.permissionProfiles.includes(task.permissionProfile)
+      ) {
+        throw new Error(
+          "The queued task no longer has a code-authorized workspace permission. Cancel it and create a newly authorized task.",
+        );
+      }
+
       return {
         ownerId: row.ownerId,
-        task: executionTaskSchema.parse({
-          id: row.logicalId,
-          agentName: row.agentName,
-          purpose: await this.options.decrypt(row.purpose),
-          instructions: await this.options.decrypt(row.instructionsCiphertext),
-          workspaceBinding: row.workspaceBinding,
-          modelProfile: modelProfileNameSchema.parse(row.modelProfile),
-          permissionProfile: permissionProfileNameSchema.parse(
-            row.permissionProfile,
-          ),
-          dependsOn: dependencies.map((dependency) => dependency.logicalId),
-        }),
+        task,
+        maximumPermissionProfile: task.permissionProfile,
         workspaceRoot: this.options.workspaceRoot,
         relevantContext:
           row.agentSummary === null

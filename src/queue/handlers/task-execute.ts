@@ -12,12 +12,15 @@ import {
 } from "../../agent/schemas.js";
 import type { ModelProfiles } from "../../config/model-profiles.js";
 import type { PromptBundle } from "../../config/prompt-bundle.js";
+import type { PermissionProfileName } from "../../security/permissions.js";
 import type { QueuePublisher } from "../publisher.js";
 import type { TaskExecutePayload } from "../payloads.js";
 
 export interface TaskExecutionContext {
   ownerId: string;
   task: ExecutionTask;
+  /** Re-resolved from the current code-owned workspace capability at claim time. */
+  maximumPermissionProfile: PermissionProfileName;
   workspaceRoot: string;
   relevantContext: readonly string[];
   recoverySummary?: string;
@@ -176,6 +179,7 @@ export function createTaskExecuteHandler(dependencies: TaskExecuteDependencies) 
       run = await dependencies.execution.run({
         ownerId: context.ownerId,
         task,
+        maximumPermissionProfile: context.maximumPermissionProfile,
         modelProfile: dependencies.modelProfiles[task.modelProfile],
         workspaceRoot: context.workspaceRoot,
         policySections: executionPolicySections(

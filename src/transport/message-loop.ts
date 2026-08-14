@@ -33,6 +33,9 @@ export interface InboundTextForAuthorization {
   sender: NormalizedSenderIdentity;
   space: PersistedSpaceRoute;
   text: string;
+  mentionedAddresses: string[];
+  /** Must be verified against a persisted agent outbound in the same space. */
+  replyToExternalMessageId?: string;
 }
 
 export const INGEST_DISPOSITIONS = [
@@ -141,7 +144,14 @@ function normalizeInboundText(
     return { ignored: "outbound-echo" };
   }
 
-  if (narrowedMessage.content.type !== "text") {
+  const content = narrowedMessage.content;
+  const text =
+    content.type === "text"
+      ? content.text
+      : content.type === "reply" && content.content.type === "text"
+        ? content.content.text
+        : undefined;
+  if (text === undefined) {
     return { ignored: "unsupported-content" };
   }
 
@@ -171,7 +181,15 @@ function normalizeInboundText(
       receivedAt: narrowedMessage.timestamp,
       sender,
       space: persistedSpace,
-      text: narrowedMessage.content.text,
+      text,
+      mentionedAddresses: ((narrowedMessage as unknown as {
+        mentions?: readonly { address: string }[];
+      }).mentions ?? []).map(
+        (mention) => mention.address,
+      ),
+      ...(content.type === "reply"
+        ? { replyToExternalMessageId: content.target.id }
+        : {}),
     },
   };
 }

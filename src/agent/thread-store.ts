@@ -204,6 +204,7 @@ export class ThreadStore {
       outputSchema: request.outputSchema,
       modelProfile: request.modelProfile,
       permissionProfile: request.permissionProfile,
+      concurrencyKey: request.scope.ownerId,
       workingDirectory: request.workingDirectory,
       skipGitRepoCheck: request.skipGitRepoCheck,
       ...(request.signal === undefined ? {} : { signal: request.signal }),

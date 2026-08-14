@@ -21,6 +21,7 @@ function validEnvironment(
     CODEX_HOME: "./.codex-agent",
     AGENT_WORKSPACE_ROOT: "./.agent-workspaces",
     CODEX_AUTH_MODE: "chatgpt",
+    PATH: "/usr/bin:/bin",
     ...overrides,
   };
 }

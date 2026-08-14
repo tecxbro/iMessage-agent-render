@@ -14,6 +14,7 @@ import { InboundRepository } from "../../src/db/repositories/inbound.js";
 import { OutboundRepository } from "../../src/db/repositories/outbound.js";
 import { RetentionRepository } from "../../src/db/repositories/retention.js";
 import {
+  approvals,
   chains,
   channelIdentities,
   deployments,
@@ -32,6 +33,7 @@ const deploymentId = "10000000-0000-4000-8000-000000000001";
 const ownerId = "10000000-0000-4000-8000-000000000002";
 const identityId = "10000000-0000-4000-8000-000000000003";
 const spaceId = "10000000-0000-4000-8000-000000000004";
+const collaboratorId = "10000000-0000-4000-8000-000000000005";
 
 describeDatabase("PostgreSQL durable pipeline", () => {
   let client: DatabaseClient;
@@ -57,6 +59,8 @@ describeDatabase("PostgreSQL durable pipeline", () => {
   beforeEach(async () => {
     await client.pool.query(`
       truncate table
+        pairing_attempts,
+        pairing_challenges,
         approvals,
         memory_sync_events,
         usage_events,
@@ -289,17 +293,80 @@ describeDatabase("PostgreSQL durable pipeline", () => {
       permissionProfile: "approval-required",
       state: "needs_approval",
     });
+    await expect(
+      approvalRepository.createPending({
+        chainId: chain?.chainId ?? "",
+        executionTaskId: taskId,
+        ownerId,
+        spaceId,
+        actionType: "repository.write",
+        normalizedPayloadCiphertext: "cipher:invalid-action",
+        actionHash: "a".repeat(64),
+        humanSummary: "invalid action",
+        expiresAt: new Date("2026-08-14T00:10:00Z"),
+      }),
+    ).rejects.toThrow();
+    await expect(
+      approvalRepository.createPending({
+        chainId: chain?.chainId ?? "",
+        executionTaskId: taskId,
+        ownerId,
+        spaceId,
+        actionType: "filesystem.destructive",
+        normalizedPayloadCiphertext: "cipher:invalid-hash",
+        actionHash: "not-a-sha256-hash",
+        humanSummary: "invalid hash",
+        expiresAt: new Date("2026-08-14T00:10:00Z"),
+      }),
+    ).rejects.toThrow();
     const approvalId = await approvalRepository.createPending({
       chainId: chain?.chainId ?? "",
       executionTaskId: taskId,
       ownerId,
       spaceId,
-      actionType: "repository.write",
+      actionType: "filesystem.destructive",
       normalizedPayloadCiphertext: "cipher:action",
-      actionHash: "action-hash",
+      actionHash: "a".repeat(64),
       humanSummary: "Apply the exact repository write",
       expiresAt: new Date("2026-08-14T00:10:00Z"),
     });
+    await client.database.insert(channelIdentities).values({
+      id: collaboratorId,
+      deploymentId,
+      ownerId,
+      normalizedHandleCiphertext: "cipher:collaborator",
+      handleFingerprint: "fingerprint-collaborator",
+      role: "collaborator",
+      verifiedAt: new Date("2026-08-14T00:00:00Z"),
+    });
+    expect(
+      await approvalRepository.compareAndSetResponse({
+        approvalId,
+        ownerId,
+        spaceId,
+        approvedByIdentityId: collaboratorId,
+        status: "approved",
+        now: new Date("2026-08-14T00:02:30Z"),
+      }),
+    ).toBe(false);
+    await client.database
+      .update(channelIdentities)
+      .set({ revokedAt: new Date("2026-08-14T00:02:40Z") })
+      .where(eq(channelIdentities.id, identityId));
+    expect(
+      await approvalRepository.compareAndSetResponse({
+        approvalId,
+        ownerId,
+        spaceId,
+        approvedByIdentityId: identityId,
+        status: "approved",
+        now: new Date("2026-08-14T00:02:45Z"),
+      }),
+    ).toBe(false);
+    await client.database
+      .update(channelIdentities)
+      .set({ revokedAt: null })
+      .where(eq(channelIdentities.id, identityId));
 
     const responses = await Promise.all([
       approvalRepository.compareAndSetResponse({
@@ -320,32 +387,63 @@ describeDatabase("PostgreSQL durable pipeline", () => {
       }),
     ]);
     expect(responses.filter(Boolean)).toHaveLength(1);
+    await expect(
+      client.database
+        .update(approvals)
+        .set({ actionHash: "c".repeat(64) })
+        .where(eq(approvals.id, approvalId)),
+    ).rejects.toThrow();
     expect(
-      await approvalRepository.consumeApproved(
+      await approvalRepository.consumeApprovedAction({
         approvalId,
         ownerId,
         spaceId,
-        "mutated-hash",
-        new Date("2026-08-14T00:04:00Z"),
-      ),
+        executionTaskId: taskId,
+        expectedActionHash: "b".repeat(64),
+        expectedPayloadCiphertext: "cipher:action",
+        now: new Date("2026-08-14T00:04:00Z"),
+      }),
     ).toBe(false);
+    await client.database
+      .update(channelIdentities)
+      .set({ revokedAt: new Date("2026-08-14T00:03:30Z") })
+      .where(eq(channelIdentities.id, identityId));
     expect(
-      await approvalRepository.consumeApproved(
+      await approvalRepository.consumeApprovedAction({
         approvalId,
         ownerId,
         spaceId,
-        "action-hash",
-        new Date("2026-08-14T00:04:00Z"),
-      ),
+        executionTaskId: taskId,
+        expectedActionHash: "a".repeat(64),
+        expectedPayloadCiphertext: "cipher:action",
+        now: new Date("2026-08-14T00:04:00Z"),
+      }),
+    ).toBe(false);
+    await client.database
+      .update(channelIdentities)
+      .set({ revokedAt: null })
+      .where(eq(channelIdentities.id, identityId));
+    expect(
+      await approvalRepository.consumeApprovedAction({
+        approvalId,
+        ownerId,
+        spaceId,
+        executionTaskId: taskId,
+        expectedActionHash: "a".repeat(64),
+        expectedPayloadCiphertext: "cipher:action",
+        now: new Date("2026-08-14T00:04:00Z"),
+      }),
     ).toBe(true);
     expect(
-      await approvalRepository.consumeApproved(
+      await approvalRepository.consumeApprovedAction({
         approvalId,
         ownerId,
         spaceId,
-        "action-hash",
-        new Date("2026-08-14T00:04:01Z"),
-      ),
+        executionTaskId: taskId,
+        expectedActionHash: "a".repeat(64),
+        expectedPayloadCiphertext: "cipher:action",
+        now: new Date("2026-08-14T00:04:01Z"),
+      }),
     ).toBe(false);
   });
 

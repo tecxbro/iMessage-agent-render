@@ -69,6 +69,7 @@ Convex remains a supported alternative described in [`CONVEX_VARIANT.md`](./CONV
 | [`PROMPTING_AND_ORCHESTRATION.md`](./PROMPTING_AND_ORCHESTRATION.md) | Poke-inspired interaction/execution design and schemas |
 | [`DEPLOYMENT_AND_AUTH.md`](./DEPLOYMENT_AND_AUTH.md) | Local install, Render Blueprint, Codex device login, recovery |
 | [`SECURITY_AND_PRIVACY.md`](./SECURITY_AND_PRIVACY.md) | Authorization, sandboxing, confirmations, secrets, retention |
+| [`SECURITY.md`](./SECURITY.md) | Implemented trust boundaries, operator checks, and incident response |
 | [`TEST_PLAN.md`](./TEST_PLAN.md) | Unit, integration, end-to-end, chaos, and security tests |
 | [`BUSINESS_PROSPECTS.md`](./BUSINESS_PROSPECTS.md) | Positioning, monetization, market evidence, risks, launch plan |
 | [`DOCS_INDEX.md`](./DOCS_INDEX.md) | Markdown-first official documentation links |

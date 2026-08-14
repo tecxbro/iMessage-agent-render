@@ -118,6 +118,11 @@ const rawEnvironmentSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
     PORT: integerFromEnvironment("PORT", 1, 65_535, 10_000),
+    PATH: requiredText("PATH"),
+    LANG: optionalText(z.string().trim().min(1)),
+    LANGUAGE: optionalText(z.string().trim().min(1)),
+    LC_ALL: optionalText(z.string().trim().min(1)),
+    LC_CTYPE: optionalText(z.string().trim().min(1)),
 
     SPECTRUM_PROJECT_ID: requiredText("SPECTRUM_PROJECT_ID"),
     SPECTRUM_PROJECT_SECRET: requiredText("SPECTRUM_PROJECT_SECRET"),
@@ -177,6 +182,24 @@ const rawEnvironmentSchema = z
       20,
       3,
     ),
+    MAX_OWNER_EXECUTION_CONCURRENCY: integerFromEnvironment(
+      "MAX_OWNER_EXECUTION_CONCURRENCY",
+      1,
+      20,
+      2,
+    ),
+    MESSAGE_RATE_LIMIT_PER_MINUTE: integerFromEnvironment(
+      "MESSAGE_RATE_LIMIT_PER_MINUTE",
+      1,
+      10_000,
+      60,
+    ),
+    TASK_RATE_LIMIT_PER_HOUR: integerFromEnvironment(
+      "TASK_RATE_LIMIT_PER_HOUR",
+      1,
+      10_000,
+      120,
+    ),
     MAX_TASK_RUNTIME_MS: integerFromEnvironment(
       "MAX_TASK_RUNTIME_MS",
       1_000,
@@ -210,6 +233,18 @@ const rawEnvironmentSchema = z
         code: "custom",
         path: ["OPENAI_API_KEY"],
         message: "OPENAI_API_KEY is required when CODEX_AUTH_MODE=api_key",
+      });
+    }
+
+    if (
+      environment.MAX_OWNER_EXECUTION_CONCURRENCY >
+      environment.MAX_EXECUTION_CONCURRENCY
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["MAX_OWNER_EXECUTION_CONCURRENCY"],
+        message:
+          "MAX_OWNER_EXECUTION_CONCURRENCY must not exceed MAX_EXECUTION_CONCURRENCY",
       });
     }
 

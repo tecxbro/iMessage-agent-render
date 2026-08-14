@@ -57,6 +57,7 @@ describe("Step 5 task execution handler", () => {
         claimTask: async () => ({
           ownerId: "40000000-0000-4000-8000-000000000005",
           task,
+          maximumPermissionProfile: "read",
           workspaceRoot: "/tmp/workspaces",
           relevantContext: [],
         }),
@@ -110,6 +111,7 @@ describe("Step 5 task execution handler", () => {
         claimTask: async () => ({
           ownerId: "40000000-0000-4000-8000-000000000005",
           task,
+          maximumPermissionProfile: "read",
           workspaceRoot: "/tmp/workspaces",
           relevantContext: [],
         }),

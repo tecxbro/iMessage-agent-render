@@ -97,7 +97,13 @@ describe("permission profile contracts", () => {
       consequentialActions: "forbidden",
     });
     expect(resolvePermissionProfile("approval-required").approvalPolicy).toBe(
-      "on-request",
+      "never",
     );
+    expect(resolvePermissionProfile("approval-required")).toMatchObject({
+      sandboxMode: "read-only",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+      consequentialActions: "propose-only",
+    });
   });
 });

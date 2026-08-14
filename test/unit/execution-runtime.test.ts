@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,6 +37,32 @@ class CanceledRunner implements StructuredCodexRunner {
   ): Promise<CodexRunResult<Output>> {
     this.calls += 1;
     throw new CodexRuntimeError("CODEX_CANCELED", "canceled", true);
+  }
+}
+
+class ArtifactRunner implements StructuredCodexRunner {
+  public async runStructured<Output>(
+    request: CodexRunRequest<Output>,
+  ): Promise<CodexRunResult<Output>> {
+    return {
+      threadId: "artifact-thread",
+      output: request.outputSchema.parse({
+        taskId: "task-a",
+        status: "succeeded",
+        userSafeSummary: "Created the requested artifact.",
+        artifacts: [
+          {
+            type: "file",
+            path: "escaped-artifact.md",
+            description: "Unsafe symlink fixture",
+          },
+        ],
+        proposedActions: [],
+        memoryCandidates: [],
+        error: null,
+      }),
+      usage: null,
+    };
   }
 }
 
@@ -124,5 +150,38 @@ describe("bounded execution runtime", () => {
       }),
     ).rejects.toThrow(/outside AGENT_WORKSPACE_ROOT/);
     expect(runner.calls).toBe(0);
+  });
+
+  it("rejects an artifact symlink that escapes after execution", async () => {
+    const root = await mkdtemp(join(tmpdir(), "execution-artifact-root-"));
+    const outside = await mkdtemp(join(tmpdir(), "execution-artifact-outside-"));
+    temporaryDirectories.push(root, outside);
+    const workspace = join(root, "workspace");
+    const outsideFile = join(outside, "private.md");
+    await mkdir(workspace);
+    await writeFile(outsideFile, "private", "utf8");
+    await symlink(outsideFile, join(workspace, "escaped-artifact.md"));
+    const runtime = new ExecutionRuntime(
+      new ThreadStore(new TestThreadRepository(), new ArtifactRunner()),
+    );
+
+    await expect(
+      runtime.run({
+        ownerId: "00000000-0000-4000-8000-000000000001",
+        task: task(),
+        modelProfile: DEFAULT_MODEL_PROFILES.main,
+        workspaceRoot: root,
+        policySections: [
+          {
+            name: "Execution policy",
+            trust: "trusted-policy",
+            content: "Keep artifacts inside the workspace.",
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "CODEX_STRUCTURED_OUTPUT_INVALID",
+      retryable: false,
+    });
   });
 });

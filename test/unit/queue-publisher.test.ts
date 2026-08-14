@@ -6,6 +6,7 @@ import { PgBossPublisher } from "../../src/queue/publisher.js";
 const spaceId = "00000000-0000-4000-8000-000000000001";
 const chainId = "00000000-0000-4000-8000-000000000002";
 const batchId = "00000000-0000-4000-8000-000000000003";
+const taskId = "00000000-0000-4000-8000-000000000004";
 
 describe("pg-boss publisher", () => {
   it("debounces inbound flushes by space with an ID-only payload", async () => {
@@ -30,10 +31,16 @@ describe("pg-boss publisher", () => {
     expect(JSON.stringify(upsert.mock.calls)).not.toContain("text");
   });
 
-  it("uses chain and batch singleton keys for synthesis and outbound", async () => {
+  it("uses task, chain, and batch singleton keys for orchestration", async () => {
     const send = vi.fn().mockResolvedValue("job-id");
     const publisher = new PgBossPublisher({ send, upsert: vi.fn() });
 
+    await publisher.enqueueTaskExecute({
+      taskId,
+      chainId,
+      expectedChainVersion: 3,
+      expectedState: "queued",
+    });
     await publisher.enqueueTurnSynthesize({
       chainId,
       expectedChainVersion: 3,
@@ -45,9 +52,12 @@ describe("pg-boss publisher", () => {
     });
 
     expect(send.mock.calls[0]?.[2]).toMatchObject({
-      singletonKey: `chain:${chainId}:synthesize`,
+      singletonKey: `task:${taskId}`,
     });
     expect(send.mock.calls[1]?.[2]).toMatchObject({
+      singletonKey: `chain:${chainId}:synthesize`,
+    });
+    expect(send.mock.calls[2]?.[2]).toMatchObject({
       singletonKey: `outbound:${batchId}`,
     });
   });

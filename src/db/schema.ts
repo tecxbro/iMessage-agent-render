@@ -361,6 +361,10 @@ export const executionTasks = pgTable(
     ...timestamps,
   },
   (table) => [
+    uniqueIndex("execution_tasks_chain_name_unique").on(
+      table.chainId,
+      table.name,
+    ),
     index("execution_tasks_chain_state_idx").on(table.chainId, table.state),
     check("execution_tasks_attempt_nonnegative", sql`${table.attemptCount} >= 0`),
   ],

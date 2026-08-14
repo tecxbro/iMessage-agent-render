@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   carriedMessages,
   chains,
+  executionTasks,
   messages,
   outboundBatches,
   outboundParts,
@@ -21,6 +22,9 @@ describe("database schema invariants", () => {
     const carryIndexes = getTableConfig(carriedMessages).indexes.map(
       (index) => index.config.name,
     );
+    const taskIndexes = getTableConfig(executionTasks).indexes.map(
+      (index) => index.config.name,
+    );
     const batchIndexes = getTableConfig(outboundBatches).indexes.map(
       (index) => index.config.name,
     );
@@ -31,6 +35,7 @@ describe("database schema invariants", () => {
     expect(messageIndexes).toContain("messages_external_identity_unique");
     expect(chainIndexes).toContain("chains_space_version_unique");
     expect(carryIndexes).toContain("carried_messages_source_unique");
+    expect(taskIndexes).toContain("execution_tasks_chain_name_unique");
     expect(batchIndexes).toContain("outbound_batches_chain_unique");
     expect(partIndexes).toEqual(
       expect.arrayContaining([

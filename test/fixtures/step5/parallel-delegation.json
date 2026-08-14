@@ -1,0 +1,39 @@
+{
+  "mode": "delegate",
+  "modelProfile": "main",
+  "statusMessage": "I’m checking the repository and the current provider guidance now.",
+  "tasks": [
+    {
+      "id": "inspect-repository",
+      "agentName": "runtime-debugger",
+      "purpose": "Establish the local failure cause",
+      "instructions": "Inspect the approved repository and return the root cause with evidence.",
+      "workspaceBinding": "primary-repo",
+      "modelProfile": "main",
+      "permissionProfile": "read",
+      "dependsOn": []
+    },
+    {
+      "id": "check-guidance",
+      "agentName": "provider-researcher",
+      "purpose": "Verify the current provider contract",
+      "instructions": "Read the allowed official provider source and return only relevant contract evidence.",
+      "workspaceBinding": "research",
+      "modelProfile": "balanced",
+      "permissionProfile": "network-read",
+      "dependsOn": []
+    },
+    {
+      "id": "compare-findings",
+      "agentName": "runtime-debugger",
+      "purpose": "Compare local behavior with the provider contract",
+      "instructions": "Use the two bounded findings to identify the material mismatch.",
+      "workspaceBinding": "primary-repo",
+      "modelProfile": "main",
+      "permissionProfile": "read",
+      "dependsOn": ["inspect-repository", "check-guidance"]
+    }
+  ],
+  "waitForTasks": true,
+  "memoryCandidates": []
+}

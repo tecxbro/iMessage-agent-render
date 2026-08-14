@@ -69,6 +69,41 @@ async function resolveWorkspace(
   return resolved;
 }
 
+async function validateArtifactContainment(
+  result: ExecutionResult,
+  workspace: string,
+): Promise<void> {
+  for (const artifact of result.artifacts) {
+    let resolved: string;
+    try {
+      resolved = await realpath(resolve(workspace, artifact.path));
+    } catch (error) {
+      throw new CodexRuntimeError(
+        "CODEX_STRUCTURED_OUTPUT_INVALID",
+        "Codex referenced an artifact that does not exist in the approved workspace. Create the artifact or remove the reference before retrying.",
+        true,
+        { cause: error },
+      );
+    }
+    const relation = relative(workspace, resolved);
+    if (relation === "" || relation.startsWith("..") || isAbsolute(relation)) {
+      throw new CodexRuntimeError(
+        "CODEX_STRUCTURED_OUTPUT_INVALID",
+        "Codex referenced an artifact outside the approved workspace. Discard the result and retry with a contained artifact path.",
+        false,
+      );
+    }
+    const artifactStat = await stat(resolved);
+    if (!artifactStat.isFile()) {
+      throw new CodexRuntimeError(
+        "CODEX_STRUCTURED_OUTPUT_INVALID",
+        "Codex referenced an artifact that is not a file. Return a concrete file inside the approved workspace.",
+        true,
+      );
+    }
+  }
+}
+
 function canceledResult(taskId: string): ExecutionResult {
   return executionResultSchema.parse({
     taskId,
@@ -158,6 +193,7 @@ export class ExecutionRuntime {
           true,
         );
       }
+      await validateArtifactContainment(turn.output, workspace);
       return {
         result: turn.output,
         threadId: turn.threadId,

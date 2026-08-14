@@ -4,6 +4,7 @@ import { QUEUE_NAMES } from "./names.js";
 import type {
   InboundFlushPayload,
   OutboundSendPayload,
+  TaskExecutePayload,
   TurnPlanPayload,
   TurnSynthesizePayload,
 } from "./payloads.js";
@@ -11,6 +12,7 @@ import type {
 export interface QueuePublisher {
   scheduleInboundFlush(payload: InboundFlushPayload, debounceMs: number): Promise<void>;
   enqueueTurnPlan(payload: TurnPlanPayload): Promise<void>;
+  enqueueTaskExecute(payload: TaskExecutePayload): Promise<void>;
   enqueueTurnSynthesize(payload: TurnSynthesizePayload): Promise<void>;
   enqueueOutboundSend(payload: OutboundSendPayload): Promise<void>;
 }
@@ -48,6 +50,14 @@ export class PgBossPublisher implements QueuePublisher {
     );
   }
 
+  public async enqueueTaskExecute(payload: TaskExecutePayload): Promise<void> {
+    await this.sendSingleton(
+      QUEUE_NAMES.taskExecute,
+      payload,
+      `task:${payload.taskId}`,
+    );
+  }
+
   public async enqueueTurnSynthesize(
     payload: TurnSynthesizePayload,
   ): Promise<void> {
@@ -69,9 +79,14 @@ export class PgBossPublisher implements QueuePublisher {
   private async sendSingleton(
     name:
       | typeof QUEUE_NAMES.turnPlan
+      | typeof QUEUE_NAMES.taskExecute
       | typeof QUEUE_NAMES.turnSynthesize
       | typeof QUEUE_NAMES.outboundSend,
-    payload: TurnPlanPayload | TurnSynthesizePayload | OutboundSendPayload,
+    payload:
+      | TurnPlanPayload
+      | TaskExecutePayload
+      | TurnSynthesizePayload
+      | OutboundSendPayload,
     singletonKey: string,
   ): Promise<void> {
     await this.boss.send(name, payload, {

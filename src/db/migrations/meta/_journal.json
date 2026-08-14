@@ -15,6 +15,13 @@
       "when": 1786740873455,
       "tag": "0001_thick_warbound",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786744738373,
+      "tag": "0002_slippery_rocket_raccoon",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,7 @@ import type {
 } from "../db/repositories/inbound.js";
 import type { ChainRepository } from "../db/repositories/chains.js";
 import type { OutboundRepository } from "../db/repositories/outbound.js";
+import type { OrchestrationRepository } from "../db/repositories/orchestration.js";
 import type { QueuePublisher } from "./publisher.js";
 
 export interface DurableInboundPipelineDependencies {
@@ -17,13 +18,24 @@ export interface DurableInboundPipelineDependencies {
     "supersedeActiveChain" | "findQueuedChains"
   >;
   outbound: Pick<OutboundRepository, "findResumableBatchIds">;
+  orchestration?: Pick<
+    OrchestrationRepository,
+    | "requeueStaleRunningTasks"
+    | "findRunnableTaskPayloads"
+    | "findSynthesisPayloads"
+  >;
   publisher: QueuePublisher;
   debounceMs: number;
+  taskRuntimeMs?: number;
+  now?: () => Date;
 }
 
 export interface ReconciliationResult {
   inboundFlushesScheduled: number;
   planJobsScheduled: number;
+  staleTasksRecovered: number;
+  taskJobsScheduled: number;
+  synthesisJobsScheduled: number;
   outboundJobsScheduled: number;
 }
 
@@ -78,6 +90,28 @@ export class DurablePipeline {
       });
     }
 
+    const now = this.dependencies.now?.() ?? new Date();
+    const staleBefore = new Date(
+      now.getTime() - (this.dependencies.taskRuntimeMs ?? 900_000),
+    );
+    const staleTasksRecovered =
+      (await this.dependencies.orchestration?.requeueStaleRunningTasks(
+        staleBefore,
+        limit,
+      )) ?? 0;
+    const runnableTasks =
+      (await this.dependencies.orchestration?.findRunnableTaskPayloads(limit)) ??
+      [];
+    for (const task of runnableTasks) {
+      await this.dependencies.publisher.enqueueTaskExecute(task);
+    }
+
+    const syntheses =
+      (await this.dependencies.orchestration?.findSynthesisPayloads(limit)) ?? [];
+    for (const synthesis of syntheses) {
+      await this.dependencies.publisher.enqueueTurnSynthesize(synthesis);
+    }
+
     const batchIds = await this.dependencies.outbound.findResumableBatchIds(limit);
     for (const outboundBatchId of batchIds) {
       await this.dependencies.publisher.enqueueOutboundSend({
@@ -89,6 +123,9 @@ export class DurablePipeline {
     return {
       inboundFlushesScheduled: spaceIds.length,
       planJobsScheduled: queuedChains.length,
+      staleTasksRecovered,
+      taskJobsScheduled: runnableTasks.length,
+      synthesisJobsScheduled: syntheses.length,
       outboundJobsScheduled: batchIds.length,
     };
   }

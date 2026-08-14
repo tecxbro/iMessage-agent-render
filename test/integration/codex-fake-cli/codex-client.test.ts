@@ -304,4 +304,30 @@ describe("Codex client through pinned SDK and fake CLI", () => {
       supported: true,
     });
   });
+
+  it("classifies expired authentication and keeps execution paused", async () => {
+    const directory = await fixtureDirectory();
+    const client = new CodexClient({
+      codexHome: directory,
+      authMode: "chatgpt",
+      parentEnvironment: parentEnvironment(),
+      codexPathOverride: fakeExecutable,
+      safeTaskEnvironment: { AGENT_TASK_FAKE_AUTH_FAILURE: "true" },
+      allowedTaskEnvironmentKeys: ["AGENT_TASK_FAKE_AUTH_FAILURE"],
+    });
+
+    await expect(
+      client.runStructured({
+        prompt: "Return the acknowledgement.",
+        outputSchema,
+        modelProfile: { model: "gpt-5.6-luna", effort: "high" },
+        permissionProfile: "read",
+        workingDirectory: directory,
+        skipGitRepoCheck: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "CODEX_AUTH_FAILED",
+      retryable: false,
+    } satisfies Partial<CodexRuntimeError>);
+  });
 });

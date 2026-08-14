@@ -5,7 +5,7 @@
   "description": "Production-oriented private iMessage agent starter powered by Spectrum and Codex",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:security": "vitest run test/security --maxWorkers=1",
     "test:integration": "vitest run test/integration --maxWorkers=1",
+    "test:chaos": "vitest run test/chaos",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "codex:login": "codex login --device-auth",

@@ -1,326 +1,359 @@
 # Architecture
 
-## 1. System overview
+## 1. Status and integration boundary
 
-The application is one long-running Node.js service with three concurrent responsibilities:
+The target is one long-running Node.js service with three concurrent responsibilities:
 
-1. A persistent Spectrum Cloud gRPC consumer reads iMessage events.
-2. pg-boss workers execute the durable inbound, agent, outbound, and memory pipeline.
-3. A small HTTP server exposes liveness and readiness endpoints to Render.
+1. consume iMessage events from Spectrum Cloud’s persistent `app.messages` gRPC stream;
+2. run the durable inbound, Codex, outbound, and memory jobs backed by PostgreSQL/pg-boss; and
+3. expose liveness and readiness endpoints to Render.
 
-PostgreSQL is the operational source of truth. Supermemory is an external semantic-memory projection. Codex CLI state and workspaces live on a persistent disk under `CODEX_HOME` and `AGENT_WORKSPACE_ROOT`.
+The branch has the provider, database, queue, Codex, memory, storage, health, and shutdown modules needed by that topology, but the executable composition is not complete. `src/index.ts` exposes `startAgentService()` and an injected `AgentServiceBootstrap`; `src/http/server.ts` owns the final health endpoints. `src/server.ts`, used by `npm run dev` and `npm start`, still starts only the foundation health server. Authorization plus the plan/execute/synthesize queue handlers are not wired into a runnable first-message path.
+
+This distinction is an intentional release boundary:
+
+| Layer | Current branch |
+|---|---|
+| Render resource declaration | Present in `render.yaml` |
+| Persistent storage preparation | Implemented as an injectable startup stage |
+| Full health/readiness server | Used by `src/server.ts`; operational components remain unstarted/not ready |
+| Boot and graceful-shutdown ordering | Implemented as an injectable composition boundary |
+| Spectrum, PostgreSQL, Codex, and Supermemory modules | Implemented and fake/unit/integration-testable in isolation |
+| Authorized receive through plan/execute/synthesize/send | Not composed into the executable entrypoint |
+| Clean local and Render first-message evidence | Not established |
+| Live Photon, Codex, Render, or Supermemory evidence | Not run for this release |
+
+The remainder of this document describes the final composition contract and identifies where implementation evidence stops.
+
+## 2. Deployed topology
 
 ```mermaid
 flowchart TB
-  U[Authorized iMessage user] <--> P[Photon Spectrum Cloud]
-  P <-- persistent gRPC --> T[Spectrum transport loop]
-  T --> DB[(PostgreSQL)]
-  DB <--> Q[pg-boss workers]
-  Q --> IA[Interaction agent / Codex SDK]
-  IA --> EA[Named execution agents]
-  EA --> WS[(Persistent workspaces)]
-  IA <--> SM[Supermemory]
-  Q --> O[Outbound delivery]
+  U["Authorized iMessage owner"] <--> P["Photon Spectrum Cloud"]
+  P <-->|"persistent app.messages gRPC"| T["Spectrum receive loop"]
+
+  subgraph W["One Render Web Service"]
+    T --> A["authorize + durable ingest"]
+    A --> Q["pg-boss workers"]
+    Q --> I["interaction Codex runtime"]
+    I --> E["bounded execution Codex runtimes"]
+    Q --> O["outbound sender"]
+    H["/healthz and /readyz"]
+  end
+
+  A --> DB[("Render PostgreSQL")]
+  Q <--> DB
   O --> P
-  H[HTTP health server] --> R[Render health checks]
-  C[(CODEX_HOME persistent disk)] <--> IA
-  C <--> EA
+  I -. "bounded recall / curated writes" .-> SM["Supermemory"]
+  E --> WS[("persistent workspaces")]
+  I <--> CH[("CODEX_HOME")]
+  E <--> CH
+
+  R["Render health check"] --> H
 ```
 
-## 2. Why gRPC instead of the starter’s webhook
+The Blueprint deliberately provisions:
 
-The original starter uses an HTTP webhook because it is the smallest Render-compatible hello-world path. The requested boilerplate explicitly needs Spectrum’s cloud gRPC protocol and a continuously running agent. The new implementation therefore consumes:
+- one paid Web Service with `numInstances: 1`;
+- one PostgreSQL database connected through Render’s dynamic `DATABASE_URL` reference;
+- one disk mounted at `/var/data`;
+- `CODEX_HOME=/var/data/codex` and `AGENT_WORKSPACE_ROOT=/var/data/workspaces`;
+- a pre-deploy `npm run db:migrate`; and
+- a 120-second shutdown window.
+
+The disk makes v1 single-instance. PostgreSQL is independently durable and remains the operational source of truth. The disk is for Codex credentials/session files and workspaces, not queue truth.
+
+## 3. Ownership and trust boundaries
+
+```text
+PostgreSQL                              Persistent disk
+------------------------------------    ---------------------------------
+Accepted inbound/outbound content       CODEX_HOME config/auth/sessions
+Sender and space routing                Agent workspaces and artifacts
+Chains, tasks, versions, cancellation
+Approvals and failure events             Supermemory
+Outbound parts and send cursor           ---------------------------------
+Codex thread IDs and summaries           Curated durable facts/summaries
+Memory operation receipts                Bounded semantic recall
+```
+
+These boundaries are non-interchangeable:
+
+- PostgreSQL is required for authorization state, queueing, idempotency, delivery, and recovery.
+- Supermemory is optional at turn time and cannot authorize, approve, route, or acknowledge a message.
+- `CODEX_HOME` contains private credentials and must use file-backed storage with directory mode `0700` and config/auth mode `0600` where supported.
+- `AGENT_WORKSPACE_ROOT` must be an absolute path separate from and non-overlapping with `CODEX_HOME`.
+- Unknown senders must be rejected before any model or child-process call.
+- Model, repository, memory, web, and tool content are untrusted data. A model cannot broaden its permission profile or approve an action.
+
+## 4. Boot sequence
+
+The final composition boundary starts the HTTP listener first so the process can remain live while setup is incomplete.
+
+```mermaid
+sequenceDiagram
+  participant R as Render
+  participant H as Health server
+  participant B as Bootstrap coordinator
+  participant D as Disk and database
+  participant C as Codex
+  participant S as Spectrum
+
+  R->>H: start process
+  H-->>R: /healthz = 200
+  B->>B: validate configuration
+  B->>D: prepare CODEX_HOME and workspaces
+  B->>D: connect database and verify migrations
+  B->>D: start pg-boss and reconciliation
+  B->>C: inspect auth and probe model/effort/sandbox
+  alt auth and capabilities ready
+    B->>S: launch supervised gRPC receive loop
+    S-->>B: connected
+    H-->>R: /readyz = 200
+  else setup incomplete
+    B-->>H: redacted failure code and remediation
+    H-->>R: /readyz = 503
+  end
+```
+
+The ordered startup stages in `startAgentService()` are:
+
+1. listen on HTTP;
+2. validate configuration;
+3. prepare the two persistent directories and Codex config;
+4. connect PostgreSQL;
+5. apply or verify migrations;
+6. start pg-boss;
+7. inspect Codex auth and probe configured capabilities;
+8. configure optional Supermemory; and
+9. start Spectrum only when Codex auth and capabilities are ready.
+
+The integration bootstrap must make `startSpectrum()` resolve after supervision has been launched and connection state can be tracked; it must not block bootstrap completion for the lifetime of the stream. It must also run durable-pipeline reconciliation before accepting normal work.
+
+Missing or expired ChatGPT auth is a setup state, not a crash loop. Liveness remains healthy, readiness stays false, and Spectrum execution is not started. In ChatGPT mode the operator runs `npm run codex:login` and `npm run codex:status` using the same persistent `CODEX_HOME`, then restarts. In API-key mode readiness requires `OPENAI_API_KEY`; the key is copied only into the explicit Codex child environment.
+
+## 5. Message pipeline
+
+### 5.1 Receive
+
+The Spectrum loop consumes native provider values:
 
 ```ts
-for await (const [space, message] of spectrum.messages) {
-  // authorize, persist, and enqueue; do not run Codex inline
+for await (const [space, message] of app.messages) {
+  // narrow, authorize, persist, and enqueue only
 }
 ```
 
-The receive loop does almost no work. It validates direction/type, resolves sender identity, writes the inbound event, and schedules or resets the space’s debounce job. This protects the gRPC stream from model latency and makes every accepted message recoverable.
+The loop ignores non-iMessage events, outbound echoes, unsupported content, and invalid sender/space values. An injected `authorizeAndIngest()` boundary must deterministically authorize the normalized sender before durable ingest. Codex and Supermemory never run inline in the receive loop.
 
-## 3. Process topology
+### 5.2 Persist and debounce
 
-```text
-src/index.ts
-  ├─ validate configuration and disk permissions
-  ├─ connect PostgreSQL and run compatibility checks
-  ├─ start pg-boss and register workers
-  ├─ start HTTP liveness/readiness server
-  ├─ initialize Spectrum and begin app.messages loop
-  └─ install graceful shutdown handlers
+For each accepted text:
+
+1. insert the message under a unique provider message ID;
+2. preserve Spectrum space GUID and route phone for restart lookup;
+3. supersede the active interruptible chain when appropriate; and
+4. upsert the per-space `inbound.flush` job for the debounce deadline.
+
+If queue scheduling fails after insert, the message remains durable. Reconciliation finds spaces with undrained input and re-creates the singleton flush.
+
+### 5.3 Flush
+
+The flush transaction drains undrained and carried messages in order, creates a versioned chain, cancels the stale chain, and enqueues one `turn.plan` job. Queue payloads contain identifiers and expected versions/states, not raw personal content.
+
+### 5.4 Plan
+
+The `turn.plan` handler:
+
+1. verify the chain ID, version, and current state;
+2. load authoritative history from PostgreSQL;
+3. optionally recall bounded, owner-scoped Supermemory context;
+4. resolve an exact model/effort profile;
+5. run the interaction Codex thread with structured output; and
+6. either materialize a direct response or enqueue bounded execution tasks.
+
+The schemas, prompt builder, model router, interaction runtime, memory recall, durable repository, singleton queue contract, and handler now exist and are covered by offline tests. The production entrypoint still does not register the handler or its dependencies.
+
+### 5.5 Execute
+
+Each `task.execute` handler re-checks chain/task state and current workspace capability, resolves a named thread and explicit workspace, creates a minimal child environment, applies a code-owned permission profile, runs with timeout/cancellation/output bounds, validates `ExecutionResult`, and persists a terminal task result or exact approval proposal.
+
+Execution agents cannot message the owner or consume their own approval. Their results return through synthesis. The Codex adapter, structured runtime, durable handler, and recovery scheduling exist; production worker registration remains uncomposed.
+
+### 5.6 Synthesize
+
+The singleton `turn.synthesize` handler loads terminal task results, preserves truthful partial failures, requires confirmation for consequential operations, produces the final user-facing response, and materializes every outbound part before sending. The queue contract, repository, and handler exist; production worker registration remains uncomposed.
+
+### 5.7 Send
+
+`outbound.send` rehydrates the native Spectrum space using its stored GUID and route phone, claims the next materialized part, sends it with a stable client GUID, and advances the database cursor only after acknowledgement.
+
+```ts
+clientGuid = sha256(`${deploymentId}:${outboundBatchId}:${position}`)
 ```
 
-A single process is the deliberate v1 default. It keeps the Blueprint close to the original starter. The design still uses durable jobs and module boundaries so the workers can be split later without rewriting contracts.
+A crash after provider acknowledgement but before cursor persistence retries the same GUID. The transport receives the same idempotency key while PostgreSQL remains authoritative about the next part.
 
-## 4. Inbound pipeline
+### 5.8 Memory projection
 
-### Stage 1: receive and persist
+Memory curation runs only after a successful turn. It filters temporary, low-confidence, or secret-like candidates; hashes content for deduplication; namespaces by internal deployment/owner IDs; writes through a bounded provider client; and records receipts in PostgreSQL. Failure does not change the already completed operational response.
 
-For each Spectrum event:
+## 6. Supersession and cancellation
 
-1. Reject outbound echoes.
-2. Accept only supported inbound text events in v1.
-3. Narrow to iMessage and normalize sender address.
-4. Authorize sender and group context in code.
-5. Insert the message using a unique external message identifier.
-6. Upsert space GUID, route phone, and participants.
-7. Enqueue/reset `inbound.flush` for `now + debounceMs`.
-
-The job payload contains only identifiers. The message rows stay in PostgreSQL until the handler drains them.
-
-### Stage 2: flush
-
-`inbound.flush`:
-
-1. Acquires a per-space advisory lock or transactional ownership row.
-2. Loads undrained inbound messages and any carried messages.
-3. Creates a new `chain` with a monotonic `chain_started_at`.
-4. Marks messages drained into the chain.
-5. Cancels prior interruptible chain jobs.
-6. Enqueues `turn.plan`.
-
-### Stage 3: plan
-
-`turn.plan`:
-
-1. Checks the chain has not been superseded.
-2. Loads recent thread history from PostgreSQL.
-3. Loads owner profile and bounded relevant memories from Supermemory.
-4. Loads active named-agent summaries and capabilities.
-5. Resolves model profile.
-6. Runs the interaction Codex thread with a structured output schema.
-7. Persists `InteractionDecision`.
-8. Sends a status bubble when delegation will be perceptibly long.
-9. Either enqueues outbound delivery or creates execution jobs.
-
-### Stage 4: execute
-
-Each `task.execute` job:
-
-1. Verifies chain/task state and authorization.
-2. Resolves or creates the named execution agent and workspace.
-3. Builds an explicit Codex environment allowlist.
-4. Applies model, sandbox, network, approval, and working-directory options.
-5. Runs the Codex thread.
-6. Validates `ExecutionResult`.
-7. Persists artifacts and proposed actions.
-8. Marks the task terminal.
-
-When all required tasks are terminal, one `turn.synthesize` job is enqueued using a unique chain key.
-
-### Stage 5: synthesize
-
-`turn.synthesize`:
-
-1. Loads successful and failed task results.
-2. If a consequential action is proposed, creates an approval request rather than executing it.
-3. Runs the interaction thread to produce the final user-facing response.
-4. Creates an outbound batch and memory-curation job.
-
-### Stage 6: send
-
-`outbound.send`:
-
-1. Rehydrates the Spectrum space from stored GUID and route phone.
-2. Reads `start_index` from the outbound batch.
-3. Sends each remaining bubble with its stable client GUID.
-4. Advances the cursor only after confirmed success.
-5. Retries transient failures with the same IDs.
-6. Marks the chain complete.
-
-### Stage 7: memory projection
-
-`memory.curate`:
-
-1. Runs only after the chain has a successful terminal response.
-2. Extracts durable candidates through a separate schema-bound prompt.
-3. Applies deterministic privacy and durability filters.
-4. Adds or updates Supermemory records.
-5. Stores external IDs and hashes in `memory_sync_events`.
-
-## 5. Burst handling and supersession
-
-People text in fragments. The debounce window is per space, not global. A new message before flush simply moves the scheduled job forward. A new message after drain supersedes the active chain:
+People send corrections in fragments. Debounce is per space, and a later message can supersede an already drained chain.
 
 ```mermaid
 stateDiagram-v2
   [*] --> Queued
-  Queued --> Drained: flush begins
-  Drained --> Planning
-  Planning --> Executing
-  Executing --> Synthesizing
-  Synthesizing --> Sending
-  Sending --> Complete
-  Planning --> Carried: superseded
-  Executing --> Carried: superseded
-  Synthesizing --> Carried: superseded
-  Carried --> Queued: next turn
+  Queued --> Planning: flush commits
+  Planning --> Executing: tasks materialized
+  Executing --> Synthesizing: terminal scan
+  Synthesizing --> Sending: batch materialized
+  Sending --> Complete: cursor reaches part count
+
+  Planning --> Canceled: newer accepted message
+  Executing --> Canceled: newer accepted message
+  Synthesizing --> Canceled: newer accepted message
+  Canceled --> Queued: carried into next chain
   Complete --> [*]
 ```
 
-Cancellation is chain-aware. A stale `canceled_at` value must not cancel a later chain; handlers compare it with their own `chain_started_at` and state version.
+Handlers compare their expected version and state with the authoritative row. A stale cancellation timestamp cannot cancel a later chain. Canceled messages are carried forward, and a canceled chain cannot synthesize, send, or consume an approval.
 
-## 6. Interaction and execution lanes
+## 7. Interaction, execution, and security lanes
 
-### Interaction lane
+The interaction lane owns concise user-facing answers, decomposition, status wording, approvals, and final synthesis. Its default permissions are read-only with network disabled.
 
-The interaction agent owns:
+Execution lanes receive one bounded purpose, one explicit workspace, a model profile, a permission profile, runtime/output limits, and only relevant context. Independent tasks may run concurrently within the configured global limit; dependent tasks form a validated DAG.
 
-- Natural user-facing messages.
-- Direct answers.
-- Status acknowledgements.
-- Task decomposition.
-- Confirmation wording.
-- Final synthesis.
+The Codex child environment is constructed from an allowlist. It excludes database, Photon, Supermemory, encryption, and unrelated cloud credentials. `OPENAI_API_KEY` is included only in explicit API-key mode. `danger-full-access` is forbidden.
 
-It does not get unrestricted repository or shell access. Its default Codex thread is read-only with network disabled.
+Consequential actions use immutable approval data bound to owner, allowed space, task, normalized payload hash, expiration, and one-time consumption. Model text is never proof of approval.
 
-### Execution lane
+## 8. Health and readiness
 
-Execution agents own bounded tasks. They receive:
-
-- A single purpose.
-- An isolated workspace.
-- Explicit allowed paths.
-- An explicit sandbox and network profile.
-- A maximum runtime and output schema.
-- Relevant task context, not the full private transcript.
-
-They do not talk directly to the user and cannot authorize their own proposed actions.
-
-### Named agents
-
-A named execution agent is a durable context handle, such as:
-
-- `photon-sdk-maintainer`
-- `website-researcher`
-- `release-manager`
-- `travel-planner`
-
-The mapping is stored in PostgreSQL, while Codex session files remain under `CODEX_HOME`. On startup, a thread ID is resumed. If resume fails, the system creates a new thread using a compact persisted summary and records the recovery event.
-
-## 7. Codex runtime boundaries
-
-The TypeScript SDK wraps and spawns Codex CLI. The runtime adapter must:
-
-- Pin both `@openai/codex-sdk` and `@openai/codex` versions.
-- Set `CODEX_HOME` explicitly.
-- Pass a minimal environment to child processes.
-- Select the working directory explicitly.
-- Set `skipGitRepoCheck` only for intentionally non-repository workspaces.
-- Use `runStreamed()` when progress signals are needed, while filtering raw events before user display.
-- Persist thread IDs and terminal summaries.
-- Abort tasks through an `AbortController` and process termination when a chain is superseded.
-- Cap iterations, runtime, concurrent tasks, and output size.
-
-## 8. Memory boundaries
+The composed health server returns:
 
 ```text
-PostgreSQL                         Supermemory
--------------------------------    ---------------------------------
-Raw inbound/outbound messages      Durable user facts
-Space and sender routing           Preferences and relationships
-Job and chain state                Long-lived project summaries
-Approvals and audit events         Semantically searchable memories
-Codex thread identifiers           User profile projection
-Deletion receipts                  External memory item content
+GET /healthz  -> 200 {"status":"ok"}
+GET /readyz   -> 200 only when every critical component is ready
+GET /readyz   -> 503 with redacted component states and safe actions otherwise
 ```
 
-Supermemory is optional at turn time. PostgreSQL is not optional. No operational decision—authorization, routing, approval, retry, or delivery—may depend solely on semantic retrieval.
+Critical readiness components are configuration, database, migrations, queue, Spectrum, Codex auth, Codex capabilities, disk, and workspace. Supermemory may be `disabled` or degraded without making operational readiness depend on semantic storage.
 
-## 9. Authorization architecture
-
-Authorization happens before prompt construction:
-
-```text
-Inbound sender
-  → normalized identity
-  → deployment owner / allowlist lookup
-  → space policy lookup
-  → group mention/reply gate
-  → command or normal turn
-  → only then model/queue work
-```
-
-The prompt may help interpret intent, but cannot upgrade identity or permissions.
-
-## 10. Approval architecture
-
-A consequential operation is represented as immutable data:
-
-```ts
-interface ApprovalRequest {
-  id: string;
-  ownerId: string;
-  spaceId: string;
-  requestedByTaskId: string;
-  actionType: string;
-  normalizedPayload: unknown;
-  actionHash: string;
-  humanSummary: string;
-  expiresAt: string;
-  status: "pending" | "approved" | "rejected" | "expired" | "consumed";
-}
-```
-
-Approval responses are parsed in code, bound to the same owner and allowed space, and consumed exactly once. An execution task must re-hash the operation immediately before performing it.
-
-## 11. Outbound idempotency
-
-Every generated bubble is materialized before sending:
-
-```ts
-clientGuid = sha256(`${deploymentId}:${outboundBatchId}:${index}`)
-```
-
-The database stores `start_index`. A worker crash after transport acknowledgement but before cursor persistence may retry the same bubble, but the stable client GUID gives the transport a second deduplication layer.
-
-## 12. Readiness model
-
-`/healthz` returns success when the Node event loop is alive.
-
-`/readyz` returns a redacted component map:
+Example setup response:
 
 ```json
 {
+  "status": "not_ready",
   "ready": false,
+  "shuttingDown": false,
   "components": {
-    "database": "ok",
-    "migrations": "ok",
-    "queue": "ok",
-    "spectrum": "connecting",
-    "codexAuth": "missing",
-    "codexCapabilities": "unknown",
-    "disk": "ok",
-    "supermemory": "configured"
-  }
+    "configuration": { "state": "ok" },
+    "database": { "state": "ok" },
+    "migrations": { "state": "ok" },
+    "queue": { "state": "ok" },
+    "spectrum": { "state": "missing" },
+    "codexAuth": { "state": "missing", "code": "CODEX_AUTH_MISSING" },
+    "codexCapabilities": { "state": "unknown" },
+    "disk": { "state": "ok" },
+    "workspace": { "state": "ok" },
+    "supermemory": { "state": "disabled" }
+  },
+  "actions": [
+    "Run npm run codex:login in the private service shell, verify with npm run codex:status, then restart the service."
+  ]
 }
 ```
 
-No secrets, phone numbers, paths outside approved roots, or raw exception payloads appear in this endpoint.
+Raw provider errors, credentials, handles, message content, and unrestricted paths never enter readiness. Render uses `/healthz` to avoid turning incomplete private enrollment into a restart loop. Operators use `/readyz` as the acceptance gate.
 
-## 13. Graceful shutdown
+The current `src/server.ts` uses this health server and shuts it down on process signals, but it starts none of the operational dependencies. Its `/healthz` proves only that the foundation process is alive, and its `/readyz` remains `503` until the integration owner composes the full bootstrap.
 
-On `SIGTERM`:
+## 9. Failure and recovery contract
 
-1. Set readiness false.
-2. Stop accepting new queue work.
-3. Stop or pause the Spectrum receive loop.
-4. Mark active interruptible Codex tasks for retry and abort them.
-5. Allow outbound sends to checkpoint within Render’s shutdown window.
-6. Stop pg-boss.
-7. Close database and HTTP listeners.
-8. Exit nonzero if critical cleanup fails.
+| Failure point | Required recovery | Current evidence boundary |
+|---|---|---|
+| Receive: after DB insert, before debounce schedule | Reconciliation re-creates `inbound.flush`; provider duplicate remains harmless | Durable-pipeline fake coverage; final receive composition/live replay untested |
+| Debounce | Messages remain undrained and the per-space singleton can be upserted again | Queue singleton and PostgreSQL pipeline coverage |
+| Planning | Versioned singleton retries or cancellation; no stale batch | Handler/repository fake and offline integration coverage; production composition/live path untested |
+| Execution | Abort superseded Codex work; bounded retry/failure persists | Handler, repository, Codex cancellation, and recovery fake coverage; production composition/live path untested |
+| Synthesis | Terminal scan enqueues one singleton synthesis; partial failure is preserved | Handler/repository fake and offline integration coverage; production composition/live path untested |
+| Each outbound part | Resume at persisted cursor and retry the same client GUID | Fake crash at each materialized part; live provider deduplication untested |
+| Memory write | Operational response stays complete; receipt records failure and job may retry | Expected contract; outage validation intentionally skipped by user direction in this release work |
+| Spectrum disconnect | Readiness degrades; supervised loop reconnects with bounded exponential backoff | Message-loop fake coverage; live disconnect/replay untested |
+| PostgreSQL timeout | Readiness false; do not begin untracked model work; resume durable jobs after recovery | Composed boot-time timeout/readiness coverage; runtime post-start database health transition is not implemented or tested |
+| Supermemory timeout | Recall returns degraded/empty context; turn may continue; write retries independently | Expected contract; timeout/outage validation intentionally skipped by user direction in this release work |
+| Expired Codex authentication | Readiness false; pause execution; re-enroll or replace key and re-probe | Capability/readiness fakes; live expiration untested |
 
-## 14. Scaling path
+Recovery is safe only when the executable bootstrap calls reconciliation on startup and every handler re-checks authoritative state. The existence of a module or fake test does not prove the final cross-provider path.
 
-V1 cannot horizontally scale the Codex process while it depends on one attached persistent disk. When scale becomes necessary:
+Supermemory timeout/outage behavior is included here as the intended operational contract. It was not validated in this release work because the user explicitly directed that testing to be skipped.
 
-- Move Codex credentials to a supported enterprise credential service or per-worker secret mount.
-- Put workspaces in durable object/block storage or provision per-worker volumes.
-- Split receive, agent, and outbound workers.
-- Keep PostgreSQL job and idempotency contracts unchanged.
-- Partition by owner/deployment.
+### Persistent disk loss
 
-The starter should not pre-build this distributed topology.
+1. Keep the service not ready.
+2. Recreate `CODEX_HOME` and workspaces with private permissions.
+3. Re-enroll ChatGPT or restore the configured API-key secret.
+4. Recreate workspaces from reviewed Git remotes or backups.
+5. Start new Codex threads using bounded summaries and thread IDs stored in PostgreSQL.
+6. Do not alter database-backed messages, approvals, cursors, or memory receipts.
+
+### Corrupt or missing Codex session
+
+Mark only the affected thread reset, preserve its PostgreSQL summary, and create a replacement thread with that summary. Never delete unrelated owner memory, agent sessions, or workspaces as a blanket recovery step.
+
+### Rollback
+
+Database migrations are forward-compatible release artifacts. Roll back only to an application revision documented as compatible with the current schema. Preserve PostgreSQL, pg-boss state, the persistent disk, and outbound cursors. If compatibility is uncertain, ship a forward fix rather than attempting an improvised down migration.
+
+## 10. Graceful shutdown
+
+On `SIGTERM` or `SIGINT` the coordinator:
+
+1. sets readiness false and marks shutdown in progress;
+2. aborts the shared signal used by active work;
+3. stops Spectrum;
+4. stops Codex work;
+5. gives outbound delivery a bounded checkpoint opportunity;
+6. stops pg-boss;
+7. closes PostgreSQL; and
+8. closes the health listener last.
+
+Each hook has a timeout. Cleanup continues after a hook fails, and results contain bounded failure codes rather than raw exception text. A critical failure sets a nonzero exit status.
+
+## 11. Extension points
+
+Extension points are explicit dependency-injection boundaries, not speculative provider frameworks:
+
+| Boundary | Intended extension |
+|---|---|
+| `AgentServiceBootstrap` | Final integration owner composes config, storage, DB, queue, Codex, memory, and Spectrum lifecycle |
+| `AuthorizeAndIngest` | Deterministic allowlist/group policy followed by durable ingest |
+| `StructuredCodexRunner` | Real pinned Codex SDK runtime or deterministic test fake |
+| `OutboundTransport` | Native Spectrum space rehydration/send adapter or test fake |
+| `SupermemoryPort` | Pinned Supermemory client or isolated test fake |
+| Repository/queue interfaces | PostgreSQL-backed handlers with transaction and version invariants |
+
+Native Spectrum `Space`, `Message`, provider narrowing, `space.send`, and `space.get` concepts remain visible. Do not introduce a second generic messaging SDK.
+
+Bounded product extensions can add attachment normalization, additional slash commands, new curated-memory kinds, or new permission profiles after their schemas, security policy, recovery behavior, and provider tests are defined. A public multi-tenant service, alternate operational database, or horizontal Codex worker pool is a separate architecture decision.
+
+## 12. Scaling path
+
+The current disk and private-auth design cannot safely run multiple Web Service instances. Before horizontal scaling:
+
+- move credentials to a supported per-worker/enterprise secret mechanism;
+- move or explicitly shard workspaces onto durable per-worker storage;
+- partition receive and execution ownership by deployment/owner;
+- preserve PostgreSQL queue, chain-version, approval, stable-GUID, and cursor contracts; and
+- prove failover and duplicate-delivery behavior with the live provider.
+
+The starter intentionally does not pre-build this distributed topology.
+
+## 13. Release evidence boundary
+
+Automated tests may verify deterministic module behavior with fakes and, when configured, a disposable PostgreSQL database. They do not establish that Render provisioned a clean account, Photon delivered/replayed a real event, Codex authenticated/resumed a live thread, or Supermemory persisted/deleted a live memory.
+
+Release acceptance requires an integration entrypoint plus the protected E2E, chaos, rollback, restart, and clean-room documentation exercises in [TEST_PLAN.md](./TEST_PLAN.md). Until those are recorded, describe the provider paths as designed or locally simulated—not live-working.

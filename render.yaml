@@ -1,21 +1,55 @@
-# Render Blueprint — one Web Service for the iMessage agent foundation.
-# https://render.com/docs/blueprint-spec
-# https://render.com/docs/configure-environment-variables
-# https://render.com/docs/web-services
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# One paid Web Service is intentional: the attached disk makes v1 single-instance.
 services:
   - type: web
-    name: photon-agent
+    name: imessage-codex-agent
     runtime: node
-    # Recommended for Deploy-to-Render templates so forks aren't redeployed on every upstream push.
-    # https://render.com/docs/deploy-to-render
+    plan: starter
+    region: oregon
+    numInstances: 1
     autoDeployTrigger: "off"
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
+    preDeployCommand: npm run db:migrate
     startCommand: npm start
     healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 120
+    disk:
+      name: codex-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
-      # Photon project credentials — prompted during Blueprint create (never commit secrets).
-      # https://photon.codes/docs/spectrum-ts/getting-started
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: imessage-agent-db
+          property: connectionString
+      - key: CODEX_HOME
+        value: /var/data/codex
+      - key: AGENT_WORKSPACE_ROOT
+        value: /var/data/workspaces
+      - key: CODEX_AUTH_MODE
+        value: chatgpt
       - key: SPECTRUM_PROJECT_ID
         sync: false
       - key: SPECTRUM_PROJECT_SECRET
         sync: false
+      - key: SUPERMEMORY_API_KEY
+        sync: false
+      - key: AGENT_OWNER_HANDLES
+        sync: false
+      - key: APP_ENCRYPTION_KEY
+        generateValue: true
+
+databases:
+  - name: imessage-agent-db
+    databaseName: imessage_agent
+    user: imessage_agent
+    plan: basic-256mb
+    region: oregon
+    postgresMajorVersion: "18"
+    diskSizeGB: 15
+    connectionPool: none
+    ipAllowList: []

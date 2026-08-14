@@ -1,282 +1,316 @@
 # Deployment and Codex Authentication
 
-## 1. Deployment promise
+**Last verified against official documentation:** August 14, 2026
 
-The accurate promise is:
+## 1. Deployment contract and present limitation
 
-> One-click Render infrastructure provisioning, followed by one private Codex enrollment step when using ChatGPT authentication.
+The intended deployment is one private Render Web Service, one Render Postgres database, and one persistent disk. Render provisions the infrastructure from [`render.yaml`](./render.yaml); the operator still provides private provider credentials and, in ChatGPT mode, completes one Codex device-login flow.
 
-Render can create the service, PostgreSQL database, environment wiring, health checks, and persistent disk from `render.yaml`. It cannot complete a user’s private ChatGPT device authorization without the user.
+This branch does **not** yet prove a clean first-message deployment. `src/index.ts` provides injectable boot ordering and operational graceful-shutdown composition, but `npm start` still runs the foundation `src/server.ts` entrypoint. That entrypoint exposes `/healthz` and redacted `/readyz`, yet it does not compose the Spectrum, queue, Codex, memory, or security handlers, so readiness remains false. The integration owner must wire those handlers before the clean-local, clean-Render, and first-message gates can pass.
 
-## 2. What “Codex in the cloud” means
+Current verification boundaries:
 
-The Codex TypeScript SDK starts a Codex CLI process inside the Node service. On Render, that process and its sessions run inside the Render instance. This is a private, self-hosted Codex runtime; it is not the separate Codex Cloud product.
+- No clean Render deployment was performed from this branch.
+- No live Photon, Codex, or Supermemory path was exercised as part of Step 8 documentation work.
+- The dedicated memory-provider outage/Supermemory-timeout resilience exercise was intentionally not run by user direction. Any fake-provider assertion reached by a broad offline suite is not accepted as outage validation; the behavior in this guide remains required policy.
+- `npm run render:validate` was attempted with Render CLI 2.22.0, but the CLI stopped before validating the file because no Render workspace/default workspace was configured: `no workspace specified and no default workspace set`.
+- Passing fake-provider, unit, integration, or chaos tests is not evidence that a provider works live.
 
-The same application can run locally. The transport remains Spectrum Cloud gRPC unless a separate macOS-local iMessage provider is intentionally added later.
+Use [`test/e2e/render-smoke.md`](./test/e2e/render-smoke.md) to capture reviewer-owned evidence rather than turning an expected behavior into an unsupported claim.
 
-## 3. Render resources
+## 2. Provisioned topology
 
-V1 Blueprint:
+The checked-in Blueprint is the source of truth. It declares:
 
-- One paid Node Web Service.
-- One Render PostgreSQL database.
-- One persistent disk attached to the web service.
-- Dynamic `DATABASE_URL` from the database resource.
-- Prompted Photon and Supermemory secrets.
-- Generated application encryption key.
+- One paid Node Web Service, fixed at one instance.
+- One Render Postgres database in the same region.
+- One persistent disk mounted at `/var/data`.
+- `CODEX_HOME=/var/data/codex` for Codex credentials and session files.
+- `AGENT_WORKSPACE_ROOT=/var/data/workspaces` for agent workspaces.
+- `DATABASE_URL` populated through a Render `fromDatabase` reference, not copied manually.
+- `npm run db:migrate` as the pre-deploy command.
+- `/healthz` as Render's health-check path.
+- A 120-second maximum graceful-shutdown window.
 
-The disk makes the service single-instance in v1. Do not configure horizontal scaling.
+The disk makes v1 intentionally single-instance. Render does not scale a service with an attached persistent disk. Do not remove the disk or increase `numInstances` without redesigning credential and workspace ownership.
 
-## 4. Blueprint shape
+## 3. Configuration and secret inventory
 
-Use this as the implementation target, then validate it against current Render Blueprint documentation before release:
+Start from [`.env.example`](./.env.example). Required values are validated at process start.
 
-```yaml
-services:
-  - type: web
-    name: imessage-codex-agent
-    runtime: node
-    plan: starter
-    autoDeployTrigger: off
-    buildCommand: npm ci && npm run build
-    preDeployCommand: npm run db:migrate
-    startCommand: npm start
-    healthCheckPath: /healthz
-    maxShutdownDelaySeconds: 120
-    disk:
-      name: codex-data
-      mountPath: /var/data
-      sizeGB: 1
-    envVars:
-      - key: NODE_VERSION
-        value: 22.12.0
-      - key: DATABASE_URL
-        fromDatabase:
-          name: imessage-agent-db
-          property: connectionPoolString
-      - key: CODEX_HOME
-        value: /var/data/codex
-      - key: AGENT_WORKSPACE_ROOT
-        value: /var/data/workspaces
-      - key: SPECTRUM_PROJECT_ID
-        sync: false
-      - key: SPECTRUM_PROJECT_SECRET
-        sync: false
-      - key: SUPERMEMORY_API_KEY
-        sync: false
-      - key: AGENT_OWNER_HANDLES
-        sync: false
-      - key: APP_ENCRYPTION_KEY
-        generateValue: true
+| Variable | Local source | Render source | Secret |
+|---|---|---|---|
+| `SPECTRUM_PROJECT_ID` | operator | Blueprint prompt | yes |
+| `SPECTRUM_PROJECT_SECRET` | operator | Blueprint prompt | yes |
+| `DATABASE_URL` | local PostgreSQL | dynamic database reference | yes |
+| `AGENT_OWNER_HANDLES` | operator | Blueprint prompt | private |
+| `DEPLOYMENT_ID` | operator-generated UUID | derived from `RENDER_SERVICE_ID` | no |
+| `APP_ENCRYPTION_KEY` | `openssl rand -base64 32` | generated by Render | yes |
+| `CODEX_HOME` | absolute private path | `/var/data/codex` | contains secrets |
+| `AGENT_WORKSPACE_ROOT` | separate absolute path | `/var/data/workspaces` | may contain private data |
+| `CODEX_AUTH_MODE` | `chatgpt` or `api_key` | defaults to `chatgpt` | no |
+| `OPENAI_API_KEY` | only for API-key mode | Render secret, only for API-key mode | yes |
+| `SUPERMEMORY_API_KEY` | optional | Blueprint prompt | yes |
 
-databases:
-  - name: imessage-agent-db
-    plan: basic-256mb
-    postgresMajorVersion: "18"
-    diskSizeGB: 15
-```
+`CODEX_HOME` and `AGENT_WORKSPACE_ROOT` must be absolute, separate, non-overlapping directories. Startup creates them with mode `0700`, validates directory type/mode plus read/write/execute access, and maintains `$CODEX_HOME/config.toml` with mode `0600`. File-based Codex credentials are required in a headless container.
 
-Plan names and supported fields can change. The repository must include a CI command that validates the actual file against the current Render specification.
+Do not put credentials in PostgreSQL, Supermemory, job payloads, or logs. Do not print `auth.json` to diagnose authentication.
 
-## 5. Boot phases
+## 4. Codex authentication modes
 
-```text
-Phase 1: process liveness
-  HTTP /healthz starts.
+Codex supports ChatGPT subscription authentication and OpenAI API-key authentication. The application never silently changes modes.
 
-Phase 2: operational dependencies
-  Disk, config, database, migrations, pg-boss initialize.
+### 4.1 ChatGPT device login
 
-Phase 3: Codex enrollment/capabilities
-  Check auth and configured model/effort support.
+Device-code authentication is the preferred headless flow and is currently marked beta in the official Codex documentation.
 
-Phase 4: messaging
-  Start Spectrum gRPC stream and mark readiness when connected.
-```
+1. Enable device-code login in the ChatGPT account security settings, or have the ChatGPT workspace administrator enable it.
+2. Ensure `CODEX_AUTH_MODE=chatgpt` and `CODEX_HOME` points to private persistent storage.
+3. In the same environment as the service, run:
 
-A missing Codex login should not crash the service repeatedly. `/healthz` remains healthy while `/readyz` reports the exact missing enrollment step. Inbound messages should not be accepted for execution until readiness is complete; the operator may optionally configure a fixed “setup incomplete” reply for the authorized owner.
+   ```bash
+   npm run codex:login
+   npm run codex:status
+   ```
 
-## 6. ChatGPT authentication on Render
+   `npm run codex:login` invokes `codex login --device-auth`. Open the displayed URL in a trusted browser, sign in, and enter the one-time code.
+4. Confirm `$CODEX_HOME/auth.json` exists and is restricted:
 
-### Required configuration
+   ```bash
+   test -f "$CODEX_HOME/auth.json"
+   chmod 600 "$CODEX_HOME/auth.json"
+   npm run codex:status
+   ```
 
-`CODEX_HOME` must point to the persistent disk. Configure Codex to store credentials in a file inside that directory rather than relying on an OS keychain unavailable in a headless container.
+5. Restart the service. In the fully composed service, `/readyz` must show both `codexAuth` and `codexCapabilities` as `ok` before Spectrum intake begins.
 
-Startup setup script:
+Codex normally refreshes active ChatGPT tokens automatically. A revoked or unusable session still requires re-enrollment. Treat `auth.json` like a password: do not copy it into source control, tickets, chat, logs, PostgreSQL, or Supermemory.
 
-```bash
-install -d -m 700 "$CODEX_HOME"
-cat > "$CODEX_HOME/config.toml" <<'EOF'
-cli_auth_credentials_store = "file"
-forced_login_method = "chatgpt"
-EOF
-chmod 600 "$CODEX_HOME/config.toml"
-```
+### 4.2 API-key mode
 
-Confirm the exact config keys against the pinned Codex release before shipping.
+API-key mode uses OpenAI Platform usage-based billing and the API organization's data controls. It does not use included ChatGPT subscription credits.
 
-### Enrollment
-
-From the private Render Shell:
-
-```bash
-npm run codex:login
-# script: codex login --device-auth
-```
-
-The CLI prints a URL and device code. The operator completes sign-in in their browser, then verifies:
-
-```bash
-npm run codex:status
-# script: codex login status
-```
-
-Restart or redeploy the service and confirm `/readyz` reports `codexAuth: ok`.
-
-### Credential rules
-
-- Treat `$CODEX_HOME/auth.json` as a password.
-- Never print, upload, commit, or place it in PostgreSQL/Supermemory.
-- Set directory mode `0700` and file mode `0600` where the filesystem permits.
-- Do not expose Render Shell access to ordinary agent users.
-- Revoke and re-enroll if the deployment is transferred.
-- The service must detect missing/expired auth and stop new execution safely.
-
-## 7. API-key mode
-
-For noninteractive deployments:
+Set:
 
 ```dotenv
 CODEX_AUTH_MODE=api_key
-OPENAI_API_KEY=<secret>
+OPENAI_API_KEY=<Render secret or local secret>
 ```
 
-In this mode:
+The application passes `OPENAI_API_KEY` only across the explicit Codex child-process boundary. It does not require a ChatGPT device login and must not pass the key to unrelated subprocesses. Do not put the value directly in `render.yaml` or commit it to `.env`.
 
-- Pass the API key only to the Codex child process.
-- Do not write it to disk.
-- Remove it from the parent environment passed to any unrelated subprocess.
-- Track API token costs using current official pricing.
-- `/readyz` verifies a minimal capability call without exposing key details.
+The official Codex CLI also supports `printenv OPENAI_API_KEY | codex login --with-api-key`, but this starter does not require that cache-writing flow in application API-key mode. The runtime supplies the key directly. Use `codex login status` only when diagnosing an intentionally cached standalone CLI login.
 
-The repository should recommend API-key or enterprise/workspace credential approaches for programmatic multi-user products rather than reusing one person’s ChatGPT login.
+To change a Render deployment from ChatGPT mode to API-key mode:
 
-## 8. Local setup
+1. Add `OPENAI_API_KEY` as a secret environment variable in the Web Service.
+2. Set `CODEX_AUTH_MODE=api_key`.
+3. Redeploy/restart the service.
+4. Verify the redacted capability probe and `/readyz`; never verify by printing the key.
 
-Prerequisites:
+To rotate the key, replace the secret, restart, run the protected Codex capability test, and revoke the old key after the replacement succeeds.
 
-- Node 22.12+.
-- PostgreSQL 13+ or a local container.
-- A Photon project with cloud iMessage configured.
-- A Supermemory API key for memory-enabled mode.
-- Codex CLI authenticated with ChatGPT or an API key.
+## 5. Clean local installation
 
-Commands:
+### Prerequisites
+
+- Node.js 22.12 through 22.x, or Node.js 24 or newer. Node 23 is not supported by the pinned test runner.
+- npm compatible with the checked-in lockfile.
+- PostgreSQL 13 or newer; PostgreSQL 18 matches the Render target.
+- A Photon project with Spectrum Cloud iMessage configured for any live transport test.
+- A ChatGPT account/workspace with device login enabled, or an OpenAI Platform API key.
+- A Supermemory API key only when semantic memory is enabled.
+
+### Install and configure
+
+From a fresh checkout of the release under review:
 
 ```bash
-git clone <new-repository-url>
-cd imessage-codex-agent-boilerplate
-cp .env.example .env
 npm ci
+cp .env.example .env
+pwd -P
+mkdir -p .codex-agent .agent-workspaces
+chmod 700 .codex-agent .agent-workspaces
+openssl rand -base64 32
+```
+
+Edit `.env` once. Set `CODEX_HOME` and `AGENT_WORKSPACE_ROOT` to the absolute paths printed by `pwd -P`; `.env` does not expand `$HOME`, `$PWD`, or shell command substitutions. Generate `DEPLOYMENT_ID` with an operating-system UUID utility or a trusted UUID v4/v5 generator. Set the generated encryption key, owner handles, Photon values, and database URL.
+
+For a disposable local PostgreSQL 18 container:
+
+```bash
+docker run --name imessage-agent-postgres \
+  -e POSTGRES_DB=imessage_agent \
+  -e POSTGRES_USER=agent \
+  -e POSTGRES_PASSWORD=local-only-change-me \
+  -p 127.0.0.1:5432:5432 \
+  -d postgres:18
+```
+
+Use this matching local URL in `.env`:
+
+```dotenv
+DATABASE_URL=postgresql://agent:local-only-change-me@127.0.0.1:5432/imessage_agent
+```
+
+Then run:
+
+```bash
+npm run typecheck
+npm test
 npm run db:migrate
-codex login
+```
+
+For database-backed integration tests, use a separate disposable database because the suite truncates application tables:
+
+```bash
+createdb -h 127.0.0.1 -U agent imessage_agent_test
+POSTGRES_PIPELINE_TEST_DATABASE_URL=postgresql://agent:local-only-change-me@127.0.0.1:5432/imessage_agent_test npm run test:integration
+```
+
+Enroll ChatGPT with the commands in section 4.1, or configure API-key mode. Start the service:
+
+```bash
 npm run dev
+curl --fail --silent http://127.0.0.1:10000/healthz
+curl --silent --show-error http://127.0.0.1:10000/readyz
 ```
 
-Set local paths:
+On the current branch, the second request returns HTTP 503 with redacted component states because `src/server.ts` is not yet composed with `src/index.ts`. Record the clean-local first-message gate as blocked until integration fixes that entrypoint. Do not treat a 200 from `/healthz` as proof that the queue, Codex, Spectrum, or memory path is ready.
 
-```dotenv
-CODEX_HOME=$HOME/.codex
-AGENT_WORKSPACE_ROOT=./.agent-workspaces
-DATABASE_URL=postgresql://...
-```
+## 6. Clean Render Blueprint deployment
 
-Do not commit local Codex or workspace directories.
+Use the [official Render Blueprint flow](https://render.com/docs/infrastructure-as-code) against the reviewed commit containing `render.yaml`.
 
-## 9. Photon setup
+1. In a fresh Render workspace, create a Blueprint from the release repository and select its `render.yaml`.
+2. Review the plan before applying it. It must contain exactly one Web Service, one Render Postgres database, and one disk on the Web Service.
+3. Enter every `sync: false` prompt during initial Blueprint creation. Render prompts for these only on initial creation; secrets added later must be configured directly on the existing service.
+4. Confirm `DATABASE_URL` is a dynamic reference to `imessage-agent-db`. Never paste a database connection string into a Blueprint prompt.
+5. Apply the Blueprint. The build must run `npm ci && npm run build`; the pre-deploy phase must run `npm run db:migrate`; the service must start with `npm start`.
+6. Confirm the disk is mounted at `/var/data`, the service has exactly one instance, and `/var/data/codex` plus `/var/data/workspaces` are writable only by the service account.
+7. Verify `GET /healthz` returns HTTP 200. Do not expect `/readyz` to pass before Codex authentication and all critical dependencies are ready.
+8. For ChatGPT mode, open the private Render Shell and run:
 
-The gRPC path requires:
+   ```bash
+   npm run codex:login
+   npm run codex:status
+   ```
 
-```dotenv
-SPECTRUM_PROJECT_ID=
-SPECTRUM_PROJECT_SECRET=
-```
+   Complete the device-code flow in a trusted browser, restart the Web Service, and verify authentication survives the restart.
+9. For API-key mode, add `OPENAI_API_KEY` as a Render secret, set `CODEX_AUTH_MODE=api_key`, and redeploy. Do not run device login.
+10. When the composed entrypoint is available, require `/readyz` HTTP 200 before sending the first authorized message.
 
-It does **not** require `SPECTRUM_WEBHOOK_SECRET`. Spectrum discovers cloud lines from project credentials and renews tokens when configured through the normal cloud provider path.
+The current branch cannot complete steps 7-10 as an end-to-end agent deployment because `npm start` still targets the foundation entrypoint. Preserve the failed/blocked evidence in the smoke checklist; do not work around it by claiming that infrastructure liveness equals application readiness.
 
-Operational notes:
+## 7. Health and readiness
 
-- Shared-pool and dedicated-line capabilities differ, especially for groups.
-- Persist route phone for reliable lookup on projects with multiple dedicated lines.
-- New line provisioning may require process restart or waiting for token renewal before the running SDK observes it.
-- Respect current per-server, per-line, and plan quotas.
-
-## 10. Supermemory setup
-
-```dotenv
-SUPERMEMORY_API_KEY=
-SUPERMEMORY_CONTAINER_PREFIX=imessage-agent
-```
-
-Readiness checks configuration, not a destructive write. A separate smoke command may add/search/delete a temporary test item during deployment verification.
-
-## 11. Database migration and rollback
-
-- Generate migrations in source control.
-- Run forward-compatible migrations before starting new code.
-- Avoid destructive column/table removal in the same release that stops writing the data.
-- pg-boss schema initialization must be deterministic and version-compatible.
-- Rollback instructions identify the last application version compatible with the current schema.
-- Backup before migrations that rewrite encrypted content or identity fingerprints.
-
-## 12. Health endpoints
+The composed health application defines:
 
 ```text
-GET /healthz  → 200 {"status":"ok"}
-GET /readyz   → 200 when ready; 503 with redacted component states otherwise
+GET /healthz -> 200 {"status":"ok"}
+GET /readyz  -> 200 when all critical components are ready
+GET /readyz  -> 503 with redacted component states and safe operator actions otherwise
 ```
 
-Neither endpoint requires public authentication because it contains no sensitive values. Do not add an unauthenticated admin UI.
+Critical readiness components are configuration, database, migrations, queue, Spectrum, Codex authentication, Codex capabilities, disk, and workspace. Supermemory is optional at turn time and may be `disabled` or `degraded` without making operational state unsafe.
 
-## 13. Recovery procedures
+Render intentionally probes `/healthz`, not `/readyz`. Missing Codex enrollment or a provider outage should keep the process available for private remediation while `/readyz` refuses message execution. Neither endpoint may include secrets, raw provider errors, handles, database URLs, arbitrary filesystem paths, or message content.
 
-### Expired/revoked ChatGPT auth
+Useful checks:
 
-1. Readiness becomes false.
-2. Existing durable messages stay queued; execution is paused.
-3. Operator runs `npm run codex:login` again.
-4. Capability probe succeeds.
-5. Queue resumes.
+```bash
+curl --fail --silent "https://<service-host>/healthz"
+curl --silent --show-error "https://<service-host>/readyz"
+```
 
-### Corrupt Codex session
+Save the response after redaction. HTTP 503 from `/readyz` is expected during initial ChatGPT enrollment or a critical outage; follow the returned `actions` without exposing provider diagnostics.
 
-1. Mark the specific thread `reset`.
-2. Preserve its bounded PostgreSQL summary.
-3. Start a fresh thread with the summary.
-4. Do not delete unrelated agents or owner memory.
+## 8. Migrations and application rollback
+
+`npm run db:migrate` applies checked-in Drizzle migrations. Render runs it as `preDeployCommand`, after build and before the new process starts. Migration failure must stop deployment.
+
+Before each release:
+
+1. Record the outgoing application commit.
+2. Read every new `src/db/migrations/*.notes.md` file.
+3. Confirm the outgoing release is compatible with the post-migration schema.
+4. Create or verify a Render database recovery point according to the database plan.
+5. Run the migration in staging and record duration/locks.
+6. Deploy the new application only after migration success.
+
+Application rollback:
+
+1. Set the service unavailable for new execution and wait for graceful shutdown.
+2. Roll back to the recorded Render deploy/commit **only if its migration notes declare compatibility with the current schema**.
+3. Leave forward-compatible schema additions in place.
+4. Restart and verify `/healthz`, `/readyz`, queue reconciliation, outbound cursors, and one authorized non-mutating turn.
+
+Schema rollback is separate and is never implied by application rollback. Use the exact SQL in the affected migration's `.notes.md` only after stopping workers and taking a verified backup/recovery point. Migration `0000` rollback is destructive and abandons application state; do not drop the `pgboss` schema unless queued work is intentionally abandoned. Migration `0001` rebuilds an index and briefly locks `memory_sync_events`.
+
+If the old application is not compatible with the current schema, roll forward with a fixed release or restore the database and application together to a matched recovery point. Never improvise a down migration in production.
+
+## 9. Restart and provider-outage behavior
+
+The durable source of truth is PostgreSQL. Codex files and workspaces on disk support continuity but do not replace database recovery records.
+
+### Graceful restart
+
+On `SIGTERM`/`SIGINT`, the composed bootstrap marks readiness false and aborts active work. Registered hooks then stop Spectrum, stop Codex work, checkpoint outbound state, stop the queue, close the database, and close HTTP. Hook timeouts fit within Render's 120-second shutdown window. A critical cleanup failure makes the shutdown result non-clean.
+
+After restart, run durable pipeline reconciliation before accepting new work. It reschedules undrained inbound spaces, queued planning chains, and resumable outbound batches using stable singleton keys.
+
+### Hard process loss
+
+- An accepted inbound row remains durable even if debounce scheduling fails; reconciliation reschedules it.
+- Repeated debounce/plan/synthesis/send enqueue attempts reuse singleton keys.
+- Outbound batches resume from the persisted cursor. A retry after provider acknowledgement reuses the same stable client GUID.
+- A missing Codex session starts a replacement thread from the bounded PostgreSQL recovery summary; it must not delete unrelated threads or memory.
+
+These are tested invariants in fakes and database tests, not proof of live provider deduplication.
+
+### Spectrum/Photon disconnect
+
+Readiness becomes degraded. The supervised stream retries with bounded backoff. Durable accepted work remains in PostgreSQL. After retries are exhausted, inspect Photon status/credentials and restart; never log the provider error or line address. No live Photon outage was exercised in this documentation pass.
+
+### PostgreSQL timeout/outage
+
+`/healthz` stays live, `/readyz` becomes 503 with `DATABASE_UNAVAILABLE`, and startup does not continue to migrations, queues, Codex, memory, or Spectrum. Restore connectivity, verify the database, rerun migrations if required, then restart and reconcile. Do not run untracked Codex work while PostgreSQL is unavailable.
+
+### Supermemory timeout/outage
+
+Recall degrades to an empty, explicitly unavailable memory context and planning continues. Post-response projection failures are recorded with safe error codes and retried according to queue policy; they do not roll back a delivered operational response. Never move authorization, delivery, or retry state into Supermemory.
+
+The dedicated resilience exercise was intentionally skipped by user direction. Keep the release evidence for this item `NOT RUN` unless a later authorized run executes it; incidental fake-provider coverage in a broad suite is not live or outage validation.
+
+### Expired/revoked Codex authentication
+
+The composed service stays live but not ready, does not start Spectrum intake, and surfaces `CODEX_AUTH_EXPIRED` with a safe action. Durable queued state remains. In ChatGPT mode, rerun `npm run codex:login` and `npm run codex:status`; in API-key mode, replace the secret. Restart and require the configured model/effort capability probes to pass before resuming.
 
 ### Persistent disk loss
 
-1. Re-enroll Codex.
-2. Recreate workspaces from configured Git remotes or backups.
-3. Start fresh Codex threads using database summaries.
-4. Database-backed messages, chains, approvals, and memory receipts remain intact.
+Stop execution. Attach/repair the correct disk or provision replacement private storage, then re-enroll Codex and recreate workspaces from trusted remotes/backups. Resume threads from bounded PostgreSQL summaries. Rotate/revoke credentials if disk exposure is possible.
 
-### Database outage
+## 10. Release evidence
 
-1. Mark readiness false.
-2. Do not accept untracked model execution.
-3. Spectrum receive loop may reconnect after database recovery; provider behavior and replay guarantees must be tested.
-4. Resume queued jobs after database recovery.
+Before release, attach:
 
-## 14. One-click button wording
+- The exact reviewed commit and `render.yaml` validation output.
+- Clean local and clean Render evidence from [`test/e2e/render-smoke.md`](./test/e2e/render-smoke.md).
+- `npm run typecheck`, `npm test`, `npm run test:integration`, and `npm run test:chaos` output, with skipped database/live tests identified.
+- Migration and rollback compatibility notes.
+- Redacted `/healthz` and `/readyz` responses before and after restart.
+- Protected live test output only for providers actually exercised.
+- Known limitations, especially the current uncomposed production entrypoint.
 
-Use:
+Do not state that Render, Photon, Codex, or Supermemory works live unless the corresponding protected live test was executed and its redacted evidence is attached.
 
-> Deploy the private agent infrastructure to Render
+## 11. Primary sources
 
-Follow with:
-
-> After deployment, complete one private Codex device-login step in Render Shell.
-
-Do not label the full experience “zero configuration” or imply that Render can log into ChatGPT automatically.
+- [Official Codex authentication](https://learn.chatgpt.com/docs/auth.md)
+- [Official Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference.md)
+- [Render Blueprint specification](https://render.com/docs/blueprint-spec)
+- [Render persistent disks](https://render.com/docs/disks)
+- [Render health checks](https://render.com/docs/health-checks)
+- [Render Postgres](https://render.com/docs/postgresql-creating-connecting)
+- [Photon Spectrum documentation index](https://photon.codes/docs/llms.txt)
+- [Supermemory documentation index](https://supermemory.ai/docs/llms.txt)

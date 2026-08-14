@@ -38,4 +38,19 @@ describe("prompt bundle", () => {
 
     expect(after.version).not.toBe(before.version);
   });
+
+  it("keeps emoji use optional, sparse, and subordinate to answer-first voice", async () => {
+    const bundle = await loadPromptBundle();
+    const voice = bundle.prompts["voice-policy.md"]?.content ?? "";
+    const interaction = bundle.prompts["interaction.system.md"]?.content ?? "";
+
+    expect(voice).toContain("Lead with the answer, decision, or outcome.");
+    expect(voice).toContain(
+      "Use an emoji naturally and sparingly only when it improves warmth or clarity.",
+    );
+    expect(voice).toContain("decorative/repetitive emojis");
+    expect(interaction).toContain(
+      "Use emojis naturally and sparingly, only when they improve warmth or clarity",
+    );
+  });
 });

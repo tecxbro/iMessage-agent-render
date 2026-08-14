@@ -25,6 +25,20 @@ const resumeIndex = args.indexOf("resume");
 const resumedThreadId = resumeIndex < 0 ? undefined : args[resumeIndex + 1];
 const capturePath = process.env["AGENT_TASK_FAKE_CAPTURE_PATH"];
 const terminationPath = process.env["AGENT_TASK_FAKE_TERMINATION_PATH"];
+const shouldSleep =
+  process.env["AGENT_TASK_FAKE_MODE"] === "sleep" ||
+  input.includes("FAKE_MODE:SLEEP");
+
+if (shouldSleep) {
+  const terminate = () => {
+    if (terminationPath !== undefined) {
+      appendFileSync(terminationPath, "terminated\n");
+    }
+    process.exit(143);
+  };
+  process.on("SIGTERM", terminate);
+  process.on("SIGINT", terminate);
+}
 
 if (capturePath !== undefined) {
   appendFileSync(
@@ -60,18 +74,7 @@ if (process.env["AGENT_TASK_FAKE_AUTH_FAILURE"] === "true") {
   process.exit(2);
 }
 
-if (
-  process.env["AGENT_TASK_FAKE_MODE"] === "sleep" ||
-  input.includes("FAKE_MODE:SLEEP")
-) {
-  const terminate = () => {
-    if (terminationPath !== undefined) {
-      appendFileSync(terminationPath, "terminated\n");
-    }
-    process.exit(143);
-  };
-  process.on("SIGTERM", terminate);
-  process.on("SIGINT", terminate);
+if (shouldSleep) {
   setInterval(() => {}, 1_000);
   await new Promise(() => {});
 }

@@ -1,0 +1,8 @@
+{
+  "mode": "delegate",
+  "modelProfile": "main",
+  "tasks": [],
+  "waitForTasks": false,
+  "memoryCandidates": [],
+  "permissionProfile": "danger-full-access"
+}

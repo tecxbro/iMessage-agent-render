@@ -2,5 +2,13 @@ node_modules/
 dist/
 .env
 .env.local
+.env.*.local
+.codex-agent/
+.agent-workspaces/
+codex-home/
+workspaces/
+test/.secrets/
+test/**/*.secret.*
+coverage/
 *.log
 .DS_Store

@@ -1,24 +1,44 @@
 {
-  "name": "imessage-boiler-plate",
-  "version": "1.0.0",
+  "name": "imessage-codex-agent-boilerplate",
+  "version": "0.1.0",
   "private": true,
-  "description": "Spectrum Cloud iMessage agent foundation",
+  "description": "Production-oriented private iMessage agent starter powered by Spectrum and Codex",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run test/integration",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "codex:login": "codex login --device-auth",
+    "codex:status": "codex login status",
+    "render:validate": "render blueprints validate render.yaml"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "spectrum-ts": "^12.7.0"
+    "@openai/codex": "0.147.0",
+    "@openai/codex-sdk": "0.147.0",
+    "drizzle-orm": "0.45.2",
+    "express": "5.2.1",
+    "pg": "8.23.0",
+    "pg-boss": "12.27.0",
+    "pino": "10.3.1",
+    "spectrum-ts": "12.7.0",
+    "supermemory": "4.25.4",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/express": "^5.0.3",
-    "@types/node": "^22.15.30",
-    "typescript": "^5.8.3"
+    "@types/express": "5.0.6",
+    "@types/node": "22.19.15",
+    "@types/pg": "8.21.0",
+    "drizzle-kit": "0.31.10",
+    "tsx": "4.23.12",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
   }
 }

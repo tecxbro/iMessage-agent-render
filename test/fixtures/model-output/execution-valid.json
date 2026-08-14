@@ -1,0 +1,15 @@
+{
+  "taskId": "task-a",
+  "status": "succeeded",
+  "userSafeSummary": "The retry loop recreates the client ID after each crash.",
+  "artifacts": [
+    {
+      "type": "file",
+      "path": "reports/retry-analysis.md",
+      "description": "Evidence and proposed patch"
+    }
+  ],
+  "proposedActions": [],
+  "memoryCandidates": [],
+  "error": null
+}

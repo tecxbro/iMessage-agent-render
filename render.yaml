@@ -1,4 +1,4 @@
-# Render Blueprint — one Web Service for the Photon Spectrum webhook agent.
+# Render Blueprint — one Web Service for the iMessage agent foundation.
 # https://render.com/docs/blueprint-spec
 # https://render.com/docs/configure-environment-variables
 # https://render.com/docs/web-services
@@ -11,16 +11,11 @@ services:
     autoDeployTrigger: "off"
     buildCommand: npm install && npm run build
     startCommand: npm start
-    healthCheckPath: /health
+    healthCheckPath: /healthz
     envVars:
       # Photon project credentials — prompted during Blueprint create (never commit secrets).
       # https://photon.codes/docs/spectrum-ts/getting-started
       - key: SPECTRUM_PROJECT_ID
         sync: false
       - key: SPECTRUM_PROJECT_SECRET
-        sync: false
-      # Signing secret returned once when you register the webhook URL with Photon.
-      # https://photon.codes/docs/spectrum-ts/webhooks
-      # https://photon.codes/docs/webhooks/managing-webhooks
-      - key: SPECTRUM_WEBHOOK_SECRET
         sync: false

@@ -2,7 +2,7 @@
   "name": "imessage-boiler-plate",
   "version": "1.0.0",
   "private": true,
-  "description": "Photon × Render agent starter — inbound text → Hello world 👋",
+  "description": "Spectrum Cloud iMessage agent foundation",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -13,7 +13,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@spectrum-ts/express": "^12.7.0",
     "express": "^5.1.0",
     "spectrum-ts": "^12.7.0"
   },

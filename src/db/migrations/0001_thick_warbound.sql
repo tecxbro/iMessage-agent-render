@@ -1,0 +1,2 @@
+DROP INDEX "memory_sync_events_projection_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "memory_sync_events_projection_unique" ON "memory_sync_events" USING btree ("owner_id","content_hash") WHERE "memory_sync_events"."operation" in ('add', 'update');

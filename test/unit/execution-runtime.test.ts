@@ -1,0 +1,128 @@
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  CodexRuntimeError,
+  type CodexRunRequest,
+  type CodexRunResult,
+  type StructuredCodexRunner,
+} from "../../src/agent/codex-client.js";
+import { ExecutionRuntime } from "../../src/agent/execution-runtime.js";
+import { executionTaskSchema } from "../../src/agent/schemas.js";
+import {
+  ThreadStore,
+  type CodexThreadRepository,
+  type StoredCodexThread,
+} from "../../src/agent/thread-store.js";
+import { DEFAULT_MODEL_PROFILES } from "../../src/config/model-profiles.js";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map(async (directory) => {
+      await rm(directory, { recursive: true, force: true });
+    }),
+  );
+});
+
+class CanceledRunner implements StructuredCodexRunner {
+  public calls = 0;
+
+  public async runStructured<Output>(
+    _request: CodexRunRequest<Output>,
+  ): Promise<CodexRunResult<Output>> {
+    this.calls += 1;
+    throw new CodexRuntimeError("CODEX_CANCELED", "canceled", true);
+  }
+}
+
+class TestThreadRepository implements CodexThreadRepository {
+  private readonly records = new Map<string, StoredCodexThread>();
+
+  public async get(scopeKey: string): Promise<StoredCodexThread | undefined> {
+    const record = this.records.get(scopeKey);
+    return record === undefined ? undefined : structuredClone(record);
+  }
+
+  public async save(record: StoredCodexThread): Promise<void> {
+    this.records.set(record.scopeKey, structuredClone(record));
+  }
+}
+
+function task(workspaceBinding = "workspace") {
+  return executionTaskSchema.parse({
+    id: "task-a",
+    agentName: "repo-agent",
+    purpose: "Inspect one repository.",
+    instructions: "Return a bounded result.",
+    workspaceBinding,
+    modelProfile: "main",
+    permissionProfile: "workspace-write",
+    dependsOn: [],
+  });
+}
+
+describe("bounded execution runtime", () => {
+  it("transitions an aborted Codex run to a canceled terminal result", async () => {
+    const root = await mkdtemp(join(tmpdir(), "execution-runtime-test-"));
+    temporaryDirectories.push(root);
+    await mkdir(join(root, "workspace"));
+    const runner = new CanceledRunner();
+    const runtime = new ExecutionRuntime(
+      new ThreadStore(new TestThreadRepository(), runner),
+    );
+
+    const result = await runtime.run({
+      ownerId: "00000000-0000-4000-8000-000000000001",
+      task: task(),
+      modelProfile: DEFAULT_MODEL_PROFILES.main,
+      workspaceRoot: root,
+      policySections: [
+        {
+          name: "Execution policy",
+          trust: "trusted-policy",
+          content: "Stay within the workspace.",
+        },
+      ],
+    });
+
+    expect(result.result).toMatchObject({
+      taskId: "task-a",
+      status: "canceled",
+      error: { code: "CODEX_TASK_CANCELED", retryable: true },
+    });
+    expect(runner.calls).toBe(1);
+  });
+
+  it("rejects a symlink workspace escape before invoking Codex", async () => {
+    const root = await mkdtemp(join(tmpdir(), "execution-runtime-root-"));
+    const outside = await mkdtemp(join(tmpdir(), "execution-runtime-outside-"));
+    temporaryDirectories.push(root, outside);
+    await symlink(outside, join(root, "escaped"));
+    const runner = new CanceledRunner();
+    const runtime = new ExecutionRuntime(
+      new ThreadStore(new TestThreadRepository(), runner),
+    );
+
+    await expect(
+      runtime.run({
+        ownerId: "00000000-0000-4000-8000-000000000001",
+        task: task("escaped"),
+        modelProfile: DEFAULT_MODEL_PROFILES.main,
+        workspaceRoot: root,
+        policySections: [
+          {
+            name: "Execution policy",
+            trust: "trusted-policy",
+            content: "Stay within the workspace.",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/outside AGENT_WORKSPACE_ROOT/);
+    expect(runner.calls).toBe(0);
+  });
+});

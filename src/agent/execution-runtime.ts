@@ -1,0 +1,188 @@
+import { realpath, stat } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
+
+import type { Usage } from "@openai/codex-sdk";
+
+import {
+  CodexRuntimeError,
+  type CodexProgressEvent,
+} from "./codex-client.js";
+import {
+  executionResultSchema,
+  type ExecutionResult,
+  type ExecutionTask,
+} from "./schemas.js";
+import type { ModelProfile } from "../config/model-profiles.js";
+import { buildPrompt, type PromptSection } from "./prompt-builder.js";
+import type { ThreadStore } from "./thread-store.js";
+
+export interface ExecutionRuntimeRequest {
+  ownerId: string;
+  task: ExecutionTask;
+  modelProfile: ModelProfile;
+  workspaceRoot: string;
+  policySections: readonly PromptSection[];
+  recoverySummary?: string;
+  signal?: AbortSignal;
+  maximumRuntimeMs?: number;
+  onProgress?: (event: CodexProgressEvent) => void;
+}
+
+export interface ExecutionRuntimeRunResult {
+  result: ExecutionResult;
+  threadId?: string;
+  promptSha256: string;
+  usage: Usage | null;
+  recovered: boolean;
+}
+
+async function resolveWorkspace(
+  workspaceRoot: string,
+  binding: string,
+): Promise<string> {
+  if (!isAbsolute(workspaceRoot)) {
+    throw new Error(
+      "AGENT_WORKSPACE_ROOT must be absolute before an execution task can start.",
+    );
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(binding)) {
+    throw new Error("The execution workspace binding is invalid.");
+  }
+
+  const root = await realpath(workspaceRoot);
+  const candidate = resolve(root, binding);
+  const resolved = await realpath(candidate);
+  const relation = relative(root, resolved);
+  if (
+    relation === "" ||
+    relation.startsWith("..") ||
+    isAbsolute(relation)
+  ) {
+    throw new Error(
+      "The execution workspace resolved outside AGENT_WORKSPACE_ROOT. Repair the binding or symlink before retrying.",
+    );
+  }
+  const workspace = await stat(resolved);
+  if (!workspace.isDirectory()) {
+    throw new Error("The execution workspace binding is not a directory.");
+  }
+  return resolved;
+}
+
+function canceledResult(taskId: string): ExecutionResult {
+  return executionResultSchema.parse({
+    taskId,
+    status: "canceled",
+    userSafeSummary: "This task was canceled because its chain was superseded.",
+    artifacts: [],
+    proposedActions: [],
+    memoryCandidates: [],
+    error: {
+      code: "CODEX_TASK_CANCELED",
+      retryable: true,
+      safeMessage: "Retry only if the newer chain still needs this task.",
+    },
+  });
+}
+
+function timedOutResult(taskId: string): ExecutionResult {
+  return executionResultSchema.parse({
+    taskId,
+    status: "failed",
+    userSafeSummary: "This bounded task exceeded its runtime limit.",
+    artifacts: [],
+    proposedActions: [],
+    memoryCandidates: [],
+    error: {
+      code: "CODEX_TASK_TIMEOUT",
+      retryable: true,
+      safeMessage: "Narrow the task or retry while its chain is current.",
+    },
+  });
+}
+
+export class ExecutionRuntime {
+  public constructor(private readonly threads: ThreadStore) {}
+
+  public async run(
+    request: ExecutionRuntimeRequest,
+  ): Promise<ExecutionRuntimeRunResult> {
+    const binding = request.task.workspaceBinding ?? request.task.agentName;
+    const workspace = await resolveWorkspace(request.workspaceRoot, binding);
+    const prompt = buildPrompt({
+      title: `Bounded execution task ${request.task.id}`,
+      sections: [
+        ...request.policySections,
+        {
+          name: "Task purpose",
+          trust: "untrusted-context",
+          content: request.task.purpose,
+        },
+        {
+          name: "Task instructions",
+          trust: "untrusted-context",
+          content: request.task.instructions,
+        },
+      ],
+    });
+
+    try {
+      const turn = await this.threads.run({
+        scope: {
+          kind: "executor",
+          ownerId: request.ownerId,
+          agentName: request.task.agentName,
+          workspaceBinding: binding,
+        },
+        prompt: prompt.content,
+        outputSchema: executionResultSchema,
+        modelProfile: request.modelProfile,
+        permissionProfile: request.task.permissionProfile,
+        workingDirectory: workspace,
+        skipGitRepoCheck: false,
+        ...(request.recoverySummary === undefined
+          ? {}
+          : { recoverySummary: request.recoverySummary }),
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+        ...(request.maximumRuntimeMs === undefined
+          ? {}
+          : { maximumRuntimeMs: request.maximumRuntimeMs }),
+        ...(request.onProgress === undefined
+          ? {}
+          : { onProgress: request.onProgress }),
+      });
+      if (turn.output.taskId !== request.task.id) {
+        throw new CodexRuntimeError(
+          "CODEX_STRUCTURED_OUTPUT_INVALID",
+          "Codex returned an execution result for a different task ID. Discard the result and retry the bounded task.",
+          true,
+        );
+      }
+      return {
+        result: turn.output,
+        threadId: turn.threadId,
+        promptSha256: prompt.sha256,
+        usage: turn.usage,
+        recovered: turn.recovered,
+      };
+    } catch (error) {
+      if (error instanceof CodexRuntimeError && error.code === "CODEX_CANCELED") {
+        return {
+          result: canceledResult(request.task.id),
+          promptSha256: prompt.sha256,
+          usage: null,
+          recovered: false,
+        };
+      }
+      if (error instanceof CodexRuntimeError && error.code === "CODEX_TIMEOUT") {
+        return {
+          result: timedOutResult(request.task.id),
+          promptSha256: prompt.sha256,
+          usage: null,
+          recovered: false,
+        };
+      }
+      throw error;
+    }
+  }
+}

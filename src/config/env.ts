@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isAbsolute, parse, relative, resolve } from "node:path";
 
 import { z } from "zod";
@@ -281,12 +282,59 @@ function loadLocalEnvironmentFile(): void {
   }
 }
 
+/**
+ * Render injects a stable service ID, but Blueprint generated values are not
+ * UUIDs. Derive the internal deployment UUID without prompting for another
+ * value or exposing a provider identifier to memory namespaces.
+ */
+export function deploymentIdFromRenderServiceId(serviceId: string): string {
+  const normalized = z
+    .string()
+    .trim()
+    .min(1)
+    .max(256)
+    .regex(/^[a-zA-Z0-9_-]+$/u)
+    .parse(serviceId);
+  const digest = createHash("sha256")
+    .update(`imessage-codex-agent:render:${normalized}`, "utf8")
+    .digest();
+  digest[6] = (digest[6]! & 0x0f) | 0x50;
+  digest[8] = (digest[8]! & 0x3f) | 0x80;
+  const hexadecimal = digest.subarray(0, 16).toString("hex");
+  return [
+    hexadecimal.slice(0, 8),
+    hexadecimal.slice(8, 12),
+    hexadecimal.slice(12, 16),
+    hexadecimal.slice(16, 20),
+    hexadecimal.slice(20),
+  ].join("-");
+}
+
+function withRenderDeploymentId(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (
+    (source["DEPLOYMENT_ID"] === undefined ||
+      source["DEPLOYMENT_ID"]?.trim() === "") &&
+    source["RENDER_SERVICE_ID"] !== undefined &&
+    source["RENDER_SERVICE_ID"].trim() !== ""
+  ) {
+    return {
+      ...source,
+      DEPLOYMENT_ID: deploymentIdFromRenderServiceId(
+        source["RENDER_SERVICE_ID"],
+      ),
+    };
+  }
+  return source;
+}
+
 export function loadEnvironment(source?: NodeJS.ProcessEnv): Environment {
   if (source === undefined) {
     loadLocalEnvironmentFile();
   }
 
-  const result = rawEnvironmentSchema.safeParse(source ?? process.env);
+  const result = rawEnvironmentSchema.safeParse(
+    withRenderDeploymentId(source ?? process.env),
+  );
 
   if (!result.success) {
     throw new EnvironmentValidationError(result.error.issues);

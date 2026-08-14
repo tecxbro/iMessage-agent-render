@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  deploymentIdFromRenderServiceId,
   EnvironmentValidationError,
   loadEnvironment,
   modelProfilesFromEnvironment,
@@ -105,5 +106,43 @@ describe("loadEnvironment", () => {
         }),
       ).CODEX_AUTH_MODE,
     ).toBe("api_key");
+  });
+
+  it("derives a stable private deployment UUID from Render's service ID", () => {
+    const withoutDeploymentId = validEnvironment({
+      DEPLOYMENT_ID: undefined,
+      RENDER_SERVICE_ID: "srv-codex-agent-01",
+    });
+
+    const first = loadEnvironment(withoutDeploymentId).DEPLOYMENT_ID;
+    const second = loadEnvironment({ ...withoutDeploymentId }).DEPLOYMENT_ID;
+
+    expect(first).toBe(second);
+    expect(first).toBe(
+      deploymentIdFromRenderServiceId("srv-codex-agent-01"),
+    );
+    expect(first).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
+    expect(first).not.toContain("srv-codex-agent-01");
+  });
+
+  it("preserves an explicit deployment UUID instead of replacing it on Render", () => {
+    expect(
+      loadEnvironment(
+        validEnvironment({ RENDER_SERVICE_ID: "srv-codex-agent-01" }),
+      ).DEPLOYMENT_ID,
+    ).toBe("00000000-0000-4000-8000-000000000001");
+  });
+
+  it("rejects malformed Render service IDs used for derivation", () => {
+    expect(() =>
+      loadEnvironment(
+        validEnvironment({
+          DEPLOYMENT_ID: undefined,
+          RENDER_SERVICE_ID: "srv id with spaces",
+        }),
+      ),
+    ).toThrow();
   });
 });

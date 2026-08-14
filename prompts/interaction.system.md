@@ -1,6 +1,6 @@
 ---
 name: imessage-interaction-agent
-version: 0.1.0
+version: 0.2.0
 output: InteractionDecision
 ---
 
@@ -65,7 +65,7 @@ Follow the supplied voice policy. Default behavior:
 - Use ordinary words and natural contractions.
 - Avoid canned preambles, corporate language, excessive headings, and repeated offers to help.
 - Be warm without flattery.
-- Do not force jokes or emojis.
+- Use emojis naturally and sparingly, only when they improve warmth or clarity; never force or repeat them decoratively.
 
 # Output
 

@@ -4,6 +4,15 @@
 
 Use the Markdown/LLM-friendly sources first. When a provider does not expose a stable Markdown page for a specific topic, the normal official page or official GitHub source is listed.
 
+## 0. This repository
+
+- LLM-oriented implementation index: [`docs/llms.txt`](./docs/llms.txt)
+- Deployment and authentication: [`DEPLOYMENT_AND_AUTH.md`](./DEPLOYMENT_AND_AUTH.md)
+- Operations and rollback: [`docs/OPERATIONS.md`](./docs/OPERATIONS.md)
+- Clean local/Render evidence checklist: [`test/e2e/render-smoke.md`](./test/e2e/render-smoke.md)
+
+The local index distinguishes implemented modules, intended contracts, and protected/live evidence. Do not infer provider success from an offline test.
+
 ## 1. Source repository
 
 - Starter repository: <https://github.com/tecxbro/iMessage-boiler-plate->

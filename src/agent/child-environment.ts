@@ -4,10 +4,6 @@ export type CodexAuthMode = "chatgpt" | "api_key";
 
 const INHERITED_CHILD_KEYS = [
   "PATH",
-  "HOME",
-  "TMPDIR",
-  "TMP",
-  "TEMP",
   "LANG",
   "LANGUAGE",
   "LC_ALL",
@@ -25,6 +21,7 @@ export interface CodexChildEnvironmentOptions {
   authMode: CodexAuthMode;
   openAiApiKey?: string;
   safeTaskEnvironment?: Readonly<Record<string, string>>;
+  allowedTaskEnvironmentKeys?: readonly string[];
 }
 
 function requireAbsoluteCodexHome(codexHome: string): string {
@@ -59,15 +56,22 @@ function copyInheritedValues(
 function copyTaskValues(
   target: Record<string, string>,
   values: Readonly<Record<string, string>> | undefined,
+  allowedKeys: readonly string[] | undefined,
 ): void {
   if (values === undefined) {
     return;
   }
 
+  const allowlist = new Set(allowedKeys ?? []);
   for (const [key, value] of Object.entries(values)) {
     if (!taskVariableNamePattern.test(key)) {
       throw new Error(
         `Unsafe task environment key ${key}. Task-specific child variables must use the AGENT_TASK_ prefix.`,
+      );
+    }
+    if (!allowlist.has(key)) {
+      throw new Error(
+        `Unsafe task environment key ${key}. Add only reviewed task keys to the explicit child-environment allowlist.`,
       );
     }
     if (value.length > 4_096 || value.includes("\0")) {
@@ -88,7 +92,9 @@ export function buildCodexChildEnvironment(
   options: CodexChildEnvironmentOptions,
 ): Record<string, string> {
   const child = copyInheritedValues(options.parentEnvironment);
-  child["CODEX_HOME"] = requireAbsoluteCodexHome(options.codexHome);
+  const codexHome = requireAbsoluteCodexHome(options.codexHome);
+  child["HOME"] = codexHome;
+  child["CODEX_HOME"] = codexHome;
 
   if (options.authMode === "api_key") {
     if (options.openAiApiKey === undefined || options.openAiApiKey.length === 0) {
@@ -99,7 +105,11 @@ export function buildCodexChildEnvironment(
     child["OPENAI_API_KEY"] = options.openAiApiKey;
   }
 
-  copyTaskValues(child, options.safeTaskEnvironment);
+  copyTaskValues(
+    child,
+    options.safeTaskEnvironment,
+    options.allowedTaskEnvironmentKeys,
+  );
   return child;
 }
 

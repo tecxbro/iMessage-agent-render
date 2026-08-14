@@ -78,6 +78,7 @@ describe("bounded execution runtime", () => {
 
     const result = await runtime.run({
       ownerId: "00000000-0000-4000-8000-000000000001",
+      maximumPermissionProfile: "workspace-write",
       task: task(),
       modelProfile: DEFAULT_MODEL_PROFILES.main,
       workspaceRoot: root,
@@ -111,6 +112,7 @@ describe("bounded execution runtime", () => {
     await expect(
       runtime.run({
         ownerId: "00000000-0000-4000-8000-000000000001",
+        maximumPermissionProfile: "workspace-write",
         task: task("escaped"),
         modelProfile: DEFAULT_MODEL_PROFILES.main,
         workspaceRoot: root,

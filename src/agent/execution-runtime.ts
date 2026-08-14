@@ -13,12 +13,18 @@ import {
   type ExecutionTask,
 } from "./schemas.js";
 import type { ModelProfile } from "../config/model-profiles.js";
+import {
+  enforcePermissionGrant,
+  type PermissionProfileName,
+} from "../security/permissions.js";
 import { buildPrompt, type PromptSection } from "./prompt-builder.js";
 import type { ThreadStore } from "./thread-store.js";
 
 export interface ExecutionRuntimeRequest {
   ownerId: string;
   task: ExecutionTask;
+  /** Code-owned ceiling; model output can request only a subset of this grant. */
+  maximumPermissionProfile: PermissionProfileName;
   modelProfile: ModelProfile;
   workspaceRoot: string;
   policySections: readonly PromptSection[];
@@ -109,6 +115,10 @@ export class ExecutionRuntime {
   ): Promise<ExecutionRuntimeRunResult> {
     const binding = request.task.workspaceBinding ?? request.task.agentName;
     const workspace = await resolveWorkspace(request.workspaceRoot, binding);
+    const permissionProfile = enforcePermissionGrant(
+      request.task.permissionProfile,
+      request.maximumPermissionProfile,
+    );
     const prompt = buildPrompt({
       title: `Bounded execution task ${request.task.id}`,
       sections: [
@@ -137,7 +147,7 @@ export class ExecutionRuntime {
         prompt: prompt.content,
         outputSchema: executionResultSchema,
         modelProfile: request.modelProfile,
-        permissionProfile: request.task.permissionProfile,
+        permissionProfile,
         workingDirectory: workspace,
         skipGitRepoCheck: false,
         ...(request.recoverySummary === undefined

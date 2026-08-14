@@ -6,6 +6,7 @@ import {
   resolvePermissionProfile,
   type PermissionProfileName,
 } from "../security/permissions.js";
+import { buildCodexShellEnvironmentPolicy } from "../security/secret-boundaries.js";
 import {
   buildCodexChildEnvironment,
   type CodexAuthMode,
@@ -50,9 +51,11 @@ export interface CodexClientOptions {
   openAiApiKey?: string;
   codexPathOverride?: string;
   safeTaskEnvironment?: Readonly<Record<string, string>>;
+  allowedTaskEnvironmentKeys?: readonly string[];
   maximumOutputBytes?: number;
   maximumRuntimeMs?: number;
   maximumConcurrency?: number;
+  maximumConcurrencyPerOwner?: number;
 }
 
 export interface CodexRunRequest<Output> {
@@ -65,6 +68,8 @@ export interface CodexRunRequest<Output> {
   skipGitRepoCheck: boolean;
   signal?: AbortSignal;
   maximumRuntimeMs?: number;
+  /** Deterministic owner ID used only for the per-owner process cap. */
+  concurrencyKey?: string;
   onProgress?: (event: CodexProgressEvent) => void;
 }
 
@@ -286,6 +291,8 @@ export class CodexClient implements StructuredCodexRunner {
   private readonly maximumOutputBytes: number;
   private readonly maximumRuntimeMs: number;
   private readonly gate: ConcurrencyGate;
+  private readonly maximumConcurrencyPerOwner: number;
+  private readonly ownerGates = new Map<string, ConcurrencyGate>();
 
   public constructor(private readonly options: CodexClientOptions) {
     this.childEnvironment = buildCodexChildEnvironment({
@@ -298,6 +305,9 @@ export class CodexClient implements StructuredCodexRunner {
       ...(options.safeTaskEnvironment === undefined
         ? {}
         : { safeTaskEnvironment: options.safeTaskEnvironment }),
+      ...(options.allowedTaskEnvironmentKeys === undefined
+        ? {}
+        : { allowedTaskEnvironmentKeys: options.allowedTaskEnvironmentKeys }),
     });
     this.maximumOutputBytes = requirePositiveInteger(
       options.maximumOutputBytes ?? DEFAULT_CODEX_MAX_OUTPUT_BYTES,
@@ -312,6 +322,10 @@ export class CodexClient implements StructuredCodexRunner {
       "Codex maximum concurrency",
     );
     this.gate = new ConcurrencyGate(maximumConcurrency);
+    this.maximumConcurrencyPerOwner = requirePositiveInteger(
+      options.maximumConcurrencyPerOwner ?? maximumConcurrency,
+      "Codex maximum concurrency per owner",
+    );
   }
 
   public async runStructured<Output>(
@@ -321,7 +335,25 @@ export class CodexClient implements StructuredCodexRunner {
       request.maximumRuntimeMs ?? this.maximumRuntimeMs,
       "Codex task runtime",
     );
-    const release = await this.gate.acquire(request.signal);
+    const ownerGate =
+      request.concurrencyKey === undefined
+        ? undefined
+        : this.ownerGates.get(request.concurrencyKey) ??
+          new ConcurrencyGate(this.maximumConcurrencyPerOwner);
+    if (
+      request.concurrencyKey !== undefined &&
+      !this.ownerGates.has(request.concurrencyKey)
+    ) {
+      this.ownerGates.set(request.concurrencyKey, ownerGate!);
+    }
+    const releaseOwner = await ownerGate?.acquire(request.signal);
+    let releaseGlobal: (() => void) | undefined;
+    try {
+      releaseGlobal = await this.gate.acquire(request.signal);
+    } catch (error) {
+      releaseOwner?.();
+      throw error;
+    }
     const timeoutMs = Math.min(requestedRuntime, this.maximumRuntimeMs);
     const abort = createRunAbortContext(request.signal, timeoutMs);
 
@@ -332,6 +364,11 @@ export class CodexClient implements StructuredCodexRunner {
         forced_login_method:
           this.options.authMode === "api_key" ? "api" : "chatgpt",
         hide_agent_reasoning: true,
+        approvals_reviewer: "user",
+        shell_environment_policy: buildCodexShellEnvironmentPolicy(
+          this.childEnvironment,
+          request.workingDirectory,
+        ),
         ...(request.modelProfile.effort === "max"
           ? { model_reasoning_effort: "max" }
           : {}),
@@ -470,7 +507,8 @@ export class CodexClient implements StructuredCodexRunner {
       throw classifyInvocationFailure(error);
     } finally {
       abort.cleanup();
-      release();
+      releaseGlobal?.();
+      releaseOwner?.();
     }
   }
 }

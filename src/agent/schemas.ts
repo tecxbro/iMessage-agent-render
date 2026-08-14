@@ -2,25 +2,23 @@ import { z } from "zod";
 
 import { modelProfileNameSchema } from "../config/model-profiles.js";
 import { permissionProfileNameSchema } from "../security/permissions.js";
+import {
+  ACTION_TYPES,
+  actionTypeSchema,
+  jsonValueSchema,
+  proposedActionSchema,
+  type ActionType,
+  type JsonValue,
+  type ProposedAction,
+} from "../security/action-schema.js";
 
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
-
-export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([
-    z.null(),
-    z.boolean(),
-    z.number().finite(),
-    z.string(),
-    z.array(jsonValueSchema),
-    z.record(z.string(), jsonValueSchema),
-  ]),
-);
+export {
+  ACTION_TYPES,
+  actionTypeSchema,
+  jsonValueSchema,
+  proposedActionSchema,
+};
+export type { ActionType, JsonValue, ProposedAction };
 
 const identifierSchema = z.uuid();
 const boundedTextSchema = (maximum: number) =>
@@ -95,30 +93,6 @@ export const memoryCandidateSchema = z
 export const memoryCurationResultSchema = z
   .object({
     candidates: z.array(memoryCandidateSchema).max(20),
-  })
-  .strict();
-
-export const ACTION_TYPES = [
-  "filesystem.destructive",
-  "external.send",
-  "purchase",
-  "authentication.change",
-  "permission.change",
-  "deployment.change",
-  "secret.access",
-  "network.broad",
-  "dependency.install",
-  "other.consequential",
-] as const;
-
-export const actionTypeSchema = z.enum(ACTION_TYPES);
-
-export const proposedActionSchema = z
-  .object({
-    actionType: actionTypeSchema,
-    target: boundedTextSchema(512),
-    normalizedPayload: jsonValueSchema,
-    humanSummary: boundedTextSchema(1_000),
   })
   .strict();
 
@@ -391,8 +365,6 @@ export const executionResultSchema = z
 export type AuthorizedInbound = z.infer<typeof authorizedInboundSchema>;
 export type MemoryCandidate = z.infer<typeof memoryCandidateSchema>;
 export type MemoryCurationResult = z.infer<typeof memoryCurationResultSchema>;
-export type ActionType = z.infer<typeof actionTypeSchema>;
-export type ProposedAction = z.infer<typeof proposedActionSchema>;
 export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
 export type ArtifactRef = z.infer<typeof artifactRefSchema>;
 export type ExecutionTask = z.infer<typeof executionTaskSchema>;

@@ -27,6 +27,7 @@ function fakeMessage(
     content?: unknown;
     direction?: "inbound" | "outbound";
     id?: string;
+    mentions?: readonly { address: string; start: number; length: number }[];
     platform?: string;
     sender?: unknown;
   } = {},
@@ -35,6 +36,7 @@ function fakeMessage(
     content: overrides.content ?? { type: "text", text: "hello" },
     direction: overrides.direction ?? "inbound",
     id: overrides.id ?? "external-message-id",
+    mentions: overrides.mentions,
     platform: overrides.platform ?? "imessage",
     sender:
       "sender" in overrides
@@ -82,6 +84,7 @@ describe("Spectrum message handling", () => {
           spaceType: "dm",
         },
         text: "hello",
+        mentionedAddresses: [],
       },
       {},
     );
@@ -94,6 +97,33 @@ describe("Spectrum message handling", () => {
     await expect(
       handleSpectrumMessage(space, fakeMessage(space), { authorizeAndIngest }),
     ).resolves.toBe("duplicate");
+  });
+
+  it("preserves native mention and direct-reply evidence for deterministic group policy", async () => {
+    const authorizeAndIngest = ingestion();
+    const space = fakeSpace({ type: "group" });
+    await handleSpectrumMessage(
+      space,
+      fakeMessage(space, {
+        mentions: [{ address: "agent@example.com", start: 0, length: 6 }],
+        content: {
+          type: "reply",
+          content: { type: "text", text: "please continue" },
+          target: { id: "persisted-agent-message" },
+        },
+      }),
+      { authorizeAndIngest },
+    );
+
+    expect(authorizeAndIngest.authorizeAndIngest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "please continue",
+        mentionedAddresses: ["agent@example.com"],
+        replyToExternalMessageId: "persisted-agent-message",
+        space: expect.objectContaining({ spaceType: "group" }),
+      }),
+      {},
+    );
   });
 
   it.each([

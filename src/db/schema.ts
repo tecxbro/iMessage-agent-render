@@ -63,6 +63,11 @@ export const approvalStatus = pgEnum("approval_status", [
   "expired",
   "consumed",
 ]);
+export const pairingStatus = pgEnum("pairing_status", [
+  "pending",
+  "consumed",
+  "expired",
+]);
 export const outboundBatchState = pgEnum("outbound_batch_state", [
   "queued",
   "sending",
@@ -399,6 +404,75 @@ export const approvals = pgTable(
     index("approvals_pending_scope_idx")
       .on(table.ownerId, table.spaceId, table.expiresAt)
       .where(sql`${table.status} = 'pending'`),
+    uniqueIndex("approvals_active_task_unique")
+      .on(table.executionTaskId)
+      .where(sql`${table.status} in ('pending', 'approved')`),
+    check(
+      "approvals_action_hash_sha256",
+      sql`${table.actionHash} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "approvals_action_type_registered",
+      sql`${table.actionType} in ('filesystem.destructive', 'external.send', 'purchase', 'authentication.change', 'permission.change', 'deployment.change', 'secret.access', 'network.broad', 'dependency.install', 'other.consequential')`,
+    ),
+    check(
+      "approvals_consumption_consistent",
+      sql`(${table.status} = 'consumed' and ${table.consumedAt} is not null) or (${table.status} <> 'consumed' and ${table.consumedAt} is null)`,
+    ),
+  ],
+);
+
+export const pairingChallenges = pgTable(
+  "pairing_challenges",
+  {
+    id: uuid("id").primaryKey(),
+    deploymentId: uuid("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "cascade" }),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => owners.id, { onDelete: "cascade" }),
+    role: identityRole("role").default("collaborator").notNull(),
+    salt: varchar("salt", { length: 128 }).notNull(),
+    codeHash: varchar("code_hash", { length: 64 }).notNull(),
+    status: pairingStatus("status").default("pending").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    index("pairing_challenges_pending_idx")
+      .on(table.deploymentId, table.expiresAt)
+      .where(sql`${table.status} = 'pending'`),
+    check("pairing_challenges_collaborator_role", sql`${table.role} = 'collaborator'`),
+    check("pairing_challenges_code_hash", sql`${table.codeHash} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "pairing_challenges_consumption_consistent",
+      sql`(${table.status} = 'consumed' and ${table.consumedAt} is not null) or (${table.status} <> 'consumed' and ${table.consumedAt} is null)`,
+    ),
+  ],
+);
+
+export const pairingAttempts = pgTable(
+  "pairing_attempts",
+  {
+    id: uuid("id").primaryKey(),
+    deploymentId: uuid("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "cascade" }),
+    handleFingerprint: varchar("handle_fingerprint", { length: 128 }).notNull(),
+    attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    index("pairing_attempts_handle_window_idx").on(
+      table.deploymentId,
+      table.handleFingerprint,
+      table.attemptedAt,
+    ),
+    index("pairing_attempts_deployment_window_idx").on(
+      table.deploymentId,
+      table.attemptedAt,
+    ),
   ],
 );
 

@@ -15,6 +15,7 @@ import {
 import type { Database, DatabaseTransaction } from "../client.js";
 import {
   carriedMessages,
+  approvals,
   chains,
   executionTasks,
   messages,
@@ -248,6 +249,17 @@ export class ChainRepository {
         and(
           inArray(executionTasks.chainId, canceledChainIds),
           inArray(executionTasks.state, ["queued", "running", "needs_approval"]),
+        ),
+      );
+
+    await transaction
+      .update(approvals)
+      .set({ status: "expired", updatedAt: newerMessageReceivedAt })
+      .where(
+        and(
+          inArray(approvals.chainId, canceledChainIds),
+          inArray(approvals.status, ["pending", "approved"]),
+          isNull(approvals.consumedAt),
         ),
       );
 

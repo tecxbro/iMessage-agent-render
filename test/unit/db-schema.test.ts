@@ -2,6 +2,7 @@ import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import {
+  approvals,
   carriedMessages,
   chains,
   messages,
@@ -41,6 +42,16 @@ describe("database schema invariants", () => {
     expect(
       getTableConfig(outboundBatches).checks.map((constraint) => constraint.name),
     ).toContain("outbound_batches_cursor_bounds");
+    expect(getTableConfig(approvals).indexes.map((index) => index.config.name)).toContain(
+      "approvals_active_task_unique",
+    );
+    expect(getTableConfig(approvals).checks.map((constraint) => constraint.name)).toEqual(
+      expect.arrayContaining([
+        "approvals_action_hash_sha256",
+        "approvals_action_type_registered",
+        "approvals_consumption_consistent",
+      ]),
+    );
   });
 
   it("derives stable per-position client GUIDs without message content", () => {

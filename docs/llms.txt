@@ -22,7 +22,7 @@
 
 ## Deploy, operate, secure, and test
 
-- [Deployment and Codex authentication](../DEPLOYMENT_AND_AUTH.md)
+- [Deployment and Codex authentication](./DEPLOYMENT.md)
 - [Operations runbook](./OPERATIONS.md)
 - [Security and privacy](../SECURITY_AND_PRIVACY.md)
 - [Test plan](../TEST_PLAN.md)

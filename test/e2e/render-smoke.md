@@ -60,7 +60,7 @@ If Render CLI reports `no workspace specified and no default workspace set`, mar
 
 ## B. Clean local install
 
-Follow [`../../DEPLOYMENT_AND_AUTH.md`](../../DEPLOYMENT_AND_AUTH.md), including a dedicated PostgreSQL database, absolute non-overlapping storage paths, and one explicit Codex auth mode.
+Follow [`../../docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md), including a dedicated PostgreSQL database, absolute non-overlapping storage paths, and one explicit Codex auth mode.
 
 ```bash
 npm run db:migrate

@@ -215,7 +215,7 @@ A blank Render disk has no code-owned execution workspace capability. The defaul
 ## Documentation
 
 - [Documentation index](./docs/README.md)
-- [Deployment](./DEPLOYMENT_AND_AUTH.md)
+- [Deployment](./docs/DEPLOYMENT.md)
 - [Architecture](./ARCHITECTURE.md)
 - [Operations](./docs/OPERATIONS.md)
 - [Configuration](./docs/CONFIGURATION.md)

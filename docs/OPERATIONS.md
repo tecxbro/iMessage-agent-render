@@ -1,6 +1,6 @@
 # Operations Runbook
 
-This runbook covers day-two operation of the private single-instance Render deployment. Deployment and enrollment instructions live in [`../DEPLOYMENT_AND_AUTH.md`](../DEPLOYMENT_AND_AUTH.md). The release smoke record lives in [`../test/e2e/render-smoke.md`](../test/e2e/render-smoke.md).
+This runbook covers day-two operation of the private single-instance Render deployment. Initial deployment and enrollment instructions live in [Deployment](./DEPLOYMENT.md). The release smoke record lives in [`../test/e2e/render-smoke.md`](../test/e2e/render-smoke.md).
 
 ## Current release gate
 

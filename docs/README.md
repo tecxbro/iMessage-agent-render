@@ -1,0 +1,27 @@
+# Documentation
+
+Use this index to find the shortest guide for the task at hand.
+
+## Start here
+
+- [Deploy the agent](./DEPLOYMENT.md) — create the Render resources, authenticate Codex, and send the first iMessage.
+- [Configure the agent](./CONFIGURATION.md) — authoritative environment-variable reference.
+- [Customize its behavior](./CUSTOMIZATION.md) — change prompts, models, authorization, memory, limits, or capabilities.
+- [Troubleshoot a deployment](./TROUBLESHOOTING.md) — symptom-based safe diagnostics.
+
+## Understand the system
+
+- [Architecture](../ARCHITECTURE.md) — runtime topology, lifecycle, durability, and extension points.
+- [Security and privacy](../SECURITY_AND_PRIVACY.md) — trust boundaries, secrets, approvals, and retention.
+- [Operations](./OPERATIONS.md) — updates, restarts, credential rotation, outages, recovery, and rollback.
+
+## Maintainer documentation
+
+- [Product requirements](../PRD.md)
+- [Data model](../DATA_MODEL.md)
+- [Implementation history](../IMPLEMENTATION_PLAN.md)
+- [Test plan](../TEST_PLAN.md)
+- [Architecture decisions](../DECISIONS.md)
+- [Provider references](../DOCS_INDEX.md)
+
+The executable production runtime is composed. A clean-account Render deployment and protected live-provider evidence must still be recorded for each release under review.

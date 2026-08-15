@@ -45,6 +45,19 @@ describe("health and readiness endpoints", () => {
     });
     const address = health.server.address() as AddressInfo;
 
+    const deployment = await fetch(`http://127.0.0.1:${address.port}/`);
+    expect(deployment.status).toBe(200);
+    expect(deployment.headers.get("content-security-policy")).toContain(
+      "default-src 'none'",
+    );
+    expect(deployment.headers.get("x-frame-options")).toBe("DENY");
+    const deploymentPage = await deployment.text();
+    expect(deploymentPage).toContain("Infrastructure is live");
+    expect(deploymentPage).toContain("The agent runtime is not connected yet");
+    expect(deploymentPage).toContain("npm run codex:login");
+    expect(deploymentPage).toContain("operator status page");
+    expect(deploymentPage).not.toContain("photon-super-secret");
+
     const live = await fetch(`http://127.0.0.1:${address.port}/healthz`);
     expect(live.status).toBe(200);
     await expect(live.json()).resolves.toEqual({ status: "ok" });
@@ -81,6 +94,32 @@ describe("health and readiness endpoints", () => {
       status: "not_ready",
       shuttingDown: true,
     });
+  });
+
+  it("shows ready on the deployment page only for a composed ready runtime", async () => {
+    const readiness = new ReadinessRegistry();
+    const spectrum = new SpectrumReadiness();
+    markCriticalComponentsReady(readiness);
+    spectrum.markConnected();
+    health = await startHealthServer({
+      port: 0,
+      host: "127.0.0.1",
+      readiness,
+      spectrum,
+      deploymentPage: {
+        authMode: "api_key",
+        runtimeMode: "agent",
+        supermemoryConfigured: false,
+      },
+    });
+    const address = health.server.address() as AddressInfo;
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/`);
+    const page = await response.text();
+    expect(page).toContain("Agent ready");
+    expect(page).toContain("Your private iMessage agent is ready");
+    expect(page).toContain("OPENAI_API_KEY");
+    expect(page).not.toContain("npm run codex:login");
   });
 
   it("rejects raw error text at the readiness boundary", () => {

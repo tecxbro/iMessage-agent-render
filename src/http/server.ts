@@ -6,10 +6,15 @@ import {
   ReadinessRegistry,
   type SpectrumReadiness,
 } from "./readiness.js";
+import {
+  renderDeploymentPage,
+  type DeploymentPageOptions,
+} from "./deployment-page.js";
 
 export interface HealthApplicationOptions {
   readiness: ReadinessRegistry;
   spectrum?: SpectrumReadiness;
+  deploymentPage?: DeploymentPageOptions;
 }
 
 export interface HealthServer {
@@ -23,6 +28,28 @@ export function createHealthApplication(
 ): Express {
   const application = express();
   application.disable("x-powered-by");
+
+  application.get("/", (_request, response) => {
+    const snapshot = options.readiness.snapshot(options.spectrum?.snapshot());
+    response.set({
+      "cache-control": "no-store",
+      "content-security-policy":
+        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+    });
+    response
+      .status(200)
+      .type("html")
+      .send(
+        renderDeploymentPage(snapshot, options.deploymentPage ?? {
+          authMode: "chatgpt",
+          runtimeMode: "foundation",
+          supermemoryConfigured: false,
+        }),
+      );
+  });
 
   application.get("/healthz", (_request, response) => {
     response.set("cache-control", "no-store");
@@ -43,6 +70,7 @@ export async function startHealthServer(input: {
   host?: string;
   readiness: ReadinessRegistry;
   spectrum?: SpectrumReadiness;
+  deploymentPage?: DeploymentPageOptions;
 }): Promise<HealthServer> {
   const application = createHealthApplication(input);
   const server = await new Promise<Server>((resolve, reject) => {

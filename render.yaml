@@ -41,8 +41,9 @@ services:
       # Required app-level sender allowlist; this is separate from Spectrum line setup.
       - key: AGENT_OWNER_HANDLES
         sync: false
-      # Supermemory is disabled by default. Add SUPERMEMORY_API_KEY to the
-      # Render service environment later only when semantic memory is wanted.
+      # Optional. Leave blank to run without semantic memory.
+      - key: SUPERMEMORY_API_KEY
+        sync: false
       - key: APP_ENCRYPTION_KEY
         generateValue: true
 

@@ -236,6 +236,7 @@ Consequential actions use immutable approval data bound to owner, allowed space,
 The composed health server returns:
 
 ```text
+GET /          -> 200 operator setup/readiness page; never the iMessage conversation
 GET /healthz  -> 200 {"status":"ok"}
 GET /readyz   -> 200 only when every critical component is ready
 GET /readyz   -> 503 with redacted component states and safe actions otherwise
@@ -268,9 +269,9 @@ Example setup response:
 }
 ```
 
-Raw provider errors, credentials, handles, message content, and unrestricted paths never enter readiness. Render uses `/healthz` to avoid turning incomplete private enrollment into a restart loop. Operators use `/readyz` as the acceptance gate.
+Raw provider errors, credentials, handles, message content, and unrestricted paths never enter readiness. The root operator page renders only this redacted state and safe setup actions. Render uses `/healthz` to avoid turning incomplete private enrollment into a restart loop. Operators use `/readyz` as the acceptance gate.
 
-The current `src/server.ts` uses this health server and shuts it down on process signals, but it starts none of the operational dependencies. Its `/healthz` proves only that the foundation process is alive, and its `/readyz` remains `503` until the integration owner composes the full bootstrap.
+The current `src/server.ts` uses this health server and shuts it down on process signals, but it starts none of the operational dependencies. Its root page therefore says infrastructure is live without claiming the agent is ready, its `/healthz` proves only that the foundation process is alive, and its `/readyz` remains `503` until the integration owner composes the full bootstrap.
 
 ## 9. Failure and recovery contract
 

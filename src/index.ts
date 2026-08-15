@@ -4,6 +4,7 @@ import {
   type ReadinessState,
 } from "./http/readiness.js";
 import { startHealthServer, type HealthServer } from "./http/server.js";
+import type { DeploymentPageOptions } from "./http/deployment-page.js";
 import {
   GracefulShutdown,
   installShutdownSignals,
@@ -49,6 +50,7 @@ export interface StartAgentServiceOptions {
   port: number;
   host?: string;
   bootstrap: AgentServiceBootstrap;
+  deploymentPage?: Omit<DeploymentPageOptions, "runtimeMode">;
   installSignalHandlers?: boolean;
   onStartupFailure?: (code: string) => void;
 }
@@ -87,6 +89,13 @@ export async function startAgentService(
     ...(options.host === undefined ? {} : { host: options.host }),
     readiness,
     spectrum: spectrumReadiness,
+    deploymentPage: {
+      ...(options.deploymentPage ?? {
+        authMode: "chatgpt",
+        supermemoryConfigured: false,
+      }),
+      runtimeMode: "agent",
+    },
   });
 
   shutdown.register({

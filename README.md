@@ -57,7 +57,7 @@ The disk makes the v1 deployment single-instance. Do not enable horizontal scali
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://dashboard.render.com/blueprint/new?repo=https://github.com/tecxbro/iMessage-agent-render)
 
-Deploy the private agent infrastructure to Render. After deployment, ChatGPT mode requires one private Codex device-login step in Render Shell. The button provisions infrastructure; it does not make the current branch end-to-end ready or authenticate private provider accounts.
+Deploy the private agent infrastructure to Render. The generated Render URL now opens an operator status page—not an iMessage chat link—and shows whether setup or integration is still required. In ChatGPT mode, complete one private Codex device-login step in Render Shell. The button provisions infrastructure; it does not authenticate private provider accounts or override the release gate.
 
 ## Configuration
 
@@ -84,11 +84,11 @@ report as the sender of an allowed command. Use comma-separated E.164 numbers
 and email addresses, such as `+15551234567,owner@example.com`. An unknown sender
 is rejected before Codex runs.
 
-Supermemory is disabled by default and is intentionally absent from the initial
-Render Blueprint prompts. To enable semantic memory after deployment, add
-`SUPERMEMORY_API_KEY` as a secret environment variable on the Render Web Service
-and redeploy. Without that variable, the core messaging and Codex pipeline runs
-with memory reported as `disabled`.
+The initial Render Blueprint includes an optional `SUPERMEMORY_API_KEY` prompt.
+Leave it blank to disable semantic memory. Render only displays `sync: false`
+prompts during initial Blueprint creation; for an existing Blueprint, add or
+rotate the secret directly on the Web Service and redeploy. Without that
+variable, memory is reported as `disabled`.
 
 Never commit `.env`, `$CODEX_HOME/auth.json`, provider credentials, database URLs, or workspace data.
 
@@ -181,25 +181,32 @@ Because the current entrypoint never starts those dependencies, its `/readyz` re
 2. Review the Blueprint before applying it. It creates one Web Service, one PostgreSQL database, and one disk; `autoDeployTrigger` is intentionally off.
 3. Enter `SPECTRUM_PROJECT_ID` and `SPECTRUM_PROJECT_SECRET` from the Photon/Spectrum dashboard.
 4. Enter `AGENT_OWNER_HANDLES` separately. This is the sender allowlist for the application, not a Spectrum project setting; use the personal iMessage phone number or email allowed to command the agent.
-5. Supermemory is disabled by default and does not appear in the initial Blueprint prompts. To enable it later, add `SUPERMEMORY_API_KEY` to the created Web Service and redeploy.
+5. Enter `SUPERMEMORY_API_KEY` if semantic memory is wanted, or leave the optional prompt blank to run without it. Existing Blueprints must add the secret directly on the Web Service because Render does not replay new `sync: false` prompts during updates.
 6. For API-key mode, change `CODEX_AUTH_MODE` to `api_key` and add `OPENAI_API_KEY` as a Render secret before starting execution.
 7. Let the pre-deploy command run `npm run db:migrate` and the build run `npm ci --include=dev && npm run build`. The explicit include keeps the pinned TypeScript declarations and migration tooling available while `NODE_ENV=production` is set.
-8. In ChatGPT mode, open the private Render Shell and run:
+8. Open the generated Render URL. Confirm that it identifies itself as an operator status page and does not claim the agent is ready.
+9. In ChatGPT mode, open the private Render Shell and run:
 
    ```bash
    npm run codex:login
    npm run codex:status
    ```
 
-9. Restart the service so the final composed readiness probe can re-check auth and model/effort capabilities.
-10. Check `/healthz` and `/readyz`. Do not send a test message until `/readyz` is `200` on an integration build that actually uses `startAgentService`.
-11. From an authorized handle, send a DM, confirm exactly one reply, restart the service, and send a follow-up. Record this as protected live evidence; it is not established by the current branch.
+10. Restart the service so the final composed readiness probe can re-check auth and model/effort capabilities.
+11. Check `/healthz` and `/readyz`. Do not send a test message until `/readyz` is `200` and the operator page says `Agent ready` on an integration build that actually uses `startAgentService`.
+12. From an authorized handle, send a DM, confirm exactly one reply, restart the service, and send a follow-up. Record this as protected live evidence; it is not established by the current branch.
 
 In ChatGPT mode, device credentials are stored under `/var/data/codex`. In API-key mode, the key remains a Render secret environment variable. Render Shell access should remain private to operators.
 
 ## Health, shutdown, and recovery
 
-The final composition boundary starts liveness first, then prepares configuration and storage, connects the database, checks migrations, starts the queue, probes Codex auth/capabilities, configures optional memory, and only then starts Spectrum. Missing or expired Codex auth keeps liveness healthy while readiness stays false and message execution remains paused.
+The root URL is an operator-facing setup/readiness page. It never displays
+secrets, handles, provider errors, message content, or filesystem paths. The
+final composition boundary starts liveness first, then prepares configuration
+and storage, connects the database, checks migrations, starts the queue, probes
+Codex auth/capabilities, configures optional memory, and only then starts
+Spectrum. Missing or expired Codex auth keeps liveness healthy while readiness
+stays false and message execution remains paused.
 
 On `SIGTERM` or `SIGINT`, the shutdown coordinator drops readiness, aborts active work, and runs bounded hooks in this order: Spectrum, Codex, outbound checkpoint, queue, database, then HTTP. A critical cleanup failure produces only a redacted failure code and a nonzero process exit status.
 

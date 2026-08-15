@@ -33,6 +33,11 @@ const health = await startHealthServer({
   host: "0.0.0.0",
   readiness,
   spectrum: spectrumReadiness,
+  deploymentPage: {
+    authMode: environment.CODEX_AUTH_MODE,
+    runtimeMode: "foundation",
+    supermemoryConfigured: environment.SUPERMEMORY_API_KEY !== undefined,
+  },
 });
 
 try {

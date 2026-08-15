@@ -66,6 +66,7 @@ Follow [`../../DEPLOYMENT_AND_AUTH.md`](../../DEPLOYMENT_AND_AUTH.md), including
 npm run db:migrate
 npm run codex:status
 npm run dev
+curl --fail --silent http://127.0.0.1:10000/
 curl --fail --silent http://127.0.0.1:10000/healthz
 curl --silent --show-error http://127.0.0.1:10000/readyz
 ```
@@ -76,6 +77,7 @@ curl --silent --show-error http://127.0.0.1:10000/readyz
 | `CODEX_HOME` | absolute directory, mode `0700` | | |
 | Workspace root | separate absolute directory, mode `0700` | | |
 | Codex auth | chosen mode reported; no secret printed | | |
+| Operator page | HTTP 200; identifies setup/readiness status and never claims a foundation runtime is ready | | |
 | `/healthz` | HTTP 200 | | |
 | `/readyz` | HTTP 200 only after full composition | | |
 | Authorized first message | one terminal response | | |
@@ -96,10 +98,11 @@ Create the Blueprint in a fresh Render workspace from the exact commit above.
 | Workspace path | `AGENT_WORKSPACE_ROOT=/var/data/workspaces` | | |
 | Database wiring | `DATABASE_URL` dynamic reference; no manual URL | | |
 | Required prompts | Photon project ID/secret plus application owner handles; no literal secrets in Blueprint | | |
-| Optional Supermemory | absent from initial prompts; add `SUPERMEMORY_API_KEY` to the service only when enabled | | |
+| Optional Supermemory | `SUPERMEMORY_API_KEY` appears in the initial Blueprint prompts; blank disables memory | | |
 | Build | `npm ci --include=dev && npm run build` exits 0 | | |
 | Pre-deploy | `npm run db:migrate` exits 0 | | |
 | Start | `npm start` binds Render `PORT` | | |
+| Operator page | generated URL explains that it is not the iMessage chat link and reports truthful readiness | | |
 | Liveness | external `/healthz` HTTP 200 | | |
 | Initial readiness | 503 only for expected missing auth/dependency | | |
 

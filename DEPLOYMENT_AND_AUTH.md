@@ -51,7 +51,7 @@ Start from [`.env.example`](./.env.example). Required values are validated at pr
 | `AGENT_WORKSPACE_ROOT` | separate absolute path | `/var/data/workspaces` | may contain private data |
 | `CODEX_AUTH_MODE` | `chatgpt` or `api_key` | defaults to `chatgpt` | no |
 | `OPENAI_API_KEY` | only for API-key mode | Render secret, only for API-key mode | yes |
-| `SUPERMEMORY_API_KEY` | optional | manually added Web Service secret; omitted from initial Blueprint prompts | yes |
+| `SUPERMEMORY_API_KEY` | optional | initial Blueprint prompt; blank disables memory | yes |
 
 `CODEX_HOME` and `AGENT_WORKSPACE_ROOT` must be absolute, separate, non-overlapping directories. Startup creates them with mode `0700`, validates directory type/mode plus read/write/execute access, and maintains `$CODEX_HOME/config.toml` with mode `0600`. File-based Codex credentials are required in a headless container.
 
@@ -62,10 +62,11 @@ E.164 phone number or email address that Spectrum reports for each person
 allowed to command the agent. Multiple entries are comma-separated. The
 application rejects any other sender before a model or child process runs.
 
-Supermemory is disabled when `SUPERMEMORY_API_KEY` is absent. It is intentionally
-omitted from `render.yaml` so a clean Blueprint deployment does not present it as
-a required credential. Operators who want semantic memory add the key directly
-to the created Web Service and redeploy; core readiness does not depend on it.
+Supermemory is disabled when `SUPERMEMORY_API_KEY` is absent. The initial
+Blueprint now presents it as an optional secret so an operator can configure
+memory during the same setup flow. Render does not replay new `sync: false`
+prompts when an existing Blueprint is updated, so existing services add or
+rotate the value directly and redeploy. Core readiness does not depend on it.
 
 Do not put credentials in PostgreSQL, Supermemory, job payloads, or logs. Do not print `auth.json` to diagnose authentication.
 
@@ -197,13 +198,13 @@ Use the [official Render Blueprint flow](https://render.com/docs/infrastructure-
 
 1. In a fresh Render workspace, create a Blueprint from the release repository and select its `render.yaml`.
 2. Review the plan before applying it. It must contain exactly one Web Service, one Render Postgres database, and one disk on the Web Service.
-3. Enter the three required `sync: false` prompts: `SPECTRUM_PROJECT_ID` and `SPECTRUM_PROJECT_SECRET` from Photon, plus the separate application sender allowlist in `AGENT_OWNER_HANDLES`. Render prompts for these only on initial creation; secrets added later must be configured directly on the existing service.
+3. Enter the required `sync: false` prompts: `SPECTRUM_PROJECT_ID` and `SPECTRUM_PROJECT_SECRET` from Photon, plus the separate application sender allowlist in `AGENT_OWNER_HANDLES`. Enter the optional `SUPERMEMORY_API_KEY` prompt to enable semantic memory or leave it blank. Render prompts for these only on initial creation; secrets added later must be configured directly on the existing service.
 4. Confirm `DATABASE_URL` is a dynamic reference to `imessage-agent-db`. Never paste a database connection string into a Blueprint prompt.
 5. Apply the Blueprint. The build must run `npm ci --include=dev && npm run build`; the explicit include keeps the pinned TypeScript declarations and migration tooling available while `NODE_ENV=production` is set. The pre-deploy phase must run `npm run db:migrate`; the service must start with `npm start`.
-6. Leave Supermemory disabled by default. To enable it, add `SUPERMEMORY_API_KEY` as a secret on the created Web Service and redeploy; it is intentionally not an initial Blueprint prompt.
-7. Confirm the disk is mounted at `/var/data`, the service has exactly one instance, and `/var/data/codex` plus `/var/data/workspaces` are writable only by the service account.
+6. Confirm the disk is mounted at `/var/data`, the service has exactly one instance, and `/var/data/codex` plus `/var/data/workspaces` are writable only by the service account.
+7. Open the generated Render URL. It must identify itself as the operator status page and must not claim `Agent ready` before composition and enrollment are complete.
 8. Verify `GET /healthz` returns HTTP 200. Do not expect `/readyz` to pass before Codex authentication and all critical dependencies are ready.
-9. For ChatGPT mode, open the private Render Shell and run:
+9. For ChatGPT mode, follow the operator page and open the private Render Shell:
 
    ```bash
    npm run codex:login
@@ -224,6 +225,7 @@ it by claiming that infrastructure liveness equals application readiness.
 The composed health application defines:
 
 ```text
+GET /         -> 200 operator setup/readiness page; never the iMessage conversation
 GET /healthz -> 200 {"status":"ok"}
 GET /readyz  -> 200 when all critical components are ready
 GET /readyz  -> 503 with redacted component states and safe operator actions otherwise
@@ -231,7 +233,7 @@ GET /readyz  -> 503 with redacted component states and safe operator actions oth
 
 Critical readiness components are configuration, database, migrations, queue, Spectrum, Codex authentication, Codex capabilities, disk, and workspace. Supermemory is optional at turn time and may be `disabled` or `degraded` without making operational state unsafe.
 
-Render intentionally probes `/healthz`, not `/readyz`. Missing Codex enrollment or a provider outage should keep the process available for private remediation while `/readyz` refuses message execution. Neither endpoint may include secrets, raw provider errors, handles, database URLs, arbitrary filesystem paths, or message content.
+Render intentionally probes `/healthz`, not `/readyz`. Missing Codex enrollment or a provider outage should keep the process available for private remediation while `/readyz` refuses message execution. The generated public URL is therefore only an operator status surface; it explicitly distinguishes infrastructure liveness from agent readiness. None of these endpoints may include secrets, raw provider errors, handles, database URLs, arbitrary filesystem paths, or message content.
 
 Useful checks:
 

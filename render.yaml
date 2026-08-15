@@ -36,10 +36,11 @@ services:
         sync: false
       - key: SPECTRUM_PROJECT_SECRET
         sync: false
-      - key: SUPERMEMORY_API_KEY
-        sync: false
+      # Required app-level sender allowlist; this is separate from Spectrum line setup.
       - key: AGENT_OWNER_HANDLES
         sync: false
+      # Supermemory is disabled by default. Add SUPERMEMORY_API_KEY to the
+      # Render service environment later only when semantic memory is wanted.
       - key: APP_ENCRYPTION_KEY
         generateValue: true
 

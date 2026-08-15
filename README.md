@@ -76,6 +76,20 @@ Start from [.env.example](./.env.example). The environment loader validates all 
 | `OPENAI_API_KEY` | Required only in API-key mode |
 | `SUPERMEMORY_API_KEY` | Optional; leave empty to disable semantic memory |
 
+Spectrum and `AGENT_OWNER_HANDLES` configure different trust boundaries.
+Spectrum's dashboard connects the agent's iMessage line and supplies the project
+credentials. `AGENT_OWNER_HANDLES` is this application's separate authorization
+allowlist: enter the personal phone number or email address that Spectrum will
+report as the sender of an allowed command. Use comma-separated E.164 numbers
+and email addresses, such as `+15551234567,owner@example.com`. An unknown sender
+is rejected before Codex runs.
+
+Supermemory is disabled by default and is intentionally absent from the initial
+Render Blueprint prompts. To enable semantic memory after deployment, add
+`SUPERMEMORY_API_KEY` as a secret environment variable on the Render Web Service
+and redeploy. Without that variable, the core messaging and Codex pipeline runs
+with memory reported as `disabled`.
+
 Never commit `.env`, `$CODEX_HOME/auth.json`, provider credentials, database URLs, or workspace data.
 
 ## Clean local installation
@@ -165,19 +179,21 @@ Because the current entrypoint never starts those dependencies, its `/readyz` re
 
 1. Fork the repository or open the Deploy to Render link above.
 2. Review the Blueprint before applying it. It creates one Web Service, one PostgreSQL database, and one disk; `autoDeployTrigger` is intentionally off.
-3. Enter Photon credentials and authorized owner handles in the secret prompts. Add `SUPERMEMORY_API_KEY` only when memory is enabled.
-4. For API-key mode, change `CODEX_AUTH_MODE` to `api_key` and add `OPENAI_API_KEY` as a Render secret before starting execution.
-5. Let the pre-deploy command run `npm run db:migrate` and the build run `npm ci && npm run build`.
-6. In ChatGPT mode, open the private Render Shell and run:
+3. Enter `SPECTRUM_PROJECT_ID` and `SPECTRUM_PROJECT_SECRET` from the Photon/Spectrum dashboard.
+4. Enter `AGENT_OWNER_HANDLES` separately. This is the sender allowlist for the application, not a Spectrum project setting; use the personal iMessage phone number or email allowed to command the agent.
+5. Supermemory is disabled by default and does not appear in the initial Blueprint prompts. To enable it later, add `SUPERMEMORY_API_KEY` to the created Web Service and redeploy.
+6. For API-key mode, change `CODEX_AUTH_MODE` to `api_key` and add `OPENAI_API_KEY` as a Render secret before starting execution.
+7. Let the pre-deploy command run `npm run db:migrate` and the build run `npm ci && npm run build`.
+8. In ChatGPT mode, open the private Render Shell and run:
 
    ```bash
    npm run codex:login
    npm run codex:status
    ```
 
-7. Restart the service so the final composed readiness probe can re-check auth and model/effort capabilities.
-8. Check `/healthz` and `/readyz`. Do not send a test message until `/readyz` is `200` on an integration build that actually uses `startAgentService`.
-9. From an authorized handle, send a DM, confirm exactly one reply, restart the service, and send a follow-up. Record this as protected live evidence; it is not established by the current branch.
+9. Restart the service so the final composed readiness probe can re-check auth and model/effort capabilities.
+10. Check `/healthz` and `/readyz`. Do not send a test message until `/readyz` is `200` on an integration build that actually uses `startAgentService`.
+11. From an authorized handle, send a DM, confirm exactly one reply, restart the service, and send a follow-up. Record this as protected live evidence; it is not established by the current branch.
 
 In ChatGPT mode, device credentials are stored under `/var/data/codex`. In API-key mode, the key remains a Render secret environment variable. Render Shell access should remain private to operators.
 

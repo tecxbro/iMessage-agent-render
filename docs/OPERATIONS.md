@@ -46,7 +46,7 @@ The Render CLI requires an explicit/default workspace. A validation attempt with
 
 ## Graceful restart
 
-Render sends `SIGTERM` and allows up to 120 seconds. The composed bootstrap marks readiness false and aborts active work before running stop hooks in this order:
+Render sends `SIGTERM` using its platform-managed shutdown delay for this disk-backed service. The composed bootstrap marks readiness false and aborts active work before running stop hooks in this order:
 
 1. Spectrum receive loop.
 2. Active Codex work.

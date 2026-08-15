@@ -95,7 +95,8 @@ Create the Blueprint in a fresh Render workspace from the exact commit above.
 | Codex path | `CODEX_HOME=/var/data/codex` | | |
 | Workspace path | `AGENT_WORKSPACE_ROOT=/var/data/workspaces` | | |
 | Database wiring | `DATABASE_URL` dynamic reference; no manual URL | | |
-| Secrets | prompted/generated; no literal secrets in Blueprint | | |
+| Required prompts | Photon project ID/secret plus application owner handles; no literal secrets in Blueprint | | |
+| Optional Supermemory | absent from initial prompts; add `SUPERMEMORY_API_KEY` to the service only when enabled | | |
 | Build | `npm ci && npm run build` exits 0 | | |
 | Pre-deploy | `npm run db:migrate` exits 0 | | |
 | Start | `npm start` binds Render `PORT` | | |

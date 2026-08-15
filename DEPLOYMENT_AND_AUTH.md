@@ -30,7 +30,8 @@ The checked-in Blueprint is the source of truth. It declares:
 - `DATABASE_URL` populated through a Render `fromDatabase` reference, not copied manually.
 - `npm run db:migrate` as the pre-deploy command.
 - `/healthz` as Render's health-check path.
-- A 120-second maximum graceful-shutdown window.
+- Render's platform-managed graceful-shutdown delay. A custom
+  `maxShutdownDelaySeconds` value is unsupported while the service has a disk.
 
 The disk makes v1 intentionally single-instance. Render does not scale a service with an attached persistent disk. Do not remove the disk or increase `numInstances` without redesigning credential and workspace ownership.
 
@@ -255,7 +256,7 @@ The durable source of truth is PostgreSQL. Codex files and workspaces on disk su
 
 ### Graceful restart
 
-On `SIGTERM`/`SIGINT`, the composed bootstrap marks readiness false and aborts active work. Registered hooks then stop Spectrum, stop Codex work, checkpoint outbound state, stop the queue, close the database, and close HTTP. Hook timeouts fit within Render's 120-second shutdown window. A critical cleanup failure makes the shutdown result non-clean.
+On `SIGTERM`/`SIGINT`, the composed bootstrap marks readiness false and aborts active work. Registered hooks then stop Spectrum, stop Codex work, checkpoint outbound state, stop the queue, close the database, and close HTTP. Render controls the shutdown delay for this disk-backed service, so recovery must remain safe if the platform terminates the process before every hook completes. A critical cleanup failure makes the shutdown result non-clean.
 
 After restart, run durable pipeline reconciliation before accepting new work. It reschedules undrained inbound spaces, queued planning chains, and resumable outbound batches using stable singleton keys.
 

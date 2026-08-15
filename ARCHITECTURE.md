@@ -59,7 +59,8 @@ The Blueprint deliberately provisions:
 - one disk mounted at `/var/data`;
 - `CODEX_HOME=/var/data/codex` and `AGENT_WORKSPACE_ROOT=/var/data/workspaces`;
 - a pre-deploy `npm run db:migrate`; and
-- a 120-second shutdown window.
+- Render's platform-managed shutdown delay; disk-backed services cannot set a
+  custom `maxShutdownDelaySeconds` value in a Blueprint.
 
 The disk makes v1 single-instance. PostgreSQL is independently durable and remains the operational source of truth. The disk is for Codex credentials/session files and workspaces, not queue truth.
 

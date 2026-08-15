@@ -50,7 +50,8 @@ The checked-in [render.yaml](./render.yaml) declares:
 - `AGENT_WORKSPACE_ROOT=/var/data/workspaces`;
 - `npm run db:migrate` as the pre-deploy command;
 - `/healthz` as the Render health-check path; and
-- a 120-second maximum shutdown delay.
+- Render's platform-managed shutdown delay, because disk-backed services cannot
+  set `maxShutdownDelaySeconds` in a Blueprint.
 
 The disk makes the v1 deployment single-instance. Do not enable horizontal scaling without redesigning credential and workspace storage.
 

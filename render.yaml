@@ -12,7 +12,7 @@ services:
     preDeployCommand: npm run db:migrate
     startCommand: npm start
     healthCheckPath: /healthz
-    maxShutdownDelaySeconds: 120
+    # Render rejects custom shutdown delays on services with a persistent disk.
     disk:
       name: codex-data
       mountPath: /var/data

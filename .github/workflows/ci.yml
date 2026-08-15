@@ -28,6 +28,7 @@ jobs:
       - run: npm run test:integration
       - run: npm run test:chaos
       - run: npm run build
+      - run: npm run docs:check
 
       - uses: actions/setup-python@v5
         with:

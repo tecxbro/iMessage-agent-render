@@ -16,6 +16,7 @@
     "test:security": "vitest run test/security --maxWorkers=1",
     "test:integration": "vitest run test/integration --maxWorkers=1",
     "test:chaos": "vitest run test/chaos",
+    "docs:check": "node scripts/check-docs.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "codex:login": "codex login --device-auth",

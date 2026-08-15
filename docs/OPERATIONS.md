@@ -2,9 +2,9 @@
 
 This runbook covers day-two operation of the private single-instance Render deployment. Deployment and enrollment instructions live in [`../DEPLOYMENT_AND_AUTH.md`](../DEPLOYMENT_AND_AUTH.md). The release smoke record lives in [`../test/e2e/render-smoke.md`](../test/e2e/render-smoke.md).
 
-## Current release blocker
+## Current release gate
 
-`src/index.ts` implements injectable lifecycle/readiness composition, but `npm start` still runs the foundation `src/server.ts`. That entrypoint exposes `/readyz`, but it cannot become ready because queue recovery, provider startup, and first-message behavior are not composed into the deployed start command. Keep the release blocked; a healthy `/healthz` alone is insufficient.
+`npm start` runs the composed lifecycle through `src/server.ts` and `src/runtime/production-bootstrap.ts`. Keep the release blocked until `/readyz` is `200`, an authorized live DM receives one reply, restart/replay checks are recorded, and the remaining Spectrum 12.7 outbound GUID limitation is accepted or removed. A healthy `/healthz` alone is insufficient.
 
 ## Routine checks
 

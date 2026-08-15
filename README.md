@@ -14,14 +14,16 @@ name alone.
 
 ## Release status
 
-This branch contains the Render Blueprint, database migrations, durable transport/queue/runtime modules, persistent-storage preparation, component readiness, and graceful-shutdown composition boundary. It is **not yet a clean-account, zero-to-first-message release**:
+This branch contains the Render Blueprint, database migrations, durable transport/queue/runtime modules, persistent-storage preparation, component readiness, and graceful-shutdown composition boundary. The executable composition is implemented, but this is **not yet a clean-account, zero-to-first-message release**:
 
 - `src/index.ts` defines the final injected boot and shutdown order.
 - `src/http/server.ts` implements `/healthz` and `/readyz` for the composed service.
-- `src/server.ts`, which is still the executable used by `npm run dev` and `npm start`, exposes the foundation health/readiness shell but does not start operational dependencies.
-- The final authorization and plan/execute/synthesize handlers are not composed into that entrypoint.
+- `src/server.ts`, used by `npm run dev` and `npm start`, now starts the staged PostgreSQL, queue, Codex, optional memory, worker, reconciliation, and Spectrum lifecycle.
+- Authorized inbound messages are encrypted and persisted before debounce; plan, execute, synthesize, and outbound jobs run outside the receive loop.
+- Offline unit, security, chaos, build, and integration checks cover the composed boundary, but protected Render/Photon/Codex/Supermemory tests have not been run for this release.
+- `spectrum-ts` 12.7 exposes native `space.send(...)` but no caller-supplied delivery GUID. The PostgreSQL cursor prevents normal re-sends, but a process crash after provider acknowledgement and before checkpoint can still duplicate one bubble. Do not claim exactly-once live delivery until Photon exposes and the release validates that capability.
 
-Consequently, a local start or Render deploy of this branch can prove the foundation process is alive, but it cannot yet accept an authorized iMessage and complete an agent turn. The protected Render, Photon, Codex, and Supermemory live tests have not been run for this release. See [Evidence and release gate](#evidence-and-release-gate).
+Consequently, the code path is runnable but the release remains gated on clean-account deployment, enrollment, one authorized live turn, restart/replay evidence, and the outbound deduplication limitation above. See [Evidence and release gate](#evidence-and-release-gate).
 
 ## Architecture at a glance
 
@@ -175,16 +177,14 @@ npm run test:integration
 npm run dev
 ```
 
-On the current branch, `npm run dev` starts the foundation `src/server.ts` entrypoint. It exposes both health endpoints, but it does **not** exercise the operational startup stages, Spectrum receive loop, Codex runtime, or first-message flow. The expected current checks are:
+`npm run dev` starts the composed `src/server.ts` entrypoint. It requires the configured PostgreSQL, persistent paths, Codex auth, and Spectrum credentials and exercises the operational startup stages. Check:
 
 ```bash
 curl --fail http://localhost:10000/healthz
 curl --fail http://localhost:10000/readyz
 ```
 
-`/healthz` means the HTTP process is alive. `/readyz` means all critical components are ready; it should remain `503` with redacted remediation while Codex enrollment, database, queue, storage, capabilities, or Spectrum connectivity is incomplete.
-
-Because the current entrypoint never starts those dependencies, its `/readyz` remains `503`. Do not use a `200` response from `/healthz` as deployment acceptance evidence. After the integration owner wires the final bootstrap into the executable entrypoint, `/readyz` must become `200` before message execution.
+`/healthz` means the HTTP process is alive. `/readyz` means all critical components are ready; it remains `503` with redacted remediation while Codex enrollment, database, queue, storage, capabilities, or Spectrum connectivity is incomplete. Do not use a `200` response from `/healthz` as deployment acceptance evidence; `/readyz` must become `200` before message execution.
 
 ## Clean Render deployment
 

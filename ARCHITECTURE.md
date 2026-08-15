@@ -8,22 +8,22 @@ The target is one long-running Node.js service with three concurrent responsibil
 2. run the durable inbound, Codex, outbound, and memory jobs backed by PostgreSQL/pg-boss; and
 3. expose liveness and readiness endpoints to Render.
 
-The branch has the provider, database, queue, Codex, memory, storage, health, and shutdown modules needed by that topology, but the executable composition is not complete. `src/index.ts` exposes `startAgentService()` and an injected `AgentServiceBootstrap`; `src/http/server.ts` owns the final health endpoints. `src/server.ts`, used by `npm run dev` and `npm start`, still starts only the foundation health server. Authorization plus the plan/execute/synthesize queue handlers are not wired into a runnable first-message path.
+The branch composes the provider, database, queue, Codex, memory, storage, health, and shutdown modules into that topology. `src/index.ts` exposes `startAgentService()` and an injected `AgentServiceBootstrap`; `src/runtime/production-bootstrap.ts` supplies the production adapters; and `src/server.ts`, used by `npm run dev` and `npm start`, starts the composed lifecycle.
 
 This distinction is an intentional release boundary:
 
 | Layer | Current branch |
 |---|---|
 | Render resource declaration | Present in `render.yaml` |
-| Persistent storage preparation | Implemented as an injectable startup stage |
-| Full health/readiness server | Used by `src/server.ts`; operational components remain unstarted/not ready |
+| Persistent storage preparation | Composed as an injectable startup stage |
+| Full health/readiness server | Used by `src/server.ts`; reports the composed operational stages |
 | Boot and graceful-shutdown ordering | Implemented as an injectable composition boundary |
 | Spectrum, PostgreSQL, Codex, and Supermemory modules | Implemented and fake/unit/integration-testable in isolation |
-| Authorized receive through plan/execute/synthesize/send | Not composed into the executable entrypoint |
+| Authorized receive through plan/execute/synthesize/send | Composed into the executable entrypoint; protected live path untested |
 | Clean local and Render first-message evidence | Not established |
 | Live Photon, Codex, Render, or Supermemory evidence | Not run for this release |
 
-The remainder of this document describes the final composition contract and identifies where implementation evidence stops.
+The remainder of this document describes the composition contract and identifies where implementation evidence stops.
 
 ## 2. Deployed topology
 
@@ -271,7 +271,7 @@ Example setup response:
 
 Raw provider errors, credentials, handles, message content, and unrestricted paths never enter readiness. The root operator page renders only this redacted state and safe setup actions. Render uses `/healthz` to avoid turning incomplete private enrollment into a restart loop. Operators use `/readyz` as the acceptance gate.
 
-The current `src/server.ts` uses this health server and shuts it down on process signals, but it starts none of the operational dependencies. Its root page therefore says infrastructure is live without claiming the agent is ready, its `/healthz` proves only that the foundation process is alive, and its `/readyz` remains `503` until the integration owner composes the full bootstrap.
+The current `src/server.ts` starts this health server first, runs each operational stage, and shuts the composition down on process signals. Its `/healthz` proves only that the HTTP process is alive; `/readyz` becomes `200` only after PostgreSQL, migrations, queue, Codex auth/capabilities, storage, and Spectrum are ready.
 
 ## 9. Failure and recovery contract
 
@@ -282,14 +282,14 @@ The current `src/server.ts` uses this health server and shuts it down on process
 | Planning | Versioned singleton retries or cancellation; no stale batch | Handler/repository fake and offline integration coverage; production composition/live path untested |
 | Execution | Abort superseded Codex work; bounded retry/failure persists | Handler, repository, Codex cancellation, and recovery fake coverage; production composition/live path untested |
 | Synthesis | Terminal scan enqueues one singleton synthesis; partial failure is preserved | Handler/repository fake and offline integration coverage; production composition/live path untested |
-| Each outbound part | Resume at persisted cursor and retry the same client GUID | Fake crash at each materialized part; live provider deduplication untested |
+| Each outbound part | Resume at persisted cursor and retain the same logical client GUID | Fake crash at each materialized part; Spectrum 12.7 cannot receive the caller GUID, so a post-send/pre-checkpoint crash can duplicate one bubble |
 | Memory write | Operational response stays complete; receipt records failure and job may retry | Expected contract; outage validation intentionally skipped by user direction in this release work |
 | Spectrum disconnect | Readiness degrades; supervised loop reconnects with bounded exponential backoff | Message-loop fake coverage; live disconnect/replay untested |
 | PostgreSQL timeout | Readiness false; do not begin untracked model work; resume durable jobs after recovery | Composed boot-time timeout/readiness coverage; runtime post-start database health transition is not implemented or tested |
 | Supermemory timeout | Recall returns degraded/empty context; turn may continue; write retries independently | Expected contract; timeout/outage validation intentionally skipped by user direction in this release work |
 | Expired Codex authentication | Readiness false; pause execution; re-enroll or replace key and re-probe | Capability/readiness fakes; live expiration untested |
 
-Recovery is safe only when the executable bootstrap calls reconciliation on startup and every handler re-checks authoritative state. The existence of a module or fake test does not prove the final cross-provider path.
+The executable bootstrap calls reconciliation before opening inbound acceptance, and every handler re-checks authoritative state. This offline evidence does not prove the final cross-provider path or provider-side deduplication.
 
 Supermemory timeout/outage behavior is included here as the intended operational contract. It was not validated in this release work because the user explicitly directed that testing to be skipped.
 

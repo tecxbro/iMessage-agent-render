@@ -4,5 +4,6 @@
   "userSafeSummary": "The task failed.",
   "artifacts": [],
   "proposedActions": [],
-  "memoryCandidates": []
+  "memoryCandidates": [],
+  "error": null
 }

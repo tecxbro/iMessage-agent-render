@@ -184,6 +184,18 @@ function classifyInvocationFailure(error: unknown): CodexRuntimeError {
     return error;
   }
   const message = error instanceof Error ? error.message : "";
+  if (
+    /invalid_json_schema|invalid schema for response_format|text\.format\.schema/iu.test(
+      message,
+    )
+  ) {
+    return new CodexRuntimeError(
+      "CODEX_STRUCTURED_OUTPUT_INVALID",
+      "The configured Codex output schema is not accepted by OpenAI Structured Outputs. Fix the required and nullable field contract before retrying.",
+      false,
+      { cause: error },
+    );
+  }
   if (/session .*(?:missing|not found)|thread .*(?:missing|not found)/iu.test(message)) {
     return new CodexRuntimeError(
       "CODEX_SESSION_MISSING",
@@ -271,6 +283,90 @@ function structuredOutputError(
     true,
     cause === undefined ? undefined : { cause },
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function strictStructuredOutputIssue(
+  value: unknown,
+  path = "schema",
+): string | undefined {
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const issue = strictStructuredOutputIssue(item, `${path}[${index}]`);
+      if (issue !== undefined) {
+        return issue;
+      }
+    }
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  if (value["type"] === "object") {
+    if (value["additionalProperties"] !== false) {
+      return `${path}.additionalProperties must be false`;
+    }
+    const properties = value["properties"];
+    if (!isRecord(properties)) {
+      return `${path}.properties must be an object`;
+    }
+    const required = value["required"];
+    if (!Array.isArray(required) || required.some((item) => typeof item !== "string")) {
+      return `${path}.required must be a string array`;
+    }
+    const propertyNames = Object.keys(properties).sort();
+    const requiredNames = [...required].sort();
+    if (
+      propertyNames.length !== requiredNames.length ||
+      propertyNames.some((property, index) => property !== requiredNames[index])
+    ) {
+      return `${path}.required must contain every property exactly once`;
+    }
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    const issue = strictStructuredOutputIssue(child, `${path}.${key}`);
+    if (issue !== undefined) {
+      return issue;
+    }
+  }
+  return undefined;
+}
+
+export function createCodexOutputJsonSchema<Output>(
+  outputSchema: z.ZodType<Output>,
+): Record<string, unknown> {
+  let generated: unknown;
+  try {
+    generated = z.toJSONSchema(outputSchema, { io: "input" });
+  } catch (error) {
+    throw new CodexRuntimeError(
+      "CODEX_STRUCTURED_OUTPUT_INVALID",
+      "The configured Codex output schema could not be converted to JSON Schema. Fix the schema contract before retrying.",
+      false,
+      { cause: error },
+    );
+  }
+  if (!isRecord(generated) || generated["type"] !== "object") {
+    throw new CodexRuntimeError(
+      "CODEX_STRUCTURED_OUTPUT_INVALID",
+      "The configured Codex output schema must generate a root object.",
+      false,
+    );
+  }
+  const issue = strictStructuredOutputIssue(generated);
+  if (issue !== undefined) {
+    throw new CodexRuntimeError(
+      "CODEX_STRUCTURED_OUTPUT_INVALID",
+      `The configured Codex output schema is not strict at ${issue}.`,
+      false,
+    );
+  }
+  return generated;
 }
 
 function requirePositiveInteger(value: number, label: string): number {
@@ -398,7 +494,7 @@ export class CodexClient implements StructuredCodexRunner {
         request.threadId === undefined
           ? codex.startThread(threadOptions)
           : codex.resumeThread(request.threadId, threadOptions);
-      const jsonSchema = z.toJSONSchema(request.outputSchema);
+      const jsonSchema = createCodexOutputJsonSchema(request.outputSchema);
       const { events } = await thread.runStreamed(request.prompt, {
         outputSchema: jsonSchema,
         signal: abort.signal,

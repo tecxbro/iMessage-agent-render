@@ -3,10 +3,14 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { createCodexOutputJsonSchema } from "../../src/agent/codex-client.js";
 import {
+  codexExecutionResultSchema,
   executionResultSchema,
+  executionTaskSchema,
   interactionDecisionSchema,
   memoryCandidateSchema,
+  memoryCurationResultSchema,
 } from "../../src/agent/schemas.js";
 
 function readFixture(fileName: string): unknown {
@@ -15,7 +19,76 @@ function readFixture(fileName: string): unknown {
   ) as unknown;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function expectStrictStructuredOutputObjects(
+  value: unknown,
+  path = "schema",
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      expectStrictStructuredOutputObjects(item, `${path}[${index}]`),
+    );
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+
+  if (value["type"] === "object") {
+    expect(value["additionalProperties"], `${path}.additionalProperties`).toBe(
+      false,
+    );
+    const properties = value["properties"];
+    expect(isRecord(properties), `${path}.properties`).toBe(true);
+    if (isRecord(properties)) {
+      const propertyNames = Object.keys(properties).sort();
+      const required = value["required"];
+      expect(Array.isArray(required), `${path}.required`).toBe(true);
+      expect(
+        Array.isArray(required) ? [...required].sort() : required,
+        `${path}.required`,
+      ).toEqual(propertyNames);
+    }
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    expectStrictStructuredOutputObjects(child, `${path}.${key}`);
+  }
+}
+
 describe("model output contracts", () => {
+  it("requires workspaceBinding while accepting an explicit null binding", () => {
+    const task = {
+      id: "inspect-runtime",
+      agentName: "runtime-debugger",
+      purpose: "Inspect the runtime failure.",
+      instructions: "Return the root cause with evidence.",
+      workspaceBinding: null,
+      modelProfile: "main",
+      permissionProfile: "read",
+      dependsOn: [],
+    };
+
+    expect(executionTaskSchema.safeParse(task).success).toBe(true);
+    const { workspaceBinding: _workspaceBinding, ...withoutBinding } = task;
+    expect(executionTaskSchema.safeParse(withoutBinding).success).toBe(false);
+  });
+
+  it("constructs every Codex output schema with strict recursive objects", () => {
+    const schemas = [
+      createCodexOutputJsonSchema(interactionDecisionSchema),
+      createCodexOutputJsonSchema(codexExecutionResultSchema),
+      createCodexOutputJsonSchema(memoryCurationResultSchema),
+    ];
+
+    schemas.forEach((schema, index) =>
+      expectStrictStructuredOutputObjects(schema, `schema[${index}]`),
+    );
+  });
+
   it("accepts representative valid interaction and execution JSON fixtures", () => {
     expect(
       interactionDecisionSchema.safeParse(
@@ -54,6 +127,8 @@ describe("model output contracts", () => {
     const base = {
       mode: "delegate",
       modelProfile: "main",
+      userMessage: null,
+      statusMessage: null,
       waitForTasks: true,
       memoryCandidates: [],
     } as const;
@@ -62,6 +137,7 @@ describe("model output contracts", () => {
       agentName: `agent-${id}`,
       purpose: `Complete ${id}`,
       instructions: `Return evidence for ${id}.`,
+      workspaceBinding: null,
       modelProfile: "main",
       permissionProfile: "read",
       dependsOn,
@@ -99,6 +175,8 @@ describe("model output contracts", () => {
       content: "Project Atlas uses PostgreSQL as its operational store.",
       confidence: 1,
       source: "verified_task_result",
+      projectId: null,
+      replacesMemoryId: null,
     };
 
     expect(memoryCandidateSchema.safeParse(candidate).success).toBe(false);

@@ -285,6 +285,8 @@ function preference(content: string): MemoryCandidate {
     content,
     confidence: 0.99,
     source: "authorized_user",
+    projectId: null,
+    replacesMemoryId: null,
   };
 }
 
@@ -350,6 +352,8 @@ describe("Supermemory owner and context isolation", () => {
           content: "The DM thread is planning Project Cedar.",
           confidence: 0.98,
           source: "authorized_user",
+          projectId: null,
+          replacesMemoryId: null,
         },
       ],
     });
@@ -393,6 +397,8 @@ describe("Supermemory owner and context isolation", () => {
           content: "The owner is at the airport for the next 2 hours.",
           confidence: 0.99,
           source: "authorized_user",
+          projectId: null,
+          replacesMemoryId: null,
         },
       ],
     });

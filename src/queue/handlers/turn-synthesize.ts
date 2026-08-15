@@ -158,7 +158,7 @@ function withTruthfulPartialFailure(
   decision: InteractionDecision,
   safeResults: readonly UserSafeSynthesisResult[],
 ): InteractionDecision {
-  if (decision.userMessage === undefined) {
+  if (decision.userMessage === null) {
     return decision;
   }
   const hasPartialFailure = safeResults.some(
@@ -227,7 +227,7 @@ export function createTurnSynthesizeHandler(
     }
     decision = withTruthfulPartialFailure(decision, safeResults);
     const message = decision.userMessage;
-    if (message === undefined) {
+    if (message === null) {
       throw new Error("Synthesis returned no final user-facing message.");
     }
     assertUserFacingMessageSafe(message);

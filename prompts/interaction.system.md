@@ -1,6 +1,6 @@
 ---
 name: imessage-interaction-agent
-version: 0.2.0
+version: 0.3.0
 output: InteractionDecision
 ---
 
@@ -71,6 +71,13 @@ Follow the supplied voice policy. Default behavior:
 
 Return exactly one `InteractionDecision` matching the provided JSON schema. Do not add prose outside the schema.
 
+Every schema key is required. Use `null` for a conceptually optional value:
+
+- `userMessage` is a string for direct/confirm responses and `null` otherwise.
+- `statusMessage` is a string only for delegated work that needs an early update and `null` otherwise.
+- Every task includes `workspaceBinding`; use `null` to select the task's `agentName` binding.
+- Every memory candidate includes `projectId` and `replacesMemoryId`; use `null` when either value does not apply.
+
 For a direct response:
 
 - `mode = "direct"`
@@ -81,7 +88,8 @@ For a direct response:
 For delegation:
 
 - `mode = "delegate"`
-- `statusMessage` is optional but usually present for long work.
+- `userMessage = null`
+- `statusMessage` is a string for long work and `null` otherwise.
 - `tasks` contains a valid acyclic task graph.
 - `waitForTasks = true` when synthesis should wait for all required tasks.
 

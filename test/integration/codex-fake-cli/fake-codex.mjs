@@ -79,6 +79,29 @@ if (shouldSleep) {
   await new Promise(() => {});
 }
 
+if (process.env["AGENT_TASK_FAKE_MODE"] === "invalid-schema") {
+  const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
+  emit({ type: "thread.started", thread_id: "fake-thread-new" });
+  emit({ type: "turn.started" });
+  emit({
+    type: "turn.failed",
+    error: {
+      message: JSON.stringify({
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          code: "invalid_json_schema",
+          message:
+            "Invalid schema for response_format 'codex_output_schema': missing required property.",
+          param: "text.format.schema",
+        },
+        status: 400,
+      }),
+    },
+  });
+  process.exit(0);
+}
+
 let response;
 switch (process.env["AGENT_TASK_FAKE_MODE"]) {
   case "malformed":

@@ -122,7 +122,7 @@ function candidateMetadata(
   if (candidate.scope === "space") {
     metadata["spaceId"] = context.spaceId;
   }
-  if (candidate.scope === "project" && candidate.projectId !== undefined) {
+  if (candidate.scope === "project" && candidate.projectId !== null) {
     metadata["projectId"] = candidate.projectId;
   }
   return metadata;
@@ -209,7 +209,7 @@ export async function curateMemories(input: {
       contentHash,
       input.signal,
     );
-    const operation = candidate.replacesMemoryId === undefined ? "add" : "update";
+    const operation = candidate.replacesMemoryId === null ? "add" : "update";
     const pending = await input.receipts.createPending({
       ownerId: context.ownerId,
       spaceId: context.spaceId,
@@ -222,7 +222,7 @@ export async function curateMemories(input: {
     try {
       let externalMemoryId = providerDuplicate;
       let resultStatus: CurationResultItem["status"] = "deduplicated";
-      if (externalMemoryId === undefined && candidate.replacesMemoryId !== undefined) {
+      if (externalMemoryId === undefined && candidate.replacesMemoryId !== null) {
         const updated = await input.provider.updateMemory({
           containerTag,
           memoryId: candidate.replacesMemoryId,

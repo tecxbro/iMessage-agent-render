@@ -1,4 +1,4 @@
-import { PgBoss, type Job, type QueuePolicy } from "pg-boss";
+import { PgBoss, type Job, type JobResult, type QueuePolicy } from "pg-boss";
 
 import { QUEUE_NAMES, QUEUE_NAME_VALUES, type QueueName } from "./names.js";
 import {
@@ -27,6 +27,42 @@ export type QueueHandler<Name extends QueueName> = (
   payload: QueuePayloadByName[Name],
   signal: AbortSignal,
 ) => Promise<void>;
+
+function isNonRetryableError(
+  error: unknown,
+): error is { code?: unknown; retryable: false } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "retryable" in error &&
+    error.retryable === false
+  );
+}
+
+export async function settleQueueJob<Name extends QueueName>(
+  name: Name,
+  job: Job<unknown>,
+  handler: QueueHandler<Name>,
+): Promise<JobResult[]> {
+  try {
+    const payload = parseQueuePayload(name, job.data);
+    await handler(payload, job.signal);
+    return [{ id: job.id, status: "completed" }];
+  } catch (error) {
+    if (!isNonRetryableError(error)) {
+      throw error;
+    }
+    const code =
+      typeof error.code === "string" ? error.code : "NON_RETRYABLE_JOB_ERROR";
+    return [
+      {
+        id: job.id,
+        status: "deadletter",
+        output: { code, retryable: false },
+      },
+    ];
+  }
+}
 
 export class DurableQueue {
   public readonly boss: PgBoss;
@@ -95,14 +131,13 @@ export class DurableQueue {
 
     return this.boss.work<unknown>(
       name,
-      { localConcurrency, batchSize: 1 },
-      async (jobs: Job<unknown>[]) => {
+      { localConcurrency, batchSize: 1, perJobResults: true },
+      async (jobs: Job<unknown>[]): Promise<JobResult[]> => {
         const job = jobs[0];
         if (job === undefined) {
-          return;
+          return [];
         }
-        const payload = parseQueuePayload(name, job.data);
-        await handler(payload, job.signal);
+        return await settleQueueJob(name, job, handler);
       },
     );
   }

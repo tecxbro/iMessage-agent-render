@@ -68,12 +68,12 @@ export const memoryCandidateSchema = z
     content: boundedTextSchema(2_000),
     confidence: z.number().min(0).max(1),
     source: z.enum(["authorized_user", "verified_task_result"]),
-    projectId: identifierSchema.optional(),
-    replacesMemoryId: boundedTextSchema(256).optional(),
+    projectId: identifierSchema.nullable(),
+    replacesMemoryId: boundedTextSchema(256).nullable(),
   })
   .strict()
   .superRefine((candidate, context) => {
-    if (candidate.scope === "project" && candidate.projectId === undefined) {
+    if (candidate.scope === "project" && candidate.projectId === null) {
       context.addIssue({
         code: "custom",
         path: ["projectId"],
@@ -81,7 +81,7 @@ export const memoryCandidateSchema = z
       });
     }
 
-    if (candidate.scope !== "project" && candidate.projectId !== undefined) {
+    if (candidate.scope !== "project" && candidate.projectId !== null) {
       context.addIssue({
         code: "custom",
         path: ["projectId"],
@@ -140,7 +140,7 @@ export const executionTaskSchema = z
     agentName: workspaceBindingSchema,
     purpose: boundedTextSchema(500),
     instructions: boundedTextSchema(8_000),
-    workspaceBinding: workspaceBindingSchema.optional(),
+    workspaceBinding: workspaceBindingSchema.nullable(),
     modelProfile: modelProfileNameSchema,
     permissionProfile: permissionProfileNameSchema,
     dependsOn: z.array(taskIdentifierSchema).max(5),
@@ -235,8 +235,8 @@ export const interactionDecisionSchema = z
   .object({
     mode: z.enum(["direct", "delegate", "confirm", "silent"]),
     modelProfile: modelProfileNameSchema,
-    userMessage: boundedTextSchema(16_000).optional(),
-    statusMessage: boundedTextSchema(500).optional(),
+    userMessage: boundedTextSchema(16_000).nullable(),
+    statusMessage: boundedTextSchema(500).nullable(),
     tasks: executionTaskGraphSchema,
     waitForTasks: z.boolean(),
     memoryCandidates: z.array(memoryCandidateSchema).max(20),
@@ -248,7 +248,7 @@ export const interactionDecisionSchema = z
     };
 
     if (decision.mode === "direct") {
-      if (decision.userMessage === undefined) {
+      if (decision.userMessage === null) {
         addIssue("userMessage", "direct decisions require a userMessage");
       }
       if (decision.tasks.length !== 0) {
@@ -266,7 +266,7 @@ export const interactionDecisionSchema = z
       if (!decision.waitForTasks) {
         addIssue("waitForTasks", "delegate decisions must wait for task synthesis");
       }
-      if (decision.userMessage !== undefined) {
+      if (decision.userMessage !== null) {
         addIssue(
           "userMessage",
           "delegate decisions use statusMessage before synthesis, not userMessage",
@@ -275,7 +275,7 @@ export const interactionDecisionSchema = z
     }
 
     if (decision.mode === "confirm") {
-      if (decision.userMessage === undefined) {
+      if (decision.userMessage === null) {
         addIssue("userMessage", "confirm decisions require a userMessage");
       }
       if (decision.tasks.length !== 0 || decision.waitForTasks) {
@@ -285,8 +285,8 @@ export const interactionDecisionSchema = z
 
     if (decision.mode === "silent") {
       if (
-        decision.userMessage !== undefined ||
-        decision.statusMessage !== undefined ||
+        decision.userMessage !== null ||
+        decision.statusMessage !== null ||
         decision.tasks.length !== 0 ||
         decision.waitForTasks ||
         decision.memoryCandidates.length !== 0
@@ -298,7 +298,7 @@ export const interactionDecisionSchema = z
       }
     }
 
-    if (decision.mode !== "delegate" && decision.statusMessage !== undefined) {
+    if (decision.mode !== "delegate" && decision.statusMessage !== null) {
       addIssue("statusMessage", "statusMessage is allowed only for delegated work");
     }
   });
@@ -311,56 +311,111 @@ export const executionErrorSchema = z
   })
   .strict();
 
+const codexNormalizedPayloadSchema = boundedTextSchema(32_000).transform(
+  (value, context): JsonValue => {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(value) as unknown;
+    } catch {
+      context.addIssue({
+        code: "custom",
+        message: "normalizedPayload must contain valid JSON text",
+      });
+      return z.NEVER;
+    }
+    const parsed = jsonValueSchema.safeParse(decoded);
+    if (!parsed.success) {
+      context.addIssue({
+        code: "custom",
+        message: "normalizedPayload must decode to a finite JSON value",
+      });
+      return z.NEVER;
+    }
+    return parsed.data;
+  },
+);
+
+const codexProposedActionSchema = z
+  .object({
+    actionType: actionTypeSchema,
+    target: boundedTextSchema(512),
+    normalizedPayload: codexNormalizedPayloadSchema,
+    humanSummary: boundedTextSchema(1_000),
+  })
+  .strict();
+
+interface ExecutionResultInvariant {
+  status: "succeeded" | "failed" | "canceled" | "needs_approval";
+  proposedActions: readonly unknown[];
+  error: z.infer<typeof executionErrorSchema> | null;
+}
+
+function validateExecutionResult(
+  result: ExecutionResultInvariant,
+  context: z.core.$RefinementCtx<ExecutionResultInvariant>,
+): void {
+  if (result.status === "failed" && result.error === null) {
+    context.addIssue({
+      code: "custom",
+      path: ["error"],
+      message: "failed execution results require a safe error",
+    });
+  }
+
+  if (result.status === "succeeded" && result.error !== null) {
+    context.addIssue({
+      code: "custom",
+      path: ["error"],
+      message: "succeeded execution results cannot contain an error",
+    });
+  }
+
+  if (result.status === "needs_approval" && result.proposedActions.length === 0) {
+    context.addIssue({
+      code: "custom",
+      path: ["proposedActions"],
+      message: "needs_approval results require at least one proposed action",
+    });
+  }
+
+  if (result.status !== "needs_approval" && result.proposedActions.length > 0) {
+    context.addIssue({
+      code: "custom",
+      path: ["proposedActions"],
+      message: "proposed actions require needs_approval status",
+    });
+  }
+}
+
+const executionResultShape = {
+  taskId: taskIdentifierSchema,
+  status: z.enum(["succeeded", "failed", "canceled", "needs_approval"]),
+  userSafeSummary: boundedTextSchema(4_000),
+  artifacts: z.array(artifactRefSchema).max(20),
+  memoryCandidates: z.array(memoryCandidateSchema).max(20),
+  error: executionErrorSchema.nullable(),
+} as const;
+
 export const executionResultSchema = z
   .object({
-    taskId: taskIdentifierSchema,
-    status: z.enum(["succeeded", "failed", "canceled", "needs_approval"]),
-    userSafeSummary: boundedTextSchema(4_000),
-    artifacts: z.array(artifactRefSchema).max(20),
+    ...executionResultShape,
     proposedActions: z.array(proposedActionSchema).max(10),
-    memoryCandidates: z.array(memoryCandidateSchema).max(20),
-    error: executionErrorSchema.nullable().optional(),
   })
   .strict()
-  .superRefine((result, context) => {
-    if (result.status === "failed" && result.error == null) {
-      context.addIssue({
-        code: "custom",
-        path: ["error"],
-        message: "failed execution results require a safe error",
-      });
-    }
+  .superRefine(validateExecutionResult);
 
-    if (result.status === "succeeded" && result.error != null) {
-      context.addIssue({
-        code: "custom",
-        path: ["error"],
-        message: "succeeded execution results cannot contain an error",
-      });
-    }
-
-    if (
-      result.status === "needs_approval" &&
-      result.proposedActions.length === 0
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["proposedActions"],
-        message: "needs_approval results require at least one proposed action",
-      });
-    }
-
-    if (
-      result.status !== "needs_approval" &&
-      result.proposedActions.length > 0
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["proposedActions"],
-        message: "proposed actions require needs_approval status",
-      });
-    }
-  });
+/**
+ * Provider-facing execution schema. Arbitrary JSON objects are encoded as JSON
+ * text because strict Structured Outputs cannot describe free-form object keys.
+ * Parsing decodes that text back into the operational ExecutionResult contract.
+ */
+export const codexExecutionResultSchema = z
+  .object({
+    ...executionResultShape,
+    proposedActions: z.array(codexProposedActionSchema).max(10),
+  })
+  .strict()
+  .superRefine(validateExecutionResult);
 
 export type AuthorizedInbound = z.infer<typeof authorizedInboundSchema>;
 export type MemoryCandidate = z.infer<typeof memoryCandidateSchema>;

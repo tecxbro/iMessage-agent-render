@@ -118,6 +118,7 @@ describe("Step 5 turn-plan handler", () => {
       mode: "direct",
       modelProfile: "main",
       userMessage: "Hey! What’s up?",
+      statusMessage: null,
       tasks: [],
       waitForTasks: false,
       memoryCandidates: [],
@@ -154,6 +155,7 @@ describe("Step 5 turn-plan handler", () => {
     const decision: InteractionDecision = {
       mode: "delegate",
       modelProfile: "main",
+      userMessage: null,
       statusMessage: "I’m checking the local behavior and provider contract now.",
       tasks: [
         {
@@ -231,6 +233,7 @@ describe("Step 5 turn-plan handler", () => {
       mode: "direct",
       modelProfile: "main",
       userMessage: "must not be used",
+      statusMessage: null,
       tasks: [],
       waitForTasks: false,
       memoryCandidates: [],

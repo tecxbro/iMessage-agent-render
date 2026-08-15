@@ -102,6 +102,7 @@ describe("Step 5 final synthesis handler", () => {
           mode: "direct",
           modelProfile: "main",
           userMessage: "The persisted cursor is correct.",
+          statusMessage: null,
           tasks: [],
           waitForTasks: false,
           memoryCandidates: [],
@@ -154,6 +155,8 @@ describe("Step 5 final synthesis handler", () => {
         runtimeResult({
           mode: "delegate",
           modelProfile: "main",
+          userMessage: null,
+          statusMessage: null,
           tasks: [
             {
               id: "try-again",

@@ -330,4 +330,30 @@ describe("Codex client through pinned SDK and fake CLI", () => {
       retryable: false,
     } satisfies Partial<CodexRuntimeError>);
   });
+
+  it("classifies an invalid provider JSON schema as non-retryable", async () => {
+    const directory = await fixtureDirectory();
+    const client = new CodexClient({
+      codexHome: directory,
+      authMode: "chatgpt",
+      parentEnvironment: parentEnvironment(),
+      codexPathOverride: fakeExecutable,
+      safeTaskEnvironment: { AGENT_TASK_FAKE_MODE: "invalid-schema" },
+      allowedTaskEnvironmentKeys: ["AGENT_TASK_FAKE_MODE"],
+    });
+
+    await expect(
+      client.runStructured({
+        prompt: "Return the acknowledgement.",
+        outputSchema,
+        modelProfile: { model: "gpt-5.6-luna", effort: "high" },
+        permissionProfile: "read",
+        workingDirectory: directory,
+        skipGitRepoCheck: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "CODEX_STRUCTURED_OUTPUT_INVALID",
+      retryable: false,
+    } satisfies Partial<CodexRuntimeError>);
+  });
 });

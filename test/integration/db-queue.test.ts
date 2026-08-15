@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { DurableQueue } from "../../src/queue/boss.js";
 import { QUEUE_NAMES } from "../../src/queue/names.js";
@@ -22,6 +22,7 @@ describeDatabase("pg-boss durable queue", () => {
     await queue.boss.deleteAllJobs(QUEUE_NAMES.outboundSend);
     await queue.boss.deleteAllJobs(QUEUE_NAMES.turnSynthesize);
     await queue.boss.deleteAllJobs(QUEUE_NAMES.inboundFlush);
+    await queue.boss.deleteAllJobs(QUEUE_NAMES.turnPlan);
   });
 
   afterAll(async () => {
@@ -93,5 +94,41 @@ describeDatabase("pg-boss durable queue", () => {
         (job) => (job.data as { chainId?: string }).chainId === chainId,
       ),
     ).toHaveLength(1);
+  });
+
+  it("does not retry a worker error classified as non-retryable", async () => {
+    const handler = vi.fn(async () => {
+      throw Object.assign(new Error("invalid structured output schema"), {
+        code: "CODEX_STRUCTURED_OUTPUT_INVALID",
+        retryable: false,
+      });
+    });
+    await queue.registerWorker(QUEUE_NAMES.turnPlan, handler);
+    const jobId = await queue.boss.send(
+      QUEUE_NAMES.turnPlan,
+      {
+        chainId,
+        expectedChainVersion: 1,
+        expectedState: "queued",
+      },
+      { retryLimit: 5, retryDelay: 1 },
+    );
+    expect(jobId).not.toBeNull();
+
+    let state: string | undefined;
+    for (let attempt = 0; attempt < 100 && state !== "failed"; attempt += 1) {
+      const job =
+        jobId === null
+          ? null
+          : await queue.boss.getJobById(QUEUE_NAMES.turnPlan, jobId);
+      state = job?.state;
+      if (state !== "failed") {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+
+    expect(state).toBe("failed");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

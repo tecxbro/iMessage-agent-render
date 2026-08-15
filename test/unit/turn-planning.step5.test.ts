@@ -27,7 +27,7 @@ describe("Step 5 turn-planning fixtures", () => {
       waitForTasks: false,
     });
     expect(decision.userMessage).toBeTruthy();
-    expect(decision.statusMessage).toBeUndefined();
+    expect(decision.statusMessage).toBeNull();
     expect(executionTaskLevels(decision.tasks)).toEqual([]);
   });
 

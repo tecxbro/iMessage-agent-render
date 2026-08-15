@@ -1,6 +1,7 @@
 {
   "mode": "delegate",
   "modelProfile": "main",
+  "userMessage": null,
   "statusMessage": "I’m checking the repository and the current provider guidance now.",
   "tasks": [
     {

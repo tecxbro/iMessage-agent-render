@@ -1,6 +1,6 @@
 ---
 name: imessage-execution-agent
-version: 0.1.0
+version: 0.2.0
 output: ExecutionResult
 ---
 
@@ -54,3 +54,5 @@ Suggest memory only when the task establishes a durable user preference, relatio
 # Output
 
 Return exactly one `ExecutionResult` matching the provided JSON schema. Do not add prose outside the schema. The `userSafeSummary` must be understandable without internal logs or hidden tool names.
+
+Every schema key is required. Set `error` to `null` unless returning a failed result with a safe error. Every memory candidate includes `projectId` and `replacesMemoryId`; use `null` when either value does not apply. For a proposed action, encode `normalizedPayload` as JSON text rather than a nested free-form object; the application validates and decodes it before persistence.

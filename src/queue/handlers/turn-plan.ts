@@ -275,6 +275,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
         mode: "direct",
         modelProfile: "fast",
         userMessage: command.message,
+        statusMessage: null,
         tasks: [],
         waitForTasks: false,
         memoryCandidates: [],
@@ -322,7 +323,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
 
     if (decision.mode === "direct" || decision.mode === "confirm") {
       const message = decision.userMessage;
-      if (message === undefined) {
+      if (message === null) {
         throw new Error("A user-facing interaction decision had no message.");
       }
       assertUserFacingMessageSafe(
@@ -366,7 +367,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
       contactsExternalDependency: decision.tasks.some(
         (task) => task.permissionProfile === "network-read",
       ),
-      ...(decision.statusMessage === undefined
+      ...(decision.statusMessage === null
         ? {}
         : { proposedMessage: decision.statusMessage }),
       priorMessages: context.priorStatusMessages,

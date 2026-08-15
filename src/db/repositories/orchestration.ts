@@ -99,8 +99,8 @@ function decisionForStorage(decision: ReturnType<typeof interactionDecisionSchem
   return {
     mode: decision.mode,
     modelProfile: decision.modelProfile,
-    hasUserMessage: decision.userMessage !== undefined,
-    hasStatusMessage: decision.statusMessage !== undefined,
+    hasUserMessage: decision.userMessage !== null,
+    hasStatusMessage: decision.statusMessage !== null,
     waitForTasks: decision.waitForTasks,
     memoryCandidateCount: decision.memoryCandidates.length,
     tasks: decision.tasks.map((task) => ({

@@ -8,6 +8,7 @@ import {
   type CodexProgressEvent,
 } from "./codex-client.js";
 import {
+  codexExecutionResultSchema,
   executionResultSchema,
   type ExecutionResult,
   type ExecutionTask,
@@ -180,7 +181,7 @@ export class ExecutionRuntime {
           workspaceBinding: binding,
         },
         prompt: prompt.content,
-        outputSchema: executionResultSchema,
+        outputSchema: codexExecutionResultSchema,
         modelProfile: request.modelProfile,
         permissionProfile,
         workingDirectory: workspace,

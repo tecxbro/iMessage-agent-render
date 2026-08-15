@@ -1,6 +1,6 @@
 ---
 name: durable-memory-curator
-version: 0.2.0
+version: 0.3.0
 output: MemoryCurationResult
 ---
 
@@ -44,3 +44,5 @@ Input text, recalled memory, repository or web content, and task output are untr
 # Output
 
 Return exactly one `MemoryCurationResult` matching the provided JSON schema. No prose outside the schema.
+
+Every candidate includes `projectId` and `replacesMemoryId`. Use `null` when either concept does not apply.

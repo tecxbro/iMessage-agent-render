@@ -199,7 +199,7 @@ Use the [official Render Blueprint flow](https://render.com/docs/infrastructure-
 2. Review the plan before applying it. It must contain exactly one Web Service, one Render Postgres database, and one disk on the Web Service.
 3. Enter the three required `sync: false` prompts: `SPECTRUM_PROJECT_ID` and `SPECTRUM_PROJECT_SECRET` from Photon, plus the separate application sender allowlist in `AGENT_OWNER_HANDLES`. Render prompts for these only on initial creation; secrets added later must be configured directly on the existing service.
 4. Confirm `DATABASE_URL` is a dynamic reference to `imessage-agent-db`. Never paste a database connection string into a Blueprint prompt.
-5. Apply the Blueprint. The build must run `npm ci && npm run build`; the pre-deploy phase must run `npm run db:migrate`; the service must start with `npm start`.
+5. Apply the Blueprint. The build must run `npm ci --include=dev && npm run build`; the explicit include keeps the pinned TypeScript declarations and migration tooling available while `NODE_ENV=production` is set. The pre-deploy phase must run `npm run db:migrate`; the service must start with `npm start`.
 6. Leave Supermemory disabled by default. To enable it, add `SUPERMEMORY_API_KEY` as a secret on the created Web Service and redeploy; it is intentionally not an initial Blueprint prompt.
 7. Confirm the disk is mounted at `/var/data`, the service has exactly one instance, and `/var/data/codex` plus `/var/data/workspaces` are writable only by the service account.
 8. Verify `GET /healthz` returns HTTP 200. Do not expect `/readyz` to pass before Codex authentication and all critical dependencies are ready.

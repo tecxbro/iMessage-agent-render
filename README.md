@@ -183,7 +183,7 @@ Because the current entrypoint never starts those dependencies, its `/readyz` re
 4. Enter `AGENT_OWNER_HANDLES` separately. This is the sender allowlist for the application, not a Spectrum project setting; use the personal iMessage phone number or email allowed to command the agent.
 5. Supermemory is disabled by default and does not appear in the initial Blueprint prompts. To enable it later, add `SUPERMEMORY_API_KEY` to the created Web Service and redeploy.
 6. For API-key mode, change `CODEX_AUTH_MODE` to `api_key` and add `OPENAI_API_KEY` as a Render secret before starting execution.
-7. Let the pre-deploy command run `npm run db:migrate` and the build run `npm ci && npm run build`.
+7. Let the pre-deploy command run `npm run db:migrate` and the build run `npm ci --include=dev && npm run build`. The explicit include keeps the pinned TypeScript declarations and migration tooling available while `NODE_ENV=production` is set.
 8. In ChatGPT mode, open the private Render Shell and run:
 
    ```bash

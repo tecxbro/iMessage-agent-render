@@ -8,7 +8,9 @@ services:
     region: oregon
     numInstances: 1
     autoDeployTrigger: "off"
-    buildCommand: npm ci && npm run build
+    # NODE_ENV=production makes npm omit devDependencies by default, but the
+    # TypeScript build and pre-deploy migration require the pinned dev tools.
+    buildCommand: npm ci --include=dev && npm run build
     preDeployCommand: npm run db:migrate
     startCommand: npm start
     healthCheckPath: /healthz

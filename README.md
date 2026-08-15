@@ -200,7 +200,7 @@ PostgreSQL is the operational source of truth. Supermemory stores only bounded, 
 - Logs, health endpoints, and failure records must remain redacted.
 - Codex credentials and workspaces use separate private directories on the persistent disk.
 
-Never commit `.env`, `auth.json`, provider credentials, database URLs, owner handles, or workspace data. Read [Security and privacy](./SECURITY_AND_PRIVACY.md) for the full trust model.
+Never commit `.env`, `auth.json`, provider credentials, database URLs, owner handles, or workspace data. Read [Security and privacy](./docs/SECURITY_AND_PRIVACY.md) for the full trust model.
 
 ## Known limitations and release evidence
 
@@ -216,10 +216,10 @@ A blank Render disk has no code-owned execution workspace capability. The defaul
 
 - [Documentation index](./docs/README.md)
 - [Deployment](./docs/DEPLOYMENT.md)
-- [Architecture](./ARCHITECTURE.md)
+- [Architecture](./docs/ARCHITECTURE.md)
 - [Operations](./docs/OPERATIONS.md)
 - [Configuration](./docs/CONFIGURATION.md)
 - [Customization](./docs/CUSTOMIZATION.md)
 - [Troubleshooting](./docs/TROUBLESHOOTING.md)
-- [Security and privacy](./SECURITY_AND_PRIVACY.md)
-- [Maintainer references](./DOCS_INDEX.md)
+- [Security and privacy](./docs/SECURITY_AND_PRIVACY.md)
+- [Maintainer references](./docs/maintainers/PROVIDER_REFERENCES.md)

@@ -5,30 +5,30 @@
 ## Start here
 
 - [Repository overview](../README.md)
-- [Architecture](../ARCHITECTURE.md)
-- [Implementation plan](../IMPLEMENTATION_PLAN.md)
+- [Architecture](./ARCHITECTURE.md)
+- [Implementation plan](./maintainers/IMPLEMENTATION_PLAN.md)
 - [Agent rules](../AGENTS.md)
-- [Architecture decisions](../DECISIONS.md)
+- [Architecture decisions](./maintainers/DECISIONS.md)
 
 ## Product and runtime contracts
 
-- [Product requirements](../PRD.md)
-- [Data model](../DATA_MODEL.md)
-- [Repository blueprint](../REPOSITORY_BLUEPRINT.md)
-- [Model routing](../MODEL_ROUTING.md)
-- [Prompting and orchestration](../PROMPTING_AND_ORCHESTRATION.md)
-- [Skills](../SKILLS.md)
-- [Convex alternative](../CONVEX_VARIANT.md)
+- [Product requirements](./maintainers/PRD.md)
+- [Data model](./maintainers/DATA_MODEL.md)
+- [Repository blueprint](./maintainers/REPOSITORY_BLUEPRINT.md)
+- [Model routing](./maintainers/MODEL_ROUTING.md)
+- [Prompting and orchestration](./maintainers/PROMPTING_AND_ORCHESTRATION.md)
+- [Skills](./maintainers/SKILLS.md)
+- [Convex alternative](./maintainers/CONVEX_VARIANT.md)
 
 ## Deploy, operate, secure, and test
 
 - [Deployment and Codex authentication](./DEPLOYMENT.md)
 - [Operations runbook](./OPERATIONS.md)
-- [Security and privacy](../SECURITY_AND_PRIVACY.md)
-- [Test plan](../TEST_PLAN.md)
+- [Security and privacy](./SECURITY_AND_PRIVACY.md)
+- [Test plan](./maintainers/TEST_PLAN.md)
 - [Render smoke evidence checklist](../test/e2e/render-smoke.md)
 - [Render Blueprint](../render.yaml)
-- [Primary external documentation index](../DOCS_INDEX.md)
+- [Primary external documentation index](./maintainers/PROVIDER_REFERENCES.md)
 
 ## Implementation entrypoints
 

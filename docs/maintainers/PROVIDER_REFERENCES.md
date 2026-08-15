@@ -6,10 +6,10 @@ Use the Markdown/LLM-friendly sources first. When a provider does not expose a s
 
 ## 0. This repository
 
-- LLM-oriented implementation index: [`docs/llms.txt`](./docs/llms.txt)
-- Deployment and authentication: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)
-- Operations and rollback: [`docs/OPERATIONS.md`](./docs/OPERATIONS.md)
-- Clean local/Render evidence checklist: [`test/e2e/render-smoke.md`](./test/e2e/render-smoke.md)
+- LLM-oriented implementation index: [`docs/llms.txt`](../llms.txt)
+- Deployment and authentication: [`docs/DEPLOYMENT.md`](../DEPLOYMENT.md)
+- Operations and rollback: [`docs/OPERATIONS.md`](../OPERATIONS.md)
+- Clean local/Render evidence checklist: [`test/e2e/render-smoke.md`](../../test/e2e/render-smoke.md)
 
 The local index distinguishes implemented modules, intended contracts, and protected/live evidence. Do not infer provider success from an offline test.
 

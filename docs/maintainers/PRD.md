@@ -306,7 +306,7 @@ These are launch targets, not promises about third-party model or transport late
 - Runtime validation with Zod or equivalent at every model and queue boundary.
 - No custom wrapper that hides Spectrum’s native `Space` and `Message` concepts.
 - No empty “future” folders.
-- Every new provider integration includes primary docs in `DOCS_INDEX.md`.
+- Every new provider integration includes primary docs in `PROVIDER_REFERENCES.md`.
 - Prompts remain separate Markdown files with version metadata.
 
 ## 11. Scope

@@ -471,7 +471,7 @@ The executable production runtime is composed on `main`. Clean-account Render de
 | `src/http/readiness.ts` | Full component readiness |
 | `src/index.ts` | Final boot order and graceful shutdown |
 | `README.md` | Zero-to-first-message guide and Deploy to Render button |
-| `ARCHITECTURE.md` | Final diagrams and extension points |
+| `docs/ARCHITECTURE.md` | Final diagrams and extension points |
 | `AGENTS.md` | Final coding rules |
 | `docs/*` | PRD, model, memory, security, testing, business, docs index |
 | `test/e2e/render-smoke.md` or script | Clean-deploy checklist |

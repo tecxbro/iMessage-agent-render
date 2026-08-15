@@ -4,7 +4,7 @@ Production-oriented private iMessage agent starter. Keep every module justified 
 
 ## Before editing
 
-- Read `README.md`, `ARCHITECTURE.md`, the relevant `IMPLEMENTATION_PLAN.md` section, and primary integration docs in `DOCS_INDEX.md`.
+- Read `README.md`, `docs/ARCHITECTURE.md`, the relevant `docs/maintainers/IMPLEMENTATION_PLAN.md` section, and primary integration docs in `docs/maintainers/PROVIDER_REFERENCES.md`.
 - Confirm checkout boundaries with `git status --short --branch`, `git branch --show-current`, and `git worktree list`.
 - Edit only files owned by this worktree; do not change another worktree to help.
 - Run `npm run repo:setup-guards` after a fresh clone, then run the nearest existing tests before behavior changes.

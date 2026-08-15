@@ -2,6 +2,7 @@
   "name": "imessage-codex-agent-render",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Production-oriented private iMessage agent starter powered by Spectrum and Codex",
   "type": "module",
   "engines": {

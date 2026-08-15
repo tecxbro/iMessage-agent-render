@@ -54,7 +54,7 @@ The checked-in [render.yaml](./render.yaml) declares:
 
 The disk makes the v1 deployment single-instance. Do not enable horizontal scaling without redesigning credential and workspace storage.
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/tecxbro/iMessageagent-render-blueprint)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://dashboard.render.com/blueprint/new?repo=https://github.com/tecxbro/iMessage-agent-render)
 
 Deploy the private agent infrastructure to Render. After deployment, ChatGPT mode requires one private Codex device-login step in Render Shell. The button provisions infrastructure; it does not make the current branch end-to-end ready or authenticate private provider accounts.
 
@@ -90,8 +90,8 @@ Never commit `.env`, `$CODEX_HOME/auth.json`, provider credentials, database URL
 ### Install and configure
 
 ```bash
-git clone https://github.com/tecxbro/iMessageagent-render-blueprint.git
-cd iMessageagent-render-blueprint
+git clone https://github.com/tecxbro/iMessage-agent-render.git
+cd iMessage-agent-render
 cp .env.example .env
 npm ci
 ```

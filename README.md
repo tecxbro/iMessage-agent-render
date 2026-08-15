@@ -2,6 +2,16 @@
 
 A production-oriented, single-owner iMessage agent starter built around Photon Spectrum Cloud, Codex, PostgreSQL/pg-boss, and optional Supermemory.
 
+## Repository identity
+
+The canonical GitHub publish target is
+[`tecxbro/iMessage-agent-render`](https://github.com/tecxbro/iMessage-agent-render).
+After a fresh clone, run `npm run repo:setup-guards`. This enables the versioned
+pre-push hook and makes `origin` the default push remote. Before every push, run
+`npm run repo:verify-target`; the command and hook both fail closed when the
+resolved push URL is any other repository. Never infer the target from a remote
+name alone.
+
 ## Release status
 
 This branch contains the Render Blueprint, database migrations, durable transport/queue/runtime modules, persistent-storage preparation, component readiness, and graceful-shutdown composition boundary. It is **not yet a clean-account, zero-to-first-message release**:
@@ -109,6 +119,7 @@ git clone https://github.com/tecxbro/iMessage-agent-render.git
 cd iMessage-agent-render
 cp .env.example .env
 npm ci
+npm run repo:setup-guards
 ```
 
 Edit `.env` before continuing:

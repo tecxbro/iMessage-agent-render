@@ -224,6 +224,7 @@ describeDatabase("PostgreSQL durable pipeline", () => {
     );
 
     expect(recovered?.messageIds).toEqual([first.messageId, correction.messageId]);
+    expect(recovered?.canceledChainIds).toEqual([oldChain?.chainId]);
     const [oldState] = await client.database
       .select({ state: chains.state })
       .from(chains)

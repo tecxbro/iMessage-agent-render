@@ -35,6 +35,7 @@ export interface FlushedChain {
   chainId: string;
   version: number;
   messageIds: string[];
+  canceledChainIds: string[];
 }
 
 export interface SupersedeResult {
@@ -72,6 +73,7 @@ export class ChainRepository {
         .orderBy(asc(messages.receivedAt), asc(messages.id));
 
       const newestUndrained = undrained.at(-1);
+      let canceledChainIds: string[] = [];
       if (newestUndrained !== undefined) {
         if (newestUndrained.receivedAt === null) {
           throw new Error(
@@ -80,12 +82,13 @@ export class ChainRepository {
         }
         // This repeats the ingest-time guard under the same per-space lock so a
         // crash or concurrent flush cannot leave two live chains.
-        await this.supersedeWithinTransaction(
+        const superseded = await this.supersedeWithinTransaction(
           transaction,
           spaceId,
           newestUndrained.id,
           newestUndrained.receivedAt,
         );
+        canceledChainIds = superseded.canceledChainIds;
       }
 
       const pendingCarry = await transaction
@@ -144,6 +147,7 @@ export class ChainRepository {
           ...pendingCarry.map((row) => row.messageId),
           ...undrainedIds,
         ],
+        canceledChainIds,
       };
     });
   }

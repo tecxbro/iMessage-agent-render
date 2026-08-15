@@ -42,6 +42,7 @@ import { createRetentionHandler } from "../queue/handlers/retention.js";
 import { createTaskExecuteHandler } from "../queue/handlers/task-execute.js";
 import { createTurnPlanHandler } from "../queue/handlers/turn-plan.js";
 import { createTurnSynthesizeHandler } from "../queue/handlers/turn-synthesize.js";
+import { InFlightChainRegistry } from "../queue/in-flight-chain-registry.js";
 import { QUEUE_NAMES } from "../queue/names.js";
 import { DurablePipeline } from "../queue/pipeline.js";
 import { PgBossPublisher } from "../queue/publisher.js";
@@ -109,6 +110,20 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       : [environment.SUPERMEMORY_API_KEY]),
   ];
   const logger = createLogger({ protectedValues });
+  const inFlightChains = new InFlightChainRegistry();
+  const interruptSupersededChains = (chainIds: readonly string[]): void => {
+    const abortedWorkCount = inFlightChains.cancel(chainIds);
+    if (abortedWorkCount > 0) {
+      logger.info(
+        {
+          component: "queue",
+          supersededChainCount: chainIds.length,
+          abortedWorkCount,
+        },
+        "superseded in-flight work aborted",
+      );
+    }
+  };
   const promptBundle = await loadPromptBundle();
   const modelProfiles = modelProfilesFromEnvironment(environment);
   const cipher = createDataCipher(environment.APP_ENCRYPTION_KEY);
@@ -250,6 +265,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         outbound,
         orchestration,
         publisher,
+        onChainsSuperseded: interruptSupersededChains,
         debounceMs: environment.INBOUND_DEBOUNCE_MS,
         taskRuntimeMs: environment.MAX_TASK_RUNTIME_MS,
       });
@@ -340,96 +356,143 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         }),
       });
 
+      const combinedWorkerSignal = (jobSignal: AbortSignal): AbortSignal =>
+        AbortSignal.any([signal, jobSignal]);
       await durableQueue.registerWorker(
         QUEUE_NAMES.inboundFlush,
         createInboundFlushHandler({
           chains: state.chains,
           publisher: state.publisher,
+          onChainsSuperseded: interruptSupersededChains,
         }),
       );
+      const turnPlanHandler = createTurnPlanHandler({
+        repository: state.orchestration,
+        interaction,
+        publisher: state.publisher,
+        commandHandlers: commands,
+        modelProfiles,
+        promptBundle,
+        encrypt: cipher.encrypt,
+        recallMemory: async (context, recallSignal) => {
+          if (memoryProvider === undefined) {
+            return {
+              available: false,
+              ownerProfile: [],
+              recalledMemories: [],
+            };
+          }
+          const recalled = await recallMemoryContext({
+            provider: memoryProvider,
+            receipts: state.memoryReceipts,
+            deploymentId: context.deploymentId,
+            ownerId: context.ownerId,
+            spaceId: context.spaceId,
+            query: context.combinedTurnText,
+            signal: recallSignal,
+          });
+          return {
+            available: recalled.available,
+            ownerProfile: recalled.ownerProfile.map((item) => item.text),
+            recalledMemories: recalled.relevantMemories.map(
+              (item) => item.text,
+            ),
+          };
+        },
+        sendStatus: async ({
+          spaceId,
+          message,
+          clientGuid,
+          signal: statusSignal,
+        }) => {
+          await outboundTransport.send({
+            spaceId,
+            clientGuid,
+            text: message,
+            signal: statusSignal,
+          });
+        },
+        onStatusFailure: () => {
+          logger.warn(
+            { component: "outbound", errorCode: "STATUS_SEND_FAILED" },
+            "optional progress status could not be delivered",
+          );
+        },
+      });
       await durableQueue.registerWorker(
         QUEUE_NAMES.turnPlan,
-        createTurnPlanHandler({
-          repository: state.orchestration,
-          interaction,
-          publisher: state.publisher,
-          commandHandlers: commands,
-          modelProfiles,
-          promptBundle,
-          encrypt: cipher.encrypt,
-          recallMemory: async (context, recallSignal) => {
-            if (memoryProvider === undefined) {
-              return {
-                available: false,
-                ownerProfile: [],
-                recalledMemories: [],
-              };
-            }
-            const recalled = await recallMemoryContext({
-              provider: memoryProvider,
-              receipts: state.memoryReceipts,
-              deploymentId: context.deploymentId,
-              ownerId: context.ownerId,
-              spaceId: context.spaceId,
-              query: context.combinedTurnText,
-              signal: recallSignal,
-            });
-            return {
-              available: recalled.available,
-              ownerProfile: recalled.ownerProfile.map((item) => item.text),
-              recalledMemories: recalled.relevantMemories.map(
-                (item) => item.text,
-              ),
-            };
-          },
-          sendStatus: async ({ spaceId, message, clientGuid }) => {
-            await outboundTransport.send({
-              spaceId,
-              clientGuid,
-              text: message,
-              signal,
-            });
-          },
-          onStatusFailure: () => {
-            logger.warn(
-              { component: "outbound", errorCode: "STATUS_SEND_FAILED" },
-              "optional progress status could not be delivered",
-            );
-          },
-        }),
+        async (payload, jobSignal) =>
+          await inFlightChains.run(
+            payload.chainId,
+            combinedWorkerSignal(jobSignal),
+            async (chainSignal) =>
+              await turnPlanHandler(payload, chainSignal),
+          ),
       );
+      const taskExecuteHandler = createTaskExecuteHandler({
+        repository: state.orchestration,
+        execution,
+        publisher: state.publisher,
+        modelProfiles,
+        promptBundle,
+        maximumRuntimeMs: environment.MAX_TASK_RUNTIME_MS,
+      });
       await durableQueue.registerWorker(
         QUEUE_NAMES.taskExecute,
-        createTaskExecuteHandler({
-          repository: state.orchestration,
-          execution,
-          publisher: state.publisher,
-          modelProfiles,
-          promptBundle,
-          maximumRuntimeMs: environment.MAX_TASK_RUNTIME_MS,
-        }),
+        async (payload, jobSignal) =>
+          await inFlightChains.run(
+            payload.chainId,
+            combinedWorkerSignal(jobSignal),
+            async (chainSignal) =>
+              await taskExecuteHandler(payload, chainSignal),
+          ),
         environment.MAX_EXECUTION_CONCURRENCY,
       );
+      const turnSynthesizeHandler = createTurnSynthesizeHandler({
+        repository: state.orchestration,
+        interaction,
+        publisher: state.publisher,
+        modelProfiles,
+        promptBundle,
+        encrypt: cipher.encrypt,
+      });
       await durableQueue.registerWorker(
         QUEUE_NAMES.turnSynthesize,
-        createTurnSynthesizeHandler({
-          repository: state.orchestration,
-          interaction,
-          publisher: state.publisher,
-          modelProfiles,
-          promptBundle,
-          encrypt: cipher.encrypt,
-        }),
+        async (payload, jobSignal) =>
+          await inFlightChains.run(
+            payload.chainId,
+            combinedWorkerSignal(jobSignal),
+            async (chainSignal) =>
+              await turnSynthesizeHandler(payload, chainSignal),
+          ),
       );
+      const outboundSendHandler = createOutboundSendHandler({
+        outbound: state.outbound,
+        failures: state.failures,
+        transport: outboundTransport,
+        decrypt: cipher.decrypt,
+        failureRetentionDays: environment.FAILURE_RETENTION_DAYS,
+      });
       await durableQueue.registerWorker(
         QUEUE_NAMES.outboundSend,
-        createOutboundSendHandler({
-          outbound: state.outbound,
-          failures: state.failures,
-          transport: outboundTransport,
-          decrypt: cipher.decrypt,
-          failureRetentionDays: environment.FAILURE_RETENTION_DAYS,
-        }),
+        async (payload, jobSignal) => {
+          const chainId = await state.outbound.findChainIdForBatch(
+            payload.outboundBatchId,
+          );
+          if (chainId === undefined) {
+            await outboundSendHandler(
+              payload,
+              combinedWorkerSignal(jobSignal),
+            );
+            return;
+          }
+          await inFlightChains.run(
+            chainId,
+            combinedWorkerSignal(jobSignal),
+            async (chainSignal) =>
+              await outboundSendHandler(payload, chainSignal),
+          );
+        },
       );
       await durableQueue.registerWorker(
         QUEUE_NAMES.maintenanceRetention,

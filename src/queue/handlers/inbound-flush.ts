@@ -5,6 +5,7 @@ import type { InboundFlushPayload } from "../payloads.js";
 export interface InboundFlushDependencies {
   chains: Pick<ChainRepository, "flushInboundMessages">;
   publisher: Pick<QueuePublisher, "enqueueTurnPlan">;
+  onChainsSuperseded?: (chainIds: readonly string[]) => void;
   now?: () => Date;
 }
 
@@ -16,6 +17,9 @@ export function createInboundFlushHandler(dependencies: InboundFlushDependencies
     );
     if (flushed === null) {
       return;
+    }
+    if (flushed.canceledChainIds.length > 0) {
+      dependencies.onChainsSuperseded?.(flushed.canceledChainIds);
     }
 
     await dependencies.publisher.enqueueTurnPlan({

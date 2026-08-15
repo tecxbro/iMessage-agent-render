@@ -25,6 +25,7 @@ export interface DurableInboundPipelineDependencies {
     | "findSynthesisPayloads"
   >;
   publisher: QueuePublisher;
+  onChainsSuperseded?: (chainIds: readonly string[]) => void;
   debounceMs: number;
   taskRuntimeMs?: number;
   now?: () => Date;
@@ -49,10 +50,13 @@ export class DurablePipeline {
   ): Promise<IngestResult> {
     const result = await this.dependencies.inbound.ingestAcceptedMessage(input);
     if (result.inserted) {
-      await this.dependencies.chains.supersedeActiveChain(
+      const superseded = await this.dependencies.chains.supersedeActiveChain(
         input.spaceId,
         result.messageId,
       );
+      if (superseded.canceledChainIds.length > 0) {
+        this.dependencies.onChainsSuperseded?.(superseded.canceledChainIds);
+      }
     }
 
     try {

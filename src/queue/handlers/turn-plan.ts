@@ -117,6 +117,7 @@ export interface TurnPlanDependencies {
     spaceId: string;
     message: string;
     clientGuid: string;
+    signal: AbortSignal;
   }): Promise<void>;
   onStatusFailure?(error: unknown, chainId: string): void;
   maximumBubbleCharacters?: number;
@@ -278,6 +279,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
         waitForTasks: false,
         memoryCandidates: [],
       });
+      signal.throwIfAborted();
       const committed = await dependencies.repository.commitFinal({
         payload,
         decision,
@@ -308,6 +310,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
         : { recoverySummary: context.recoverySummary }),
       signal,
     });
+    signal.throwIfAborted();
     const decision = interactionDecisionSchema.parse(run.decision);
     const base: TurnPlanCommitBase = {
       payload,
@@ -374,11 +377,13 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
       dependencies.sendStatus !== undefined
     ) {
       try {
+        signal.throwIfAborted();
         await dependencies.sendStatus({
           chainId: context.chainId,
           spaceId: context.spaceId,
           message: status.message,
           clientGuid: stableStatusGuid(context.deploymentId, context.chainId),
+          signal,
         });
       } catch (error) {
         dependencies.onStatusFailure?.(error, context.chainId);

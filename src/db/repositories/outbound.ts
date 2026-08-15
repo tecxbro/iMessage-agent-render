@@ -43,6 +43,17 @@ export interface OutboundCheckpoint {
 export class OutboundRepository {
   public constructor(private readonly database: Database) {}
 
+  public async findChainIdForBatch(
+    batchId: string,
+  ): Promise<string | undefined> {
+    const [batch] = await this.database
+      .select({ chainId: outboundBatches.chainId })
+      .from(outboundBatches)
+      .where(eq(outboundBatches.id, batchId))
+      .limit(1);
+    return batch?.chainId;
+  }
+
   public async materializeBatch(input: MaterializeOutboundInput): Promise<string> {
     if (input.encryptedParts.length === 0) {
       throw new Error(

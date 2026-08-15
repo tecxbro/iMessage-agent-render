@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createInboundFlushHandler } from "../../src/queue/handlers/inbound-flush.js";
 import { DurablePipeline } from "../../src/queue/pipeline.js";
 import { PgBossPublisher } from "../../src/queue/publisher.js";
 
@@ -10,6 +11,82 @@ const batchId = "00000000-0000-4000-8000-000000000104";
 const taskId = "00000000-0000-4000-8000-000000000106";
 
 describe("durable receive, debounce, planning, and synthesis recovery", () => {
+  it("interrupts superseded in-flight work before scheduling the replacement flush", async () => {
+    const order: string[] = [];
+    const onChainsSuperseded = vi.fn((chainIds: readonly string[]) => {
+      order.push(`cancel:${chainIds.join(",")}`);
+    });
+    const pipeline = new DurablePipeline({
+      inbound: {
+        ingestAcceptedMessage: vi.fn(async () => ({
+          inserted: true,
+          messageId,
+        })),
+        findSpacesWithUndrainedInbound: vi.fn(async () => []),
+      },
+      chains: {
+        supersedeActiveChain: vi.fn(async () => ({
+          canceledChainIds: [chainId],
+          carriedMessageIds: [],
+        })),
+        findQueuedChains: vi.fn(async () => []),
+      },
+      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      publisher: {
+        scheduleInboundFlush: vi.fn(async () => {
+          order.push("schedule-replacement");
+        }),
+        enqueueTurnPlan: vi.fn(async () => undefined),
+        enqueueTaskExecute: vi.fn(async () => undefined),
+        enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundSend: vi.fn(async () => undefined),
+      },
+      onChainsSuperseded,
+      debounceMs: 4_000,
+    });
+
+    await pipeline.ingestAndSchedule({
+      spaceId,
+      externalMessageId: "provider-message-correction",
+      senderIdentityId: "00000000-0000-4000-8000-000000000105",
+      contentCiphertext: "encrypted",
+      contentHash: "hash",
+      receivedAt: new Date("2026-08-14T12:00:00.000Z"),
+      retentionExpiresAt: new Date("2026-09-13T12:00:00.000Z"),
+    });
+
+    expect(onChainsSuperseded).toHaveBeenCalledWith([chainId]);
+    expect(order).toEqual([`cancel:${chainId}`, "schedule-replacement"]);
+  });
+
+  it("interrupts chains superseded during reconciliation flush recovery", async () => {
+    const onChainsSuperseded = vi.fn();
+    const enqueueTurnPlan = vi.fn(async () => undefined);
+    const handler = createInboundFlushHandler({
+      chains: {
+        flushInboundMessages: vi.fn(async () => ({
+          chainId,
+          version: 2,
+          messageIds: [messageId],
+          canceledChainIds: ["00000000-0000-4000-8000-000000000107"],
+        })),
+      },
+      publisher: { enqueueTurnPlan },
+      onChainsSuperseded,
+    });
+
+    await handler({ spaceId });
+
+    expect(onChainsSuperseded).toHaveBeenCalledWith([
+      "00000000-0000-4000-8000-000000000107",
+    ]);
+    expect(enqueueTurnPlan).toHaveBeenCalledWith({
+      chainId,
+      expectedChainVersion: 2,
+      expectedState: "queued",
+    });
+  });
+
   it("recovers a receive crash after durable insert but before debounce scheduling", async () => {
     const scheduleInboundFlush = vi
       .fn()

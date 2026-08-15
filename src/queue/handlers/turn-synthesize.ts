@@ -210,6 +210,7 @@ export function createTurnSynthesizeHandler(
         : { recoverySummary: context.recoverySummary }),
       signal,
     });
+    signal.throwIfAborted();
     let decision = interactionDecisionSchema.parse(run.decision);
     if (decision.mode !== "direct" && decision.mode !== "confirm") {
       throw new Error(

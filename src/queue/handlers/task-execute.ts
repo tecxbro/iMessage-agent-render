@@ -207,6 +207,7 @@ export function createTaskExecuteHandler(dependencies: TaskExecuteDependencies) 
       return;
     }
 
+    signal.throwIfAborted();
     const outcome = await dependencies.repository.completeTask({
       payload,
       result: executionResultSchema.parse(run.result),

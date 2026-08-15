@@ -39,18 +39,35 @@ describe("prompt bundle", () => {
     expect(after.version).not.toBe(before.version);
   });
 
-  it("keeps emoji use optional, sparse, and subordinate to answer-first voice", async () => {
+  it("keeps voice adaptive, natural, concise, and restrained with emojis", async () => {
     const bundle = await loadPromptBundle();
     const voice = bundle.prompts["voice-policy.md"]?.content ?? "";
     const interaction = bundle.prompts["interaction.system.md"]?.content ?? "";
 
     expect(voice).toContain("Lead with the answer, decision, or outcome.");
     expect(voice).toContain(
-      "Use an emoji naturally and sparingly only when it improves warmth or clarity.",
+      "Match the user’s tone, casing, punctuation, and approximate message length when natural.",
     );
-    expect(voice).toContain("decorative/repetitive emojis");
+    expect(voice).toContain(
+      "In casual conversation, prefer a short human reaction over an unnecessary explanation or offer to help.",
+    );
+    expect(voice).toContain(
+      "Subtle wit, dry humor, or mild sass is allowed when it fits naturally.",
+    );
+    expect(voice).toContain(
+      "Use emojis only when the user has used them recently, and keep them rare.",
+    );
     expect(interaction).toContain(
-      "Use emojis naturally and sparingly, only when they improve warmth or clarity",
+      "Match the user’s tone, casing, punctuation, and approximate message length when natural.",
+    );
+    expect(interaction).toContain(
+      "In casual conversation, prefer a short human reaction over an unnecessary explanation or offer to help.",
+    );
+    expect(interaction).toContain(
+      "Subtle wit, dry humor, or mild sass is allowed when it fits naturally.",
+    );
+    expect(interaction).toContain(
+      "Use emojis only when the user has used them recently, and keep them rare.",
     );
   });
 });

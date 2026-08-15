@@ -16,7 +16,7 @@ The implementation does **not** modify the original starter in place during plan
 | Codex runtime | `feat/codex-runtime` | SDK wrapper, auth/capability checks, thread lifecycle, model router | Yes |
 | Memory | `feat/supermemory` | Recall, curation, deletion, isolation tests | Yes |
 | Security | `feat/security-approvals` | Sender auth, pairing, permission profiles, approvals, redaction | After identity contracts |
-| Deploy/docs | `feat/render-docs` | Blueprint, local setup, health/readiness, docs | After config contracts |
+| Deploy/docs | `main` | Blueprint, local setup, health/readiness, docs | After config contracts |
 
 No worktree owns the same implementation file. Shared contract changes go through the contracts branch first, then are merged or rebased into each branch.
 
@@ -453,15 +453,15 @@ An independent security reviewer is strongly recommended. The primary implementa
 
 ---
 
-## Step 8 — Render Blueprint, end-to-end recovery, documentation, and release
+## Release phase — Render Blueprint, end-to-end recovery, documentation, and release
 
 ### Goal
 
 Make the project genuinely deployable from a clean account and prove it survives realistic failures.
 
-### Worktree
+### Current status
 
-`feat/render-docs`, merged by the integration owner.
+The executable production runtime is composed on `main`. Clean-account Render deployment and protected live-provider evidence remain separate release checks.
 
 ### Files to create or change
 
@@ -522,8 +522,8 @@ A release/documentation agent can execute the guide exactly as written. The fina
 5. feat/supermemory            → integration
 6. orchestration implementation→ integration
 7. feat/security-approvals     → integration
-8. feat/render-docs            → integration
-9. integration hardening       → main through one reviewed PR
+8. deploy/docs                 → integration
+9. integration hardening      → main through one reviewed PR
 ```
 
 State can merge before transport because transport targets an ingest interface. Codex and memory can merge in either order. Security must review all composed paths before release.

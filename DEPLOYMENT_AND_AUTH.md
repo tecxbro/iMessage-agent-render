@@ -2,16 +2,16 @@
 
 **Last verified against official documentation:** August 14, 2026
 
-## 1. Deployment contract and present limitation
+## 1. Deployment contract and evidence boundary
 
 The intended deployment is one private Render Web Service, one Render Postgres database, and one persistent disk. Render provisions the infrastructure from [`render.yaml`](./render.yaml); the operator still provides private provider credentials and, in ChatGPT mode, completes one Codex device-login flow.
 
-This branch does **not** yet prove a clean first-message deployment. `src/index.ts` provides injectable boot ordering and operational graceful-shutdown composition, but `npm start` still runs the foundation `src/server.ts` entrypoint. That entrypoint exposes `/healthz` and redacted `/readyz`, yet it does not compose the Spectrum, queue, Codex, memory, or security handlers, so readiness remains false. The integration owner must wire those handlers before the clean-local, clean-Render, and first-message gates can pass.
+The executable production runtime is composed. `npm start` runs `dist/server.js`, built from `src/server.ts`; that entrypoint loads `createProductionRuntime()`, supplies the real adapters to `startAgentService()`, starts queue workers and reconciliation, and then opens the Spectrum receive loop after Codex checks pass. Clean-account Render deployment and protected live-provider evidence remain separate release checks.
 
 Current verification boundaries:
 
 - No clean Render deployment was performed from this branch.
-- No live Photon, Codex, or Supermemory path was exercised as part of Step 8 documentation work.
+- No live Photon, Codex, or Supermemory path has been recorded for the current release evidence set.
 - The dedicated memory-provider outage/Supermemory-timeout resilience exercise was intentionally not run by user direction. Any fake-provider assertion reached by a broad offline suite is not accepted as outage validation; the behavior in this guide remains required policy.
 - `npm run render:validate` was attempted with Render CLI 2.22.0, but the CLI stopped before validating the file because no Render workspace/default workspace was configured: `no workspace specified and no default workspace set`.
 - Passing fake-provider, unit, integration, or chaos tests is not evidence that a provider works live.
@@ -190,7 +190,7 @@ curl --fail --silent http://127.0.0.1:10000/healthz
 curl --silent --show-error http://127.0.0.1:10000/readyz
 ```
 
-On the current branch, the second request returns HTTP 503 with redacted component states because `src/server.ts` is not yet composed with `src/index.ts`. Record the clean-local first-message gate as blocked until integration fixes that entrypoint. Do not treat a 200 from `/healthz` as proof that the queue, Codex, Spectrum, or memory path is ready.
+The second request returns HTTP 200 only after the composed service has connected PostgreSQL, verified migrations, started the queue, prepared storage, passed Codex authentication and capability checks, and connected Spectrum. A 503 identifies an incomplete or degraded dependency; follow the redacted action instead of treating `/healthz` as acceptance evidence.
 
 ## 6. Clean Render Blueprint deployment
 
@@ -202,7 +202,7 @@ Use the [official Render Blueprint flow](https://render.com/docs/infrastructure-
 4. Confirm `DATABASE_URL` is a dynamic reference to `imessage-agent-db`. Never paste a database connection string into a Blueprint prompt.
 5. Apply the Blueprint. The build must run `npm ci --include=dev && npm run build`; the explicit include keeps the pinned TypeScript declarations and migration tooling available while `NODE_ENV=production` is set. The pre-deploy phase must run `npm run db:migrate`; the service must start with `npm start`.
 6. Confirm the disk is mounted at `/var/data`, the service has exactly one instance, and `/var/data/codex` plus `/var/data/workspaces` are writable only by the service account.
-7. Open the generated Render URL. It must identify itself as the operator status page and must not claim `Agent ready` before composition and enrollment are complete.
+7. Open the generated Render URL. It must identify itself as the operator status page and must not claim `Agent ready` before enrollment and dependency checks are complete.
 8. Verify `GET /healthz` returns HTTP 200. Do not expect `/readyz` to pass before Codex authentication and all critical dependencies are ready.
 9. For ChatGPT mode, follow the operator page and open the private Render Shell:
 
@@ -213,12 +213,9 @@ Use the [official Render Blueprint flow](https://render.com/docs/infrastructure-
 
    Complete the device-code flow in a trusted browser, restart the Web Service, and verify authentication survives the restart.
 10. For API-key mode, add `OPENAI_API_KEY` as a Render secret, set `CODEX_AUTH_MODE=api_key`, and redeploy. Do not run device login.
-11. When the composed entrypoint is available, require `/readyz` HTTP 200 before sending the first authorized message.
+11. Require `/readyz` HTTP 200 before sending the first authorized message.
 
-The current branch cannot complete the end-to-end readiness and message portions
-of steps 8-11 because `npm start` still targets the foundation entrypoint.
-Preserve the failed/blocked evidence in the smoke checklist; do not work around
-it by claiming that infrastructure liveness equals application readiness.
+The executable path can complete these checks when the required accounts and credentials are valid. Preserve any failed, blocked, or not-run evidence in the smoke checklist; infrastructure liveness alone is not application readiness.
 
 ## 7. Health and readiness
 
@@ -319,7 +316,7 @@ Before release, attach:
 - Migration and rollback compatibility notes.
 - Redacted `/healthz` and `/readyz` responses before and after restart.
 - Protected live test output only for providers actually exercised.
-- Known limitations, especially the current uncomposed production entrypoint.
+- Known limitations, especially the current Spectrum outbound-delivery GUID boundary.
 
 Do not state that Render, Photon, Codex, or Supermemory works live unless the corresponding protected live test was executed and its redacted evidence is attached.
 

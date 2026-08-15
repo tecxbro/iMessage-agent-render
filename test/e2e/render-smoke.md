@@ -15,9 +15,9 @@ Use this file as an evidence record, not as a statement that a check passed. Mar
 | Render CLI version/workspace | |
 | Render deploy ID | |
 
-## Known blocker on `feat/render-docs`
+## Runtime status and evidence boundary
 
-`src/index.ts` provides the final injectable lifecycle, but `npm start` still executes `dist/server.js` built from the foundation `src/server.ts`. The current production entrypoint exposes `/healthz` and a redacted `/readyz`, but it does not compose the queue, Spectrum, Codex, memory, or security handlers, so readiness never becomes true. Therefore clean first-message, ready-state, restart-resume, and live Render agent gates must remain `BLOCKED` until the integration owner wires the production composition.
+The executable production runtime is composed. `npm start` executes `dist/server.js`, built from `src/server.ts`, which loads `createProductionRuntime()` and starts the PostgreSQL, queue, Codex, optional memory, worker, reconciliation, authorization, and Spectrum lifecycle. Clean-account Render deployment and protected live-provider evidence remain separate release checks and must stay blank, `BLOCKED`, or `NOT RUN` until exercised.
 
 ## A. Offline preflight
 
@@ -77,13 +77,13 @@ curl --silent --show-error http://127.0.0.1:10000/readyz
 | `CODEX_HOME` | absolute directory, mode `0700` | | |
 | Workspace root | separate absolute directory, mode `0700` | | |
 | Codex auth | chosen mode reported; no secret printed | | |
-| Operator page | HTTP 200; identifies setup/readiness status and never claims a foundation runtime is ready | | |
+| Operator page | HTTP 200; identifies setup/readiness status and claims readiness only after critical checks pass | | |
 | `/healthz` | HTTP 200 | | |
 | `/readyz` | HTTP 200 only after full composition | | |
 | Authorized first message | one terminal response | | |
 | Unknown sender | zero Codex child processes | | |
 
-On the current branch, `/readyz` is expected to return HTTP 503. Its endpoint/redaction check can pass, but ready-state and both message checks remain `BLOCKED` by the uncomposed production entrypoint.
+`/readyz` may return HTTP 503 during incomplete setup or a dependency outage. Record the returned redacted component state; do not pre-mark ready-state or message checks based on code composition alone.
 
 ## C. Clean Render Blueprint
 
@@ -106,7 +106,7 @@ Create the Blueprint in a fresh Render workspace from the exact commit above.
 | Liveness | external `/healthz` HTTP 200 | | |
 | Initial readiness | 503 only for expected missing auth/dependency | | |
 
-Do not record the Render deployment as cleanly functional while `npm start` uses the foundation entrypoint.
+Do not record the Render deployment as cleanly functional until this exact production entrypoint reaches `/readyz` 200 and the protected first-message checks pass.
 
 ## D. Codex enrollment and restart persistence
 
@@ -154,7 +154,7 @@ SPECTRUM_LIVE_TEST=true npm test -- test/live/spectrum-dm.test.ts
 
 The Spectrum test also requires every documented `SPECTRUM_LIVE_*` value in a protected environment. Supermemory requires a separate add/search/delete item in a test owner container; no protected Supermemory live script is currently checked in, so mark it `BLOCKED` or `NOT RUN` rather than substituting fake-provider results.
 
-The dedicated memory-provider outage/Supermemory-timeout resilience exercise was intentionally skipped by user direction for this Step 8 run. Preserve it as `NOT RUN`; incidental fake-provider coverage in a broad offline suite is not accepted as outage validation, and the expected invariant below remains policy unless a later authorized run supplies evidence.
+The dedicated memory-provider outage/Supermemory-timeout resilience exercise is not recorded in the current release evidence. Preserve it as `NOT RUN`; incidental fake-provider coverage in a broad offline suite is not accepted as outage validation, and the expected invariant below remains policy unless a later authorized run supplies evidence.
 
 | Provider | Status | Exact test/evidence | Live claim allowed? |
 |---|---|---|---|
@@ -186,7 +186,7 @@ The fake transport verifies stable retry GUIDs; only a live provider test can es
 
 ## G. End-to-end restart
 
-After the composed entrypoint exists:
+Using the composed production entrypoint:
 
 1. Send an authorized turn that establishes a Codex thread and one non-sensitive durable preference.
 2. Record terminal chain/outbound state using safe IDs only.
@@ -238,4 +238,4 @@ After the composed entrypoint exists:
 
 **Decision:** `GO` / `NO-GO`
 
-A `GO` requires every required gate to pass. Any uncomposed entrypoint, skipped required database test, missing failure-stage evidence, or unsupported live-provider claim is `NO-GO`.
+A `GO` requires every required gate to pass. Any composition mismatch, skipped required database test, missing failure-stage evidence, or unsupported live-provider claim is `NO-GO`.

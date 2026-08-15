@@ -32,8 +32,9 @@
 
 ## Implementation entrypoints
 
-- [`src/index.ts`](../src/index.ts) — injectable boot/readiness/shutdown composition; not yet wired to the production start command on `feat/render-docs`
-- [`src/server.ts`](../src/server.ts) — current foundation production entrypoint; health/readiness shell only, never operationally ready
+- [`src/server.ts`](../src/server.ts) — executable production entrypoint; loads the production runtime and starts the staged lifecycle
+- [`src/index.ts`](../src/index.ts) — generic boot/readiness/shutdown ordering used by the production entrypoint
+- [`src/runtime/production-bootstrap.ts`](../src/runtime/production-bootstrap.ts) — production composition root for PostgreSQL, pg-boss, Codex, optional Supermemory, authorization, workers, and Spectrum
 - [`src/http/server.ts`](../src/http/server.ts) — composed `/healthz` and `/readyz` handlers
 - [`src/runtime/persistent-storage.ts`](../src/runtime/persistent-storage.ts) — Codex and workspace disk policy
 - [`src/runtime/graceful-shutdown.ts`](../src/runtime/graceful-shutdown.ts) — bounded stop hooks

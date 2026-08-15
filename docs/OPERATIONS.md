@@ -99,7 +99,7 @@ Symptoms: `/healthz` 200; `/readyz` 503 with `DATABASE_UNAVAILABLE`; downstream 
 
 Symptoms: memory recall is explicitly unavailable/degraded; core readiness can remain healthy.
 
-This is the required operating policy. The dedicated Step 8 memory-provider outage exercise was intentionally skipped by user direction. Incidental fake-provider coverage in a broad offline suite is not accepted as outage validation.
+This is the required operating policy. The dedicated memory-provider outage exercise has not been recorded as protected release evidence. Incidental fake-provider coverage in a broad offline suite is not accepted as outage validation.
 
 1. Do not stop operational messaging solely for memory unavailability.
 2. Verify planning used an empty memory context rather than stale cross-owner data.
@@ -160,5 +160,5 @@ Escalate and keep execution paused when:
 - a stale/canceled chain sends;
 - an outbound retry changes client GUID;
 - credentials appear in logs or health responses;
-- the old application/schema compatibility is unknown;
-- the production entrypoint remains uncomposed.
+- the old application/schema compatibility is unknown; or
+- executable composition does not match the reviewed `src/server.ts` and `production-bootstrap.ts` release.

@@ -14,7 +14,7 @@ name alone.
 
 ## Release status
 
-This branch contains the Render Blueprint, database migrations, durable transport/queue/runtime modules, persistent-storage preparation, component readiness, and graceful-shutdown composition boundary. The executable composition is implemented, but this is **not yet a clean-account, zero-to-first-message release**:
+The executable production runtime is composed. Clean-account Render deployment and protected live-provider evidence remain separate release checks. This repository contains the Render Blueprint, database migrations, durable transport/queue/runtime modules, persistent-storage preparation, component readiness, and graceful-shutdown composition:
 
 - `src/index.ts` defines the final injected boot and shutdown order.
 - `src/http/server.ts` implements `/healthz` and `/readyz` for the composed service.
@@ -264,7 +264,7 @@ This branch has no recorded clean-account evidence for:
 - a live authenticated Codex turn or restart resume; or
 - a live Supermemory add/search/delete cycle.
 
-The release gate remains open until an integration build composes the executable pipeline and a clean-room reviewer completes the local and Render flows, every failure point in [TEST_PLAN.md](./TEST_PLAN.md), rollback, and restart recovery. Do not describe any provider path as live-working before that evidence exists.
+The release gate remains open until a clean-room reviewer completes the local and Render flows, every failure point in [TEST_PLAN.md](./TEST_PLAN.md), rollback, and restart recovery. Do not describe any provider path as live-working before that evidence exists.
 
 ## Documentation
 

@@ -7,14 +7,12 @@ Production-oriented private iMessage agent starter. Keep every module justified 
 - Read `README.md`, `docs/ARCHITECTURE.md`, the relevant `docs/maintainers/IMPLEMENTATION_PLAN.md` section, and primary integration docs in `docs/maintainers/PROVIDER_REFERENCES.md`.
 - Confirm checkout boundaries with `git status --short --branch`, `git branch --show-current`, and `git worktree list`.
 - Edit only files owned by this worktree; do not change another worktree to help.
-- Run `npm run repo:setup-guards` after a fresh clone, then run the nearest existing tests before behavior changes.
+- Run the nearest existing tests before behavior changes.
 
-## Repository identity and Git safety
+## Git safety
 
-- The only GitHub publish target is `tecxbro/iMessage-agent-render`.
-- Never infer the publish target from a remote name. Before every push, run `npm run repo:verify-target`; proceed only when it reports the canonical repository.
-- Keep `.githooks/pre-push` enabled through `core.hooksPath=.githooks`; it must reject every noncanonical push URL.
-- Never force-push `main` or bypass the pre-push hook with `--no-verify`.
+- Template copies own their repository identity. Before every push, inspect the current branch and resolved push URL instead of trusting a remote name.
+- Never force-push `main`.
 - Never reset, clean, or checkout another worktree's branch.
 - Never delete untracked files without proving the task generated them.
 - Keep one concern per commit; inspect `git diff --check` and the full staged diff before committing.
@@ -74,7 +72,6 @@ Production-oriented private iMessage agent starter. Keep every module justified 
 ## Required checks
 
 ```bash
-npm run repo:verify-target
 npm run typecheck
 npm test
 npm run test:integration

@@ -1,112 +1,67 @@
-import { buildCodexChildEnvironment } from "./agent/child-environment.js";
-import { loadEnvironment } from "./config/env.js";
-import { loadPromptBundle } from "./config/prompt-bundle.js";
-import { ReadinessRegistry, SpectrumReadiness } from "./http/readiness.js";
-import { startHealthServer } from "./http/server.js";
-import { createLogger } from "./observability/logger.js";
+import { pathToFileURL } from "node:url";
+
 import {
-  GracefulShutdown,
-  installShutdownSignals,
-} from "./runtime/graceful-shutdown.js";
-import { auditStartupSecretBoundaries } from "./security/secret-boundaries.js";
+  startAgentService,
+  type RunningAgentService,
+  type StartAgentServiceOptions,
+} from "./index.js";
 
-const environment = loadEnvironment();
-const protectedValues = [
-  environment.DATABASE_URL,
-  environment.SPECTRUM_PROJECT_SECRET,
-  environment.APP_ENCRYPTION_KEY,
-  ...(environment.OPENAI_API_KEY === undefined
-    ? []
-    : [environment.OPENAI_API_KEY]),
-  ...(environment.SUPERMEMORY_API_KEY === undefined
-    ? []
-    : [environment.SUPERMEMORY_API_KEY]),
-];
-const logger = createLogger({ protectedValues });
-const promptBundle = await loadPromptBundle();
-const readiness = new ReadinessRegistry();
-const spectrumReadiness = new SpectrumReadiness();
-readiness.mark("configuration", "ok");
+export type ProductionServer = RunningAgentService;
 
-const health = await startHealthServer({
-  port: environment.PORT,
-  host: "0.0.0.0",
-  readiness,
-  spectrum: spectrumReadiness,
-  deploymentPage: {
-    authMode: environment.CODEX_AUTH_MODE,
-    runtimeMode: "foundation",
-    supermemoryConfigured: environment.SUPERMEMORY_API_KEY !== undefined,
-  },
-});
+/**
+ * Starts the production HTTP process through the same staged lifecycle used by
+ * the operational runtime. Keeping this function injectable makes it possible
+ * to prove boot ordering without opening provider connections in unit tests.
+ */
+export async function startProductionServer(
+  options: StartAgentServiceOptions,
+): Promise<ProductionServer> {
+  return await startAgentService(options);
+}
 
-try {
-  const childEnvironment = buildCodexChildEnvironment({
-    parentEnvironment: {
-      PATH: environment.PATH,
-      ...(environment.LANG === undefined ? {} : { LANG: environment.LANG }),
-      ...(environment.LANGUAGE === undefined
-        ? {}
-        : { LANGUAGE: environment.LANGUAGE }),
-      ...(environment.LC_ALL === undefined ? {} : { LC_ALL: environment.LC_ALL }),
-      ...(environment.LC_CTYPE === undefined
-        ? {}
-        : { LC_CTYPE: environment.LC_CTYPE }),
+async function main(): Promise<void> {
+  const { createProductionRuntime } = await import(
+    "./runtime/production-bootstrap.js"
+  );
+  const runtime = await createProductionRuntime();
+
+  const service = await startProductionServer({
+    port: runtime.environment.PORT,
+    host: "0.0.0.0",
+    bootstrap: runtime.bootstrap,
+    deploymentPage: {
+      authMode: runtime.environment.CODEX_AUTH_MODE,
+      supermemoryConfigured:
+        runtime.environment.SUPERMEMORY_API_KEY !== undefined,
     },
-    codexHome: environment.CODEX_HOME,
-    authMode: environment.CODEX_AUTH_MODE,
-    ...(environment.OPENAI_API_KEY === undefined
-      ? {}
-      : { openAiApiKey: environment.OPENAI_API_KEY }),
+    onStartupFailure: (code) => {
+      runtime.logger.error(
+        { component: "bootstrap", errorCode: code },
+        "agent startup stage failed; readiness remains closed",
+      );
+    },
   });
-  await auditStartupSecretBoundaries({
-    codexHome: environment.CODEX_HOME,
-    workspaceRoot: environment.AGENT_WORKSPACE_ROOT,
-    authMode: environment.CODEX_AUTH_MODE,
-    childEnvironment,
-    protectedValues,
-  });
-  readiness.mark("disk", "ok");
-  readiness.mark("workspace", "ok");
-} catch {
-  readiness.mark("disk", "failed", "PERSISTENT_STORAGE_INVALID");
-  readiness.mark("workspace", "failed", "PERSISTENT_STORAGE_INVALID");
-  logger.warn(
+  const readiness = service.readiness.snapshot(
+    service.spectrumReadiness.snapshot(),
+  );
+
+  runtime.logger.info(
     {
       component: "bootstrap",
-      errorCode: "PERSISTENT_STORAGE_INVALID",
+      port: runtime.environment.PORT,
+      promptBundleVersion: runtime.promptBundleVersion,
+      ready: readiness.ready,
     },
-    "secret and persistent-storage boundary audit failed; execution remains paused",
+    readiness.ready
+      ? "operational agent service listening"
+      : "agent HTTP service listening; operational readiness remains closed",
   );
 }
 
-const shutdown = new GracefulShutdown(readiness);
-shutdown.register({
-  name: "health-http",
-  priority: 60,
-  timeoutMs: 10_000,
-  stop: () => health.close(),
-});
-installShutdownSignals({
-  shutdown,
-  onResult: (result, signal) => {
-    logger.info(
-      {
-        component: "bootstrap",
-        signal,
-        clean: result.clean,
-        failureCodes: result.failures.map((failure) => failure.code),
-      },
-      "foundation service stopped",
-    );
-  },
-});
-
-logger.info(
-  {
-    component: "bootstrap",
-    port: environment.PORT,
-    promptBundleVersion: promptBundle.version,
-  },
-  "foundation service listening; operational composition is not ready",
-);
+const executablePath = process.argv[1];
+if (
+  executablePath !== undefined &&
+  import.meta.url === pathToFileURL(executablePath).href
+) {
+  await main();
+}

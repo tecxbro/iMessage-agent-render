@@ -1,0 +1,522 @@
+import type { Logger } from "pino";
+import type { Space } from "spectrum-ts";
+
+import { CodexClient } from "../agent/codex-client.js";
+import { buildCodexChildEnvironment } from "../agent/child-environment.js";
+import { ExecutionRuntime } from "../agent/execution-runtime.js";
+import { InteractionRuntime } from "../agent/interaction-runtime.js";
+import { ThreadStore } from "../agent/thread-store.js";
+import {
+  createCodexPairRunner,
+  probeCodexCapabilities,
+} from "../config/capabilities.js";
+import {
+  loadEnvironment,
+  modelProfilesFromEnvironment,
+  type Environment,
+} from "../config/env.js";
+import { loadPromptBundle } from "../config/prompt-bundle.js";
+import { createDatabaseClient, type DatabaseClient } from "../db/client.js";
+import { runDatabaseMigrations } from "../db/migrate.js";
+import { ChainRepository } from "../db/repositories/chains.js";
+import { CommandRepository } from "../db/repositories/commands.js";
+import { PostgresCodexThreadRepository } from "../db/repositories/codex-threads.js";
+import { FailureRepository } from "../db/repositories/failures.js";
+import { InboundRepository } from "../db/repositories/inbound.js";
+import { PostgresMemoryReceiptStore } from "../db/repositories/memory-receipts.js";
+import { OperationalRepository } from "../db/repositories/operational.js";
+import { OrchestrationRepository } from "../db/repositories/orchestration.js";
+import { OutboundRepository } from "../db/repositories/outbound.js";
+import { RetentionRepository } from "../db/repositories/retention.js";
+import type { AgentServiceBootstrap } from "../index.js";
+import { recallMemoryContext } from "../memory/recall.js";
+import {
+  SupermemoryClient,
+  type SupermemoryPort,
+} from "../memory/supermemory-client.js";
+import { createLogger } from "../observability/logger.js";
+import { DurableQueue } from "../queue/boss.js";
+import { createInboundFlushHandler } from "../queue/handlers/inbound-flush.js";
+import { createOutboundSendHandler } from "../queue/handlers/outbound-send.js";
+import { createRetentionHandler } from "../queue/handlers/retention.js";
+import { createTaskExecuteHandler } from "../queue/handlers/task-execute.js";
+import { createTurnPlanHandler } from "../queue/handlers/turn-plan.js";
+import { createTurnSynthesizeHandler } from "../queue/handlers/turn-synthesize.js";
+import { QUEUE_NAMES } from "../queue/names.js";
+import { DurablePipeline } from "../queue/pipeline.js";
+import { PgBossPublisher } from "../queue/publisher.js";
+import {
+  DatabaseAuthorizationDirectory,
+  DatabaseGroupReplyVerifier,
+  DeterministicSenderAuthorizer,
+  SecureAuthorizeAndIngest,
+} from "../security/authorize-sender.js";
+import { createDataCipher } from "../security/data-cipher.js";
+import { OperationalRateLimits } from "../security/rate-limits.js";
+import { auditStartupSecretBoundaries } from "../security/secret-boundaries.js";
+import { runSpectrumMessageLoop } from "../transport/message-loop.js";
+import {
+  DurableInboundConsumer,
+  NativeSpectrumOutboundTransport,
+} from "../transport/operational.js";
+import { createSpectrumSpaceResolver } from "../transport/space-resolver.js";
+import {
+  createSpectrumApp,
+  spectrumCredentialsFromEnvironment,
+  type SpectrumApp,
+} from "../transport/spectrum.js";
+import { preparePersistentStorage } from "./persistent-storage.js";
+
+interface QueueComposition {
+  operational: OperationalRepository;
+  pipeline: DurablePipeline;
+  inbound: InboundRepository;
+  chains: ChainRepository;
+  outbound: OutboundRepository;
+  orchestration: OrchestrationRepository;
+  failures: FailureRepository;
+  retention: RetentionRepository;
+  publisher: PgBossPublisher;
+  memoryReceipts: PostgresMemoryReceiptStore;
+}
+
+export interface ProductionRuntime {
+  environment: Environment;
+  logger: Logger;
+  promptBundleVersion: string;
+  bootstrap: AgentServiceBootstrap;
+}
+
+function required<Value>(value: Value | undefined, stage: string): Value {
+  if (value === undefined) {
+    throw new Error(`${stage} was called before its required startup stage.`);
+  }
+  return value;
+}
+
+export async function createProductionRuntime(): Promise<ProductionRuntime> {
+  const environment = loadEnvironment();
+  const protectedValues = [
+    environment.DATABASE_URL,
+    environment.SPECTRUM_PROJECT_SECRET,
+    environment.APP_ENCRYPTION_KEY,
+    ...environment.AGENT_OWNER_HANDLES,
+    ...(environment.OPENAI_API_KEY === undefined
+      ? []
+      : [environment.OPENAI_API_KEY]),
+    ...(environment.SUPERMEMORY_API_KEY === undefined
+      ? []
+      : [environment.SUPERMEMORY_API_KEY]),
+  ];
+  const logger = createLogger({ protectedValues });
+  const promptBundle = await loadPromptBundle();
+  const modelProfiles = modelProfilesFromEnvironment(environment);
+  const cipher = createDataCipher(environment.APP_ENCRYPTION_KEY);
+  const codex = new CodexClient({
+    codexHome: environment.CODEX_HOME,
+    authMode: environment.CODEX_AUTH_MODE,
+    parentEnvironment: {
+      PATH: environment.PATH,
+      ...(environment.LANG === undefined ? {} : { LANG: environment.LANG }),
+      ...(environment.LANGUAGE === undefined
+        ? {}
+        : { LANGUAGE: environment.LANGUAGE }),
+      ...(environment.LC_ALL === undefined
+        ? {}
+        : { LC_ALL: environment.LC_ALL }),
+      ...(environment.LC_CTYPE === undefined
+        ? {}
+        : { LC_CTYPE: environment.LC_CTYPE }),
+    },
+    ...(environment.OPENAI_API_KEY === undefined
+      ? {}
+      : { openAiApiKey: environment.OPENAI_API_KEY }),
+    maximumRuntimeMs: environment.MAX_TASK_RUNTIME_MS,
+    maximumConcurrency: environment.MAX_EXECUTION_CONCURRENCY,
+    maximumConcurrencyPerOwner: environment.MAX_OWNER_EXECUTION_CONCURRENCY,
+  });
+
+  let databaseClient: DatabaseClient | undefined;
+  let queue: DurableQueue | undefined;
+  let composition: QueueComposition | undefined;
+  let spectrumApp: SpectrumApp | undefined;
+  let spectrumLoop: Promise<void> | undefined;
+  let memoryProvider: SupermemoryPort | undefined;
+
+  const bootstrap: AgentServiceBootstrap = {
+    async prepareConfiguration() {
+      // Parsing the environment and prompt contract above is the configuration
+      // stage. Construct the child allowlist here so unsafe inheritance fails
+      // before any provider or database connection is opened.
+      buildCodexChildEnvironment({
+        parentEnvironment: {
+          PATH: environment.PATH,
+          ...(environment.LANG === undefined ? {} : { LANG: environment.LANG }),
+          ...(environment.LANGUAGE === undefined
+            ? {}
+            : { LANGUAGE: environment.LANGUAGE }),
+          ...(environment.LC_ALL === undefined
+            ? {}
+            : { LC_ALL: environment.LC_ALL }),
+          ...(environment.LC_CTYPE === undefined
+            ? {}
+            : { LC_CTYPE: environment.LC_CTYPE }),
+        },
+        codexHome: environment.CODEX_HOME,
+        authMode: environment.CODEX_AUTH_MODE,
+        ...(environment.OPENAI_API_KEY === undefined
+          ? {}
+          : { openAiApiKey: environment.OPENAI_API_KEY }),
+      });
+    },
+
+    async prepareStorage() {
+      await preparePersistentStorage({
+        codexHome: environment.CODEX_HOME,
+        workspaceRoot: environment.AGENT_WORKSPACE_ROOT,
+        authMode: environment.CODEX_AUTH_MODE,
+      });
+      const childEnvironment = buildCodexChildEnvironment({
+        parentEnvironment: { PATH: environment.PATH },
+        codexHome: environment.CODEX_HOME,
+        authMode: environment.CODEX_AUTH_MODE,
+        ...(environment.OPENAI_API_KEY === undefined
+          ? {}
+          : { openAiApiKey: environment.OPENAI_API_KEY }),
+      });
+      await auditStartupSecretBoundaries({
+        codexHome: environment.CODEX_HOME,
+        workspaceRoot: environment.AGENT_WORKSPACE_ROOT,
+        authMode: environment.CODEX_AUTH_MODE,
+        childEnvironment,
+        protectedValues,
+      });
+    },
+
+    async connectDatabase() {
+      databaseClient = createDatabaseClient({
+        connectionString: environment.DATABASE_URL,
+        maxConnections: Math.max(4, environment.MAX_EXECUTION_CONCURRENCY + 2),
+      });
+      await databaseClient.checkReady();
+    },
+
+    async applyMigrations() {
+      await runDatabaseMigrations(
+        required(databaseClient, "Database migration"),
+      );
+    },
+
+    async startQueue() {
+      const client = required(databaseClient, "Queue startup");
+      const operational = new OperationalRepository(client.database, {
+        deploymentId: environment.DEPLOYMENT_ID,
+        ownerHandles: environment.AGENT_OWNER_HANDLES,
+        fingerprintKey: environment.APP_ENCRYPTION_KEY,
+        encrypt: cipher.encrypt,
+        decrypt: cipher.decrypt,
+      });
+      await operational.provisionDeployment();
+
+      queue = new DurableQueue({
+        connectionString: environment.DATABASE_URL,
+        onError: () => {
+          logger.error(
+            { component: "queue", errorCode: "QUEUE_RUNTIME_ERROR" },
+            "durable queue emitted a runtime error",
+          );
+        },
+      });
+      await queue.start();
+      const publisher = new PgBossPublisher(queue.boss);
+      const inbound = new InboundRepository(client.database);
+      const chains = new ChainRepository(client.database);
+      const outbound = new OutboundRepository(client.database);
+      const orchestration = new OrchestrationRepository(client.database, {
+        workspaceRoot: environment.AGENT_WORKSPACE_ROOT,
+        interactionWorkingDirectory: environment.AGENT_WORKSPACE_ROOT,
+        encrypt: cipher.encrypt,
+        decrypt: cipher.decrypt,
+        // A blank Render disk has no code-owned execution binding. The
+        // interaction model therefore answers directly until an operator adds
+        // an explicit workspace capability in a later requirement.
+        capabilities: () => [],
+      });
+      const failures = new FailureRepository(client.database, protectedValues);
+      const retention = new RetentionRepository(client.database);
+      const pipeline = new DurablePipeline({
+        inbound,
+        chains,
+        outbound,
+        orchestration,
+        publisher,
+        debounceMs: environment.INBOUND_DEBOUNCE_MS,
+        taskRuntimeMs: environment.MAX_TASK_RUNTIME_MS,
+      });
+      composition = {
+        operational,
+        pipeline,
+        inbound,
+        chains,
+        outbound,
+        orchestration,
+        failures,
+        retention,
+        publisher,
+        memoryReceipts: new PostgresMemoryReceiptStore(client.database),
+      };
+    },
+
+    async checkCodex() {
+      const report = await probeCodexCapabilities({
+        codexHome: environment.CODEX_HOME,
+        authMode: environment.CODEX_AUTH_MODE,
+        ...(environment.OPENAI_API_KEY === undefined
+          ? {}
+          : { openAiApiKey: environment.OPENAI_API_KEY }),
+        profiles: modelProfiles,
+        allowReasoningFallback: environment.ALLOW_REASONING_FALLBACK,
+        runner: createCodexPairRunner(codex, environment.AGENT_WORKSPACE_ROOT),
+      });
+      const auth = report.components.auth;
+      return {
+        auth:
+          auth === "ok" ? "ok" : auth === "missing" ? "missing" : "failed",
+        capabilities:
+          auth !== "ok" ? "unknown" : report.ready ? "ok" : "failed",
+        ...(auth === "missing"
+          ? { authCode: "CODEX_AUTH_MISSING" as const }
+          : auth === "failed"
+            ? { authCode: "CODEX_AUTH_EXPIRED" as const }
+            : {}),
+        ...(auth === "ok" && !report.ready
+          ? { capabilityCode: "CODEX_CAPABILITY_FAILED" as const }
+          : {}),
+      };
+    },
+
+    async configureSupermemory() {
+      if (environment.SUPERMEMORY_API_KEY === undefined) {
+        memoryProvider = undefined;
+        return "disabled";
+      }
+      memoryProvider = new SupermemoryClient({
+        apiKey: environment.SUPERMEMORY_API_KEY,
+      });
+      return "ok";
+    },
+
+    async startSpectrum({ signal, readiness }) {
+      const state = required(composition, "Spectrum startup");
+      const durableQueue = required(queue, "Spectrum worker startup");
+      const client = required(databaseClient, "Spectrum startup");
+      spectrumApp = await createSpectrumApp(
+        spectrumCredentialsFromEnvironment(environment),
+      );
+      const resolver = createSpectrumSpaceResolver(spectrumApp);
+      const outboundTransport = new NativeSpectrumOutboundTransport({
+        operational: state.operational,
+        resolver: resolver as unknown as import("../transport/space-resolver.js").SpaceResolver<Space>,
+      });
+      const threadStore = new ThreadStore(
+        new PostgresCodexThreadRepository(client.database, {
+          encrypt: cipher.encrypt,
+          decrypt: cipher.decrypt,
+        }),
+        codex,
+      );
+      const interaction = new InteractionRuntime(threadStore);
+      const execution = new ExecutionRuntime(threadStore);
+      const commands = new CommandRepository(client.database, {
+        decrypt: cipher.decrypt,
+        readiness: () => ({
+          messaging: "ready",
+          signIn: "ready",
+          work: "ready",
+          memory:
+            environment.SUPERMEMORY_API_KEY === undefined
+              ? "disabled"
+              : "ready",
+        }),
+      });
+
+      await durableQueue.registerWorker(
+        QUEUE_NAMES.inboundFlush,
+        createInboundFlushHandler({
+          chains: state.chains,
+          publisher: state.publisher,
+        }),
+      );
+      await durableQueue.registerWorker(
+        QUEUE_NAMES.turnPlan,
+        createTurnPlanHandler({
+          repository: state.orchestration,
+          interaction,
+          publisher: state.publisher,
+          commandHandlers: commands,
+          modelProfiles,
+          promptBundle,
+          encrypt: cipher.encrypt,
+          recallMemory: async (context, recallSignal) => {
+            if (memoryProvider === undefined) {
+              return {
+                available: false,
+                ownerProfile: [],
+                recalledMemories: [],
+              };
+            }
+            const recalled = await recallMemoryContext({
+              provider: memoryProvider,
+              receipts: state.memoryReceipts,
+              deploymentId: context.deploymentId,
+              ownerId: context.ownerId,
+              spaceId: context.spaceId,
+              query: context.combinedTurnText,
+              signal: recallSignal,
+            });
+            return {
+              available: recalled.available,
+              ownerProfile: recalled.ownerProfile.map((item) => item.text),
+              recalledMemories: recalled.relevantMemories.map(
+                (item) => item.text,
+              ),
+            };
+          },
+          sendStatus: async ({ spaceId, message, clientGuid }) => {
+            await outboundTransport.send({
+              spaceId,
+              clientGuid,
+              text: message,
+              signal,
+            });
+          },
+          onStatusFailure: () => {
+            logger.warn(
+              { component: "outbound", errorCode: "STATUS_SEND_FAILED" },
+              "optional progress status could not be delivered",
+            );
+          },
+        }),
+      );
+      await durableQueue.registerWorker(
+        QUEUE_NAMES.taskExecute,
+        createTaskExecuteHandler({
+          repository: state.orchestration,
+          execution,
+          publisher: state.publisher,
+          modelProfiles,
+          promptBundle,
+          maximumRuntimeMs: environment.MAX_TASK_RUNTIME_MS,
+        }),
+        environment.MAX_EXECUTION_CONCURRENCY,
+      );
+      await durableQueue.registerWorker(
+        QUEUE_NAMES.turnSynthesize,
+        createTurnSynthesizeHandler({
+          repository: state.orchestration,
+          interaction,
+          publisher: state.publisher,
+          modelProfiles,
+          promptBundle,
+          encrypt: cipher.encrypt,
+        }),
+      );
+      await durableQueue.registerWorker(
+        QUEUE_NAMES.outboundSend,
+        createOutboundSendHandler({
+          outbound: state.outbound,
+          failures: state.failures,
+          transport: outboundTransport,
+          decrypt: cipher.decrypt,
+          failureRetentionDays: environment.FAILURE_RETENTION_DAYS,
+        }),
+      );
+      await durableQueue.registerWorker(
+        QUEUE_NAMES.maintenanceRetention,
+        createRetentionHandler({
+          retention: state.retention,
+          rawMessageRetentionDays: environment.RAW_MESSAGE_RETENTION_DAYS,
+          failureRetentionDays: environment.FAILURE_RETENTION_DAYS,
+        }),
+      );
+
+      // Re-publish durable work before accepting another provider event.
+      await state.pipeline.reconcile();
+      const directory = new DatabaseAuthorizationDirectory(client.database);
+      const authorizer = new DeterministicSenderAuthorizer({
+        deploymentId: environment.DEPLOYMENT_ID,
+        fingerprintKey: environment.APP_ENCRYPTION_KEY,
+        directory,
+        groupPolicy: {
+          mode: environment.GROUP_MODE,
+          agentHandles: [],
+          agentMentionNames: ["agent"],
+        },
+        replyVerifier: new DatabaseGroupReplyVerifier(
+          client.database,
+          state.operational,
+          environment.DEPLOYMENT_ID,
+        ),
+        rateLimits: new OperationalRateLimits({
+          messagesPerOwner: {
+            limit: environment.MESSAGE_RATE_LIMIT_PER_MINUTE,
+            windowMs: 60_000,
+          },
+          tasksPerOwner: {
+            limit: environment.TASK_RATE_LIMIT_PER_HOUR,
+            windowMs: 60 * 60 * 1_000,
+          },
+        }),
+      });
+      const consumer = new DurableInboundConsumer({
+        operational: state.operational,
+        pipeline: state.pipeline,
+        cipher,
+        contentHashKey: environment.APP_ENCRYPTION_KEY,
+        rawMessageRetentionDays: environment.RAW_MESSAGE_RETENTION_DAYS,
+      });
+      const boundary = new SecureAuthorizeAndIngest(authorizer, consumer);
+      spectrumLoop = runSpectrumMessageLoop({
+        authorizeAndIngest: boundary,
+        messages: () => spectrumApp!.messages,
+        readiness,
+        signal,
+        onIgnored: (reason) => {
+          logger.debug({ component: "spectrum", reason }, "ignored message event");
+        },
+      });
+      void spectrumLoop.catch(() => {
+        logger.error(
+          {
+            component: "spectrum",
+            errorCode: "SPECTRUM_STREAM_RESTART_EXHAUSTED",
+          },
+          "Spectrum receive loop stopped after bounded restart attempts",
+        );
+      });
+    },
+
+    async stopSpectrum() {
+      await spectrumLoop?.catch(() => undefined);
+      spectrumLoop = undefined;
+      spectrumApp = undefined;
+    },
+
+    async stopQueue() {
+      await queue?.stop();
+      queue = undefined;
+    },
+
+    async closeDatabase() {
+      await databaseClient?.close();
+      databaseClient = undefined;
+    },
+  };
+
+  return {
+    environment,
+    logger,
+    promptBundleVersion: promptBundle.version,
+    bootstrap,
+  };
+}

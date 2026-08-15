@@ -195,17 +195,30 @@ curl --fail http://localhost:10000/readyz
 5. Enter `SUPERMEMORY_API_KEY` if semantic memory is wanted, or leave the optional prompt blank to run without it. Existing Blueprints must add the secret directly on the Web Service because Render does not replay new `sync: false` prompts during updates.
 6. For API-key mode, change `CODEX_AUTH_MODE` to `api_key` and add `OPENAI_API_KEY` as a Render secret before starting execution.
 7. Let the pre-deploy command run `npm run db:migrate` and the build run `npm ci --include=dev && npm run build`. The explicit include keeps the pinned TypeScript declarations and migration tooling available while `NODE_ENV=production` is set.
-8. Open the generated Render URL. Confirm that it identifies itself as an operator status page and does not claim the agent is ready.
-9. In ChatGPT mode, open the private Render Shell and run:
+
+### Render post-deploy enrollment
+
+1. In the Render Dashboard, open the deployed **Web Service**, not the Blueprint.
+2. Open **Manage > Shell**. Do not use **Connect/SSH** for this enrollment flow.
+3. Run:
 
    ```bash
    npm run codex:login
+   ```
+
+4. Open the displayed device-auth URL in a trusted browser, sign in, and enter the one-time code.
+5. Back in **Manage > Shell**, verify the login:
+
+   ```bash
    npm run codex:status
    ```
 
-10. Restart the service so the final composed readiness probe can re-check auth and model/effort capabilities.
-11. Check `/healthz` and `/readyz`. Do not send a test message until `/readyz` is `200` and the operator page says `Agent ready` on an integration build that actually uses `startAgentService`.
-12. From an authorized handle, send a DM, confirm exactly one reply, restart the service, and send a follow-up. Record this as protected live evidence; it is not established by the current branch.
+6. To enable semantic memory, open **Manage > Environment**, click **Edit**, and add `SUPERMEMORY_API_KEY`. Enter the Supermemory API key, not a Supermemory ID. This setting is optional: omit it to intentionally run with semantic memory disabled.
+7. Choose **Save, rebuild and deploy** so the service starts with the updated environment and re-checks Codex authentication and capabilities.
+
+The generated Render URL is the operator setup and status page, not the iMessage chat endpoint. Chat with the agent through iMessage from an authorized handle.
+
+After enrollment, check `/healthz` and `/readyz`. Do not send a test message until `/readyz` is `200` and the operator page says `Agent ready` on an integration build that actually uses `startAgentService`. Then send a DM from an authorized handle, confirm exactly one reply, restart the service, and send a follow-up. Record this as protected live evidence; it is not established by the current branch.
 
 In ChatGPT mode, device credentials are stored under `/var/data/codex`. In API-key mode, the key remains a Render secret environment variable. Render Shell access should remain private to operators.
 

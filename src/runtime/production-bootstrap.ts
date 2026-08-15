@@ -1,3 +1,13 @@
+/**
+ * Production composition root.
+ *
+ * Connects configuration, storage, PostgreSQL, pg-boss, Codex, optional
+ * Supermemory, authorization, and Spectrum into the generic lifecycle defined
+ * in `src/index.ts`.
+ *
+ * Keep provider construction here. Domain modules depend on injected
+ * interfaces so they remain testable without live accounts.
+ */
 import type { Logger } from "pino";
 import type { Space } from "spectrum-ts";
 
@@ -96,6 +106,7 @@ function required<Value>(value: Value | undefined, stage: string): Value {
 }
 
 export async function createProductionRuntime(): Promise<ProductionRuntime> {
+  // Configuration and protected values
   const environment = loadEnvironment();
   const protectedValues = [
     environment.DATABASE_URL,
@@ -127,6 +138,8 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   const promptBundle = await loadPromptBundle();
   const modelProfiles = modelProfilesFromEnvironment(environment);
   const cipher = createDataCipher(environment.APP_ENCRYPTION_KEY);
+
+  // Codex runtime construction
   const codex = new CodexClient({
     codexHome: environment.CODEX_HOME,
     authMode: environment.CODEX_AUTH_MODE,
@@ -151,6 +164,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     maximumConcurrencyPerOwner: environment.MAX_OWNER_EXECUTION_CONCURRENCY,
   });
 
+  // Mutable provider lifecycle state
   let databaseClient: DatabaseClient | undefined;
   let queue: DurableQueue | undefined;
   let composition: QueueComposition | undefined;
@@ -158,6 +172,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   let spectrumLoop: Promise<void> | undefined;
   let memoryProvider: SupermemoryPort | undefined;
 
+  // Configuration and storage startup
   const bootstrap: AgentServiceBootstrap = {
     async prepareConfiguration() {
       // Parsing the environment and prompt contract above is the configuration
@@ -208,6 +223,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       });
     },
 
+    // Database and queue startup
     async connectDatabase() {
       databaseClient = createDatabaseClient({
         connectionString: environment.DATABASE_URL,
@@ -283,6 +299,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       };
     },
 
+    // Codex capability check
     async checkCodex() {
       const report = await probeCodexCapabilities({
         codexHome: environment.CODEX_HOME,
@@ -311,6 +328,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       };
     },
 
+    // Optional memory setup
     async configureSupermemory() {
       if (environment.SUPERMEMORY_API_KEY === undefined) {
         memoryProvider = undefined;
@@ -322,6 +340,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       return "ok";
     },
 
+    // Spectrum and worker composition
     async startSpectrum({ signal, readiness }) {
       const state = required(composition, "Spectrum startup");
       const durableQueue = required(queue, "Spectrum worker startup");
@@ -559,6 +578,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       });
     },
 
+    // Shutdown adapters
     async stopSpectrum() {
       await spectrumLoop?.catch(() => undefined);
       spectrumLoop = undefined;

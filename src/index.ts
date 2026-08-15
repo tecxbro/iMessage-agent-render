@@ -74,9 +74,12 @@ async function runStartupStage(
 }
 
 /**
- * Owns final boot ordering without importing provider-specific application
- * handlers. The integration worktree supplies the composed pipeline through
- * AgentServiceBootstrap after shared contracts have merged.
+ * Owns provider-neutral boot and shutdown ordering.
+ *
+ * HTTP starts first so `/healthz` remains available while private dependencies
+ * initialize. Spectrum starts only after Codex authentication and capability
+ * checks pass. Shutdown hooks are registered in reverse dependency order so
+ * intake and active work stop before queues, PostgreSQL, and HTTP close.
  */
 export async function startAgentService(
   options: StartAgentServiceOptions,

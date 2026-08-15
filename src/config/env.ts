@@ -117,6 +117,7 @@ const encryptionKeySchema = requiredText("APP_ENCRYPTION_KEY").refine((value) =>
 
 const rawEnvironmentSchema = z
   .object({
+    // Required infrastructure and process values
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
     PORT: integerFromEnvironment("PORT", 1, 65_535, 10_000),
     PATH: requiredText("PATH"),
@@ -134,6 +135,7 @@ const rawEnvironmentSchema = z
     ),
     APP_ENCRYPTION_KEY: encryptionKeySchema,
 
+    // Codex authentication and isolated storage
     CODEX_HOME: protectedPathSchema("CODEX_HOME"),
     AGENT_WORKSPACE_ROOT: protectedPathSchema("AGENT_WORKSPACE_ROOT"),
     CODEX_AUTH_MODE: z.enum(["chatgpt", "api_key"]).default("chatgpt"),
@@ -141,6 +143,7 @@ const rawEnvironmentSchema = z
       z.string().trim().min(1, "OPENAI_API_KEY must not be empty"),
     ),
 
+    // Optional semantic memory
     SUPERMEMORY_API_KEY: optionalText(
       z.string().trim().min(1, "SUPERMEMORY_API_KEY must not be empty"),
     ),
@@ -156,6 +159,7 @@ const rawEnvironmentSchema = z
           .default("imessage-agent"),
       ),
 
+    // Model profiles
     MODEL_FAST: modelIdentifierSchema.default("gpt-5.6-luna"),
     MODEL_FAST_EFFORT: reasoningEffortSchema.default("medium"),
     MODEL_MAIN: modelIdentifierSchema.default("gpt-5.6-luna"),
@@ -171,6 +175,7 @@ const rawEnvironmentSchema = z
       false,
     ),
 
+    // Operational limits, retention, and logging
     INBOUND_DEBOUNCE_MS: integerFromEnvironment(
       "INBOUND_DEBOUNCE_MS",
       3_000,
@@ -226,6 +231,8 @@ const rawEnvironmentSchema = z
     LOG_MESSAGE_CONTENT: booleanFromEnvironment("LOG_MESSAGE_CONTENT", false),
   })
   .superRefine((environment, context) => {
+    // Cross-field safety checks prevent individually valid values from creating
+    // an unsafe combined authentication, concurrency, or storage layout.
     if (
       environment.CODEX_AUTH_MODE === "api_key" &&
       environment.OPENAI_API_KEY === undefined
@@ -320,7 +327,8 @@ function loadLocalEnvironmentFile(): void {
 /**
  * Render injects a stable service ID, but Blueprint generated values are not
  * UUIDs. Derive the internal deployment UUID without prompting for another
- * value or exposing a provider identifier to memory namespaces.
+ * value. The deterministic hash keeps restart-stable database/memory namespaces
+ * without storing Render's provider identifier directly in those namespaces.
  */
 export function deploymentIdFromRenderServiceId(serviceId: string): string {
   const normalized = z

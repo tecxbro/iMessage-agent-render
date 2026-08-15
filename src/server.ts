@@ -1,3 +1,9 @@
+/**
+ * Executable production entrypoint.
+ *
+ * `src/index.ts` owns provider-neutral lifecycle ordering, while
+ * `production-bootstrap.ts` supplies the real provider and storage adapters.
+ */
 import { pathToFileURL } from "node:url";
 
 import {

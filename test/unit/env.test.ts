@@ -71,6 +71,13 @@ describe("loadEnvironment", () => {
   it.each([
     ["database protocol", { DATABASE_URL: "https://database.example.com" }],
     ["owner phone", { OWNER_PHONE_NUMBER: "not-a-phone" }],
+    [
+      "Render owner phone",
+      {
+        OWNER_PHONE_NUMBER: undefined,
+        OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123: "9495550123",
+      },
+    ],
     ["encryption key", { APP_ENCRYPTION_KEY: "too-short" }],
     ["filesystem root", { CODEX_HOME: "/" }],
     ["path traversal", { AGENT_WORKSPACE_ROOT: "../outside" }],
@@ -128,6 +135,32 @@ describe("loadEnvironment", () => {
       "+15557654321",
       "owner@example.com",
     ]);
+  });
+
+  it("normalizes the Render Blueprint owner-phone alias", () => {
+    const environment = loadEnvironment(
+      validEnvironment({
+        OWNER_PHONE_NUMBER: undefined,
+        OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123: "+19495550123",
+      }),
+    );
+
+    expect(environment.OWNER_PHONE_NUMBER).toBe("+19495550123");
+    expect(environment.AGENT_OWNER_HANDLES).toEqual(["+19495550123"]);
+    expect(environment).not.toHaveProperty(
+      "OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123",
+    );
+  });
+
+  it("rejects conflicting local and Render owner-phone values", () => {
+    expect(() =>
+      loadEnvironment(
+        validEnvironment({
+          OWNER_PHONE_NUMBER: "+15551234567",
+          OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123: "+19495550123",
+        }),
+      ),
+    ).toThrow(/must match when both are set/u);
   });
 
   it("requires a new owner phone number or the legacy owner fallback", () => {

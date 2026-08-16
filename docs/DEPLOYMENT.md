@@ -14,7 +14,7 @@ Before approving the Blueprint, confirm it creates exactly:
 - one Render PostgreSQL database; and
 - one persistent disk attached to the Web Service.
 
-Enter the required Spectrum credentials and application owner handles when prompted. `SUPERMEMORY_API_KEY` is optional. Render generates `APP_ENCRYPTION_KEY` and supplies `DATABASE_URL` from the attached database.
+Enter the application owner's phone number when prompted. Render generates `APP_ENCRYPTION_KEY` and supplies `DATABASE_URL` from the attached database; Photon and ChatGPT connect from the deployed agent dashboard.
 
 The build runs `npm ci --include=dev && npm run build`, the pre-deploy phase runs `npm run db:migrate`, and the service starts with `npm start`. The generated `onrender.com` URL is an operator status page, not an iMessage chat or Photon enrollment link.
 
@@ -23,12 +23,12 @@ The build runs `npm ci --include=dev && npm run build`, the pre-deploy phase run
 | Requirement | Why it is needed | Where to obtain it |
 |---|---|---|
 | Render account | Hosts the service, database, and disk | [Render](https://render.com/) |
-| Photon Spectrum project | Connects the iMessage line and persistent message stream | Photon dashboard |
-| Allowed owner handle | Restricts who can command the agent | Your E.164 phone number or iMessage email |
+| Photon account | Creates or connects the Spectrum project, iMessage line, and persistent message stream | Photon dashboard |
+| Allowed owner phone | Restricts who can command the agent | Your E.164 phone number |
 | ChatGPT device login or OpenAI API key | Authenticates Codex | ChatGPT account security or OpenAI Platform |
 | Supermemory API key | Optional semantic memory | Supermemory dashboard |
 
-`SPECTRUM_PROJECT_ID` and `SPECTRUM_PROJECT_SECRET` connect the provider line. `AGENT_OWNER_HANDLES` is a separate application allowlist. Enter the phone number or email Spectrum reports as the sender, such as `+15551234567` or `owner@example.com`.
+Enter the owner's phone number in E.164 format, such as `+19495550123`. After deployment, the dashboard authenticates Photon, provisions the provider project and line, and persists its private credentials separately from the owner allowlist.
 
 Never place credentials in source control, screenshots, tickets, database rows, Supermemory, or logs.
 
@@ -52,10 +52,9 @@ Render prompts for values marked `sync: false` only when the Blueprint is first 
 
 | Variable | Required | Value |
 |---|---:|---|
-| `SPECTRUM_PROJECT_ID` | Yes | Photon Spectrum project ID |
-| `SPECTRUM_PROJECT_SECRET` | Yes | Photon Spectrum project secret |
-| `AGENT_OWNER_HANDLES` | Yes | Comma-separated E.164 numbers or email addresses |
-| `SUPERMEMORY_API_KEY` | No | API key, or blank to disable semantic memory |
+| `OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123` | Yes | The owner's actual E.164 phone number, such as `+19495550123` |
+
+Render always labels the value control generically, so the Blueprint key carries the format example. Do not enter the example unless it is actually the owner's number. Existing services may keep using `OWNER_PHONE_NUMBER`; if both variables are present, they must match.
 
 The Blueprint supplies these values without prompting:
 
@@ -74,20 +73,13 @@ See [Configuration](./CONFIGURATION.md) for every supported variable.
 The default mode is `CODEX_AUTH_MODE=chatgpt`.
 
 1. Enable device-code login in the ChatGPT account or workspace if required.
-2. In Render, open the deployed **Web Service**.
-3. Open **Manage > Shell**. Do not use Connect/SSH for this flow.
-4. Run:
+2. In Render, open the deployed **Web Service** URL.
+3. Complete Photon authentication on the agent dashboard.
+4. Select **Connect ChatGPT**, open the device-auth popup, sign in, and enter the one-time code.
+5. Keep the dashboard open. It closes the popup when the browser permits, returns focus to setup, and shows Codex preparing.
+6. Confirm the dashboard reaches **Your agent is ready** and `/readyz` reports both `codexAuth` and `codexCapabilities` as `ok`.
 
-   ```bash
-   npm run codex:login
-   npm run codex:status
-   ```
-
-5. Open the displayed device-auth URL in a trusted browser, sign in, and enter the one-time code.
-6. Restart the Web Service.
-7. Run `npm run codex:status` again and confirm `/readyz` reports both `codexAuth` and `codexCapabilities` as `ok`.
-
-Credentials persist under `/var/data/codex`. Do not print or copy `$CODEX_HOME/auth.json`. If permissions need repair, use the private shell:
+Credentials persist under `/var/data/codex`. Do not print or copy `$CODEX_HOME/auth.json`. The private **Manage > Shell** flow remains an operator recovery path if permissions need repair:
 
 ```bash
 test -f "$CODEX_HOME/auth.json"
@@ -128,7 +120,7 @@ Do not use `/healthz` as deployment acceptance. Do not expose the full response 
 
 Only start after `/readyz` returns 200.
 
-1. Send a direct iMessage from a handle in `AGENT_OWNER_HANDLES`.
+1. Send a direct iMessage from the configured owner phone number.
 2. Confirm one terminal response is delivered.
 3. Send from an unauthorized handle and confirm zero Codex child processes start.
 4. Restart the Web Service normally.

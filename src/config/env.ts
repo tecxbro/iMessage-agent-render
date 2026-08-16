@@ -142,6 +142,11 @@ const rawEnvironmentSchema = z
     OWNER_PHONE_NUMBER: optionalText(
       e164PhoneNumberSchema("OWNER_PHONE_NUMBER"),
     ),
+    OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123: optionalText(
+      e164PhoneNumberSchema(
+        "OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123",
+      ),
+    ),
     AGENT_OWNER_HANDLES: z.preprocess(
       emptyToUndefined,
       ownerHandlesSchema.optional(),
@@ -267,6 +272,8 @@ const rawEnvironmentSchema = z
 
     if (
       environment.OWNER_PHONE_NUMBER === undefined &&
+      environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123 ===
+        undefined &&
       environment.AGENT_OWNER_HANDLES === undefined
     ) {
       context.addIssue({
@@ -274,6 +281,21 @@ const rawEnvironmentSchema = z
         path: ["OWNER_PHONE_NUMBER"],
         message:
           "OWNER_PHONE_NUMBER is required unless AGENT_OWNER_HANDLES is set by an existing deployment",
+      });
+    }
+
+    if (
+      environment.OWNER_PHONE_NUMBER !== undefined &&
+      environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123 !==
+        undefined &&
+      environment.OWNER_PHONE_NUMBER !==
+        environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123"],
+        message:
+          "OWNER_PHONE_NUMBER and OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123 must match when both are set",
       });
     }
 
@@ -324,13 +346,24 @@ const rawEnvironmentSchema = z
       });
     }
   })
-  .transform((environment) => ({
-    ...environment,
-    AGENT_OWNER_HANDLES:
-      environment.OWNER_PHONE_NUMBER === undefined
-        ? environment.AGENT_OWNER_HANDLES!
-        : [environment.OWNER_PHONE_NUMBER],
-  }));
+  .transform((environment) => {
+    const {
+      OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123:
+        renderOwnerPhoneNumber,
+      ...normalizedEnvironment
+    } = environment;
+    const ownerPhoneNumber =
+      renderOwnerPhoneNumber ?? environment.OWNER_PHONE_NUMBER;
+
+    return {
+      ...normalizedEnvironment,
+      OWNER_PHONE_NUMBER: ownerPhoneNumber,
+      AGENT_OWNER_HANDLES:
+        ownerPhoneNumber === undefined
+          ? environment.AGENT_OWNER_HANDLES!
+          : [ownerPhoneNumber],
+    };
+  });
 
 export type Environment = z.infer<typeof rawEnvironmentSchema>;
 

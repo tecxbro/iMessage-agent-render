@@ -18,11 +18,15 @@ All changes require a service restart. Render-managed values should be changed t
 
 | Variable | Required | Default | Where to obtain it | Restart required | Sensitive |
 |---|---:|---|---|---:|---:|
-| `AGENT_OWNER_HANDLES` | Yes | — | User-provided E.164 numbers or iMessage emails | Yes | Private |
+| `OWNER_PHONE_NUMBER` | Yes locally or on existing deployments | — | Owner's E.164 phone number | Yes | Private |
+| `OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123` | New Render deployments only | — | Render Blueprint prompt | Yes | Private |
+| `AGENT_OWNER_HANDLES` | Legacy fallback only | — | Existing comma-separated numbers or iMessage emails | Yes | Private |
 | `PAIRING_MODE` | No | `off` | Operator policy | Yes | No |
 | `GROUP_MODE` | No | `owner_mentions_only` | Operator policy | Yes | No |
 
-`AGENT_OWNER_HANDLES` accepts a comma-separated list. Phone numbers must use E.164 format, such as `+15551234567`; email addresses are normalized to lowercase. Spectrum line configuration does not replace this application allowlist.
+The Render Blueprint uses the long `OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123` key because Render's `sync: false` form does not support custom placeholders. Enter the actual owner number in E.164 format, such as `+19495550123`; the key's example is not a value to copy. The runtime normalizes that Render-only alias to `OWNER_PHONE_NUMBER`.
+
+Existing deployments and local `.env` files may continue using `OWNER_PHONE_NUMBER`. If both phone variables are set, they must match. `AGENT_OWNER_HANDLES` remains a backwards-compatible fallback for existing comma-separated phone numbers or iMessage emails; emails are normalized to lowercase. Photon line setup does not replace this application allowlist.
 
 Keep `PAIRING_MODE=off` unless pairing has been explicitly reviewed for the deployment. `GROUP_MODE=disabled` rejects group use; `owner_mentions_only` requires the owner/group policy enforced by the application.
 

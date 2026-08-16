@@ -55,7 +55,7 @@ function renderPhotonAction(status: PhotonSetupStatus): string {
     return `<div class="auth-flow">
       <p>Open Photon and enter this one-time code.</p>
       <code class="device-code">${escapeHtml(status.userCode)}</code>
-      <a class="button" href="${escapeHtml(status.verificationUrl)}" target="_blank" rel="noreferrer">Open Photon</a>
+      <a class="button" href="${escapeHtml(status.verificationUrl)}" target="_blank" rel="noreferrer" data-auth-link="photon">Open Photon</a>
     </div>`;
   }
   if (status.state === "provisioning") {
@@ -82,7 +82,7 @@ function renderChatGptAction(
     return `<div class="auth-flow">
       <p>Open ChatGPT, sign in, and enter this one-time code.</p>
       <code class="device-code">${escapeHtml(status.userCode)}</code>
-      <a class="button" href="${escapeHtml(status.verificationUrl)}" target="_blank" rel="noreferrer">Sign in with ChatGPT</a>
+      <a class="button" href="${escapeHtml(status.verificationUrl)}" target="_blank" rel="noreferrer" data-auth-link="chatgpt">Sign in with ChatGPT</a>
     </div>`;
   }
   if (status.state === "starting") {
@@ -161,7 +161,7 @@ export function renderDeploymentPage(
       <section class="card" aria-labelledby="photon-title">
         <div class="card-heading">
           <h2 id="photon-title">Photon</h2>
-          <div class="state ${photonConnected ? "ok" : ""}" aria-live="polite">${escapeHtml(photonStateLabel(photonStatus))}</div>
+          <div id="photon-state" class="state ${photonConnected ? "ok" : ""}" aria-live="polite">${escapeHtml(photonStateLabel(photonStatus))}</div>
         </div>
         ${renderPhotonAction(photonStatus)}
       </section>
@@ -183,6 +183,13 @@ export function renderDeploymentPage(
           <h2 id="codex-title">Codex</h2>
           <div class="state ${codexReady ? "ok" : ""}" aria-live="polite">${codexReady ? "✓ Ready" : "Getting ready"}</div>
         </div>
+        ${
+          codexReady
+            ? ""
+            : `<div class="codex-progress" role="progressbar" aria-label="Codex is getting ready">
+          <span aria-hidden="true"></span>
+        </div>`
+        }
       </section>`
           : ""
       }
@@ -221,6 +228,9 @@ export function renderDeploymentPage(
       margin: 0;
       min-inline-size: 20rem;
       min-block-size: 100vh;
+      min-block-size: 100svh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
       background: var(--bg);
       color: var(--text);
       font-family: "Photon PolySans", Arial, sans-serif;
@@ -235,9 +245,12 @@ export function renderDeploymentPage(
     .photon-link { display: inline-flex; inline-size: 2.75rem; block-size: 2.75rem; align-items: center; justify-content: center; border-radius: 0.7rem; color: var(--text); text-decoration: none; }
     .photon-logo { display: block; inline-size: 2.75rem; block-size: 2.75rem; border-radius: 0.7rem; }
     .product-name { font-size: 1rem; font-variation-settings: "wght" 550; }
+    .topbar-nav { display: flex; align-items: center; gap: clamp(0.75rem, 3vw, 1.75rem); }
+    .topbar-link { display: inline-flex; min-block-size: 2.75rem; align-items: center; color: var(--text); font-size: 0.92rem; font-variation-settings: "wght" 600; text-decoration: none; }
+    .topbar-link:hover, .topbar-link:focus-visible { text-decoration: underline; text-underline-offset: 0.3em; }
     .topbar-state, .eyebrow, .state { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     .topbar-state, .eyebrow { color: var(--muted); font-size: 0.72rem; font-weight: 650; letter-spacing: 0.2em; text-transform: uppercase; }
-    .shell { inline-size: min(100% - 2.5rem, 58rem); margin-inline: auto; padding-block: clamp(3rem, 9vw, 7.5rem); }
+    .shell { inline-size: min(100% - 2.5rem, 58rem); margin-inline: auto; padding-block: clamp(2.25rem, 6vw, 3.5rem); }
     .shell > * { animation: enter 420ms cubic-bezier(0.22, 1, 0.36, 1) both; }
     .shell > :nth-child(2) { animation-delay: 50ms; }
     .shell > :nth-child(3) { animation-delay: 90ms; }
@@ -245,7 +258,7 @@ export function renderDeploymentPage(
     h1 { max-inline-size: 13ch; margin: 0 0 1rem; font-size: clamp(3rem, 9vw, 6rem); font-weight: 300; font-variation-settings: "wght" 650; line-height: 0.94; letter-spacing: -0.055em; }
     h2 { margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); font-weight: 300; font-variation-settings: "wght" 600; line-height: 1; letter-spacing: -0.035em; }
     .eyebrow { margin: 0 0 1.2rem; }
-    .intro { max-inline-size: 39rem; margin: 0 0 clamp(3rem, 7vw, 5rem); color: var(--muted); font-size: clamp(1.1rem, 3vw, 1.4rem); line-height: 1.45; }
+    .intro { max-inline-size: 39rem; margin: 0 0 clamp(2.25rem, 5vw, 3.5rem); color: var(--muted); font-size: clamp(1.1rem, 3vw, 1.4rem); line-height: 1.45; }
     .stack { display: grid; border-block-start: 0.0625rem solid var(--line); }
     .card { padding-block: clamp(1.75rem, 5vw, 2.75rem); border-block-end: 0.0625rem solid var(--line); background: transparent; }
     .compact { padding-block: 1.75rem; }
@@ -255,6 +268,8 @@ export function renderDeploymentPage(
     .state.ok, .ready-list { color: var(--text); }
     .auth-flow { display: grid; justify-items: start; gap: 1rem; }
     .auth-flow p, .progress { max-inline-size: 38rem; margin: 0; color: var(--muted); }
+    .codex-progress { position: relative; inline-size: 100%; block-size: 0.35rem; margin-block-start: 1.35rem; overflow: hidden; border-radius: 999rem; background: var(--line); }
+    .codex-progress span { display: block; inline-size: 34%; block-size: 100%; border-radius: inherit; background: var(--accent); animation: codex-progress 1.4s ease-in-out infinite; transform: translateX(-110%); }
     .device-code { display: block; padding: 0.85rem 1rem; border: 0.0625rem solid var(--line); border-radius: 0.4rem; background: var(--soft); font: 750 clamp(1.2rem, 6vw, 2rem) ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.08em; }
     .button { display: inline-flex; min-block-size: 3rem; align-items: center; justify-content: center; padding: 0.72rem 1.15rem; border: 0.0625rem solid var(--accent); border-radius: 999rem; background: var(--accent); color: white; font: inherit; font-size: 1rem; font-variation-settings: "wght" 550; text-decoration: none; cursor: pointer; transition: transform 160ms ease, background-color 160ms ease; }
     .button:hover, .button:focus-visible { background: var(--accent-hover); transform: translateY(-0.1rem); }
@@ -263,24 +278,25 @@ export function renderDeploymentPage(
     .error { color: var(--danger); }
     .error code { font-size: 0.8em; }
     .error + .button { margin-block-start: 0.75rem; }
-    .ready-card { display: grid; gap: 2.5rem; margin-block-start: 3rem; padding-block: 2.5rem; border-block: 0.0625rem solid var(--line); }
+    .ready-card { display: grid; gap: 1.5rem; margin-block-start: 2rem; padding-block: 2rem; border-block: 0.0625rem solid var(--line); }
     .ready-list { display: grid; gap: 0.7rem; margin: 0; padding: 0; list-style: none; font-size: 1.35rem; }
     .agent-number { display: grid; gap: 0.2rem; }
     .agent-number span { color: var(--muted); }
     .agent-number strong { font-size: clamp(2rem, 7vw, 3.5rem); font-weight: 400; letter-spacing: -0.035em; }
     .ready-message { margin: 0; font-size: 1.3rem; }
-    .photon-cta { padding: clamp(4rem, 10vw, 8rem) 1.25rem; border-block-start: 0.0625rem solid var(--line); background: var(--soft); text-align: center; }
-    .photon-cta-inner { inline-size: min(100%, 64rem); margin-inline: auto; }
-    .photon-cta h2 { max-inline-size: 18ch; margin-inline: auto; font-size: clamp(2.8rem, 8vw, 5.5rem); font-variation-settings: "wght" 700; line-height: 0.95; }
-    .photon-cta-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.85rem; margin-block-start: clamp(2rem, 5vw, 3rem); }
-    .photon-cta .button { min-inline-size: 9.5rem; }
-    .photon-cta .button-secondary { background: var(--surface); color: var(--text); }
-    .photon-cta .button-secondary:hover, .photon-cta .button-secondary:focus-visible { background: var(--soft); }
+    .site-footer { border-block-start: 0.0625rem solid var(--line); background: var(--soft); }
+    .footer-inner { display: flex; inline-size: min(100% - 2.5rem, 64rem); min-block-size: 5rem; margin-inline: auto; align-items: center; justify-content: space-between; gap: 1.5rem; padding-block: 1rem; }
+    .footer-copy { margin: 0; color: var(--muted); }
+    .footer-copy strong { color: var(--text); font-variation-settings: "wght" 600; }
+    .footer-links { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.35rem 1.25rem; }
+    .footer-links a { display: inline-flex; min-block-size: 2.75rem; align-items: center; color: var(--text); font-size: 0.9rem; font-variation-settings: "wght" 600; text-underline-offset: 0.25em; }
     .visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     @keyframes enter { from { opacity: 0; transform: translateY(0.6rem); } to { opacity: 1; transform: translateY(0); } }
-    @media (max-width: 32rem) { .topbar-state { display: none; } .card-heading { align-items: flex-start; } .state { max-inline-size: 10rem; } }
+    @keyframes codex-progress { 0% { transform: translateX(-110%); } 55% { transform: translateX(105%); } 100% { transform: translateX(300%); } }
+    @media (max-width: 32rem) { .topbar-state { display: none; } .card-heading { align-items: flex-start; } .state { max-inline-size: 10rem; } .ready-shell { padding-block: 1.5rem; } .ready-shell h1 { font-size: 2.6rem; } .ready-card { gap: 1.1rem; margin-block-start: 1.25rem; padding-block: 1.25rem; } .ready-list { gap: 0.45rem; font-size: 1.15rem; } .ready-message { font-size: 1.1rem; } .footer-inner { align-items: flex-start; flex-direction: column; gap: 0.25rem; } .footer-links { justify-content: flex-start; } }
     @media (prefers-contrast: more) { :root { --muted: #3f3f3d; --line: #777772; } .card, .device-code { border-width: 0.125rem; } }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } }
+    @media (prefers-contrast: forced) { .codex-progress { border: 0.125rem solid CanvasText; } .codex-progress span { background: Highlight; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } .codex-progress span { inline-size: 38%; animation: none !important; opacity: 0.55; transform: none; } }
   </style>
 </head>
 <body data-photon-state="${photonStatus.state}" data-chatgpt-state="${chatGptStatus.state}" data-ready="${String(agentReady)}">
@@ -292,18 +308,21 @@ export function renderDeploymentPage(
       </a>
       <span class="product-name">iMessage Agent</span>
     </div>
-    <span class="topbar-state">Private setup</span>
+    <nav class="topbar-nav" aria-label="Photon">
+      <span class="topbar-state">Private setup</span>
+      <a class="topbar-link" href="https://photon.codes" target="_blank" rel="noreferrer">Build with Photon</a>
+    </nav>
   </header>
-  <main id="main-content" class="shell">${content}</main>
-  <section class="photon-cta" aria-labelledby="photon-cta-title">
-    <div class="photon-cta-inner">
-      <h2 id="photon-cta-title">Start building with Photon today</h2>
-      <div class="photon-cta-actions">
-        <a class="button" href="https://photon.codes/docs/spectrum-ts/introduction" target="_blank" rel="noreferrer">View Docs</a>
-        <a class="button button-secondary" href="https://photon.codes/contact" target="_blank" rel="noreferrer">Talk to an Expert</a>
-      </div>
+  <main id="main-content" class="shell${agentReady ? " ready-shell" : ""}">${content}</main>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <p class="footer-copy"><strong>Build with Photon.</strong> Ship messaging apps with Spectrum.</p>
+      <nav class="footer-links" aria-label="Photon resources">
+        <a href="https://photon.codes/docs/spectrum-ts/introduction" target="_blank" rel="noreferrer">View Docs</a>
+        <a href="https://photon.codes/contact" target="_blank" rel="noreferrer">Talk to an Expert</a>
+      </nav>
     </div>
-  </section>
+  </footer>
   <script src="/agent/dashboard.js" defer data-polling="${String(polling)}"></script>
 </body>
 </html>`;
@@ -313,7 +332,39 @@ export function renderDashboardScript(): string {
   return `(() => {
   const script = document.currentScript;
   let timer;
+  let authWindow;
   const reload = () => window.location.reload();
+  const hasOpenAuthWindow = () => {
+    try {
+      return Boolean(authWindow && !authWindow.closed);
+    } catch {
+      return false;
+    }
+  };
+  const closeAuthWindow = () => {
+    try {
+      if (authWindow && !authWindow.closed) authWindow.close();
+    } catch {}
+    authWindow = undefined;
+  };
+  const returnToDashboard = () => {
+    closeAuthWindow();
+    window.focus();
+    reload();
+  };
+  function openAuthentication(event) {
+    const control = event.currentTarget;
+    const popup = window.open("", "agent-provider-auth", "popup=yes,width=560,height=760");
+    if (!popup) return;
+    try {
+      popup.opener = null;
+      popup.location.replace(control.href);
+      authWindow = popup;
+      event.preventDefault();
+    } catch {
+      popup.close();
+    }
+  }
   async function start(kind) {
     const control = document.getElementById(kind + "-start");
     if (control) control.disabled = true;
@@ -336,7 +387,28 @@ export function renderDashboardScript(): string {
       const photon = await photonResponse.json();
       const chatgpt = await chatgptResponse.json();
       const readiness = await readinessResponse.json();
-      if (photon.state !== document.body.dataset.photonState || chatgpt.state !== document.body.dataset.chatgptState || String(readiness.ready) !== document.body.dataset.ready) {
+      const photonState = document.body.dataset.photonState;
+      const chatgptState = document.body.dataset.chatgptState;
+      const authCompleted =
+        (photonState === "awaiting_authorization" && photon.state === "connected") ||
+        (chatgptState === "awaiting_authorization" && chatgpt.state === "connected");
+      if (authCompleted) {
+        returnToDashboard();
+        return;
+      }
+      const photonProvisioningInPopup =
+        hasOpenAuthWindow() &&
+        photonState === "awaiting_authorization" &&
+        photon.state === "provisioning";
+      const stateChanged =
+        photon.state !== photonState ||
+        chatgpt.state !== chatgptState ||
+        String(readiness.ready) !== document.body.dataset.ready;
+      if (photonProvisioningInPopup) {
+        const state = document.getElementById("photon-state");
+        if (state) state.textContent = "Finishing setup";
+      } else if (stateChanged) {
+        closeAuthWindow();
         reload();
         return;
       }
@@ -346,6 +418,9 @@ export function renderDashboardScript(): string {
   for (const kind of ["photon", "chatgpt"]) {
     const control = document.getElementById(kind + "-start");
     if (control) control.addEventListener("click", () => void start(kind));
+  }
+  for (const control of document.querySelectorAll("[data-auth-link]")) {
+    control.addEventListener("click", openAuthentication);
   }
   if (script && script.dataset.polling === "true") timer = window.setTimeout(refresh, 2000);
   window.addEventListener("pagehide", () => window.clearTimeout(timer), { once: true });

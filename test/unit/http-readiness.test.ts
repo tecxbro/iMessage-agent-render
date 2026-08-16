@@ -69,7 +69,9 @@ describe("health and readiness endpoints", () => {
     expect(deploymentPage).toContain("Photon PolySans");
     expect(deploymentPage).toContain('src="/agent/photon-logo.png"');
     expect(deploymentPage).toContain('href="https://photon.codes"');
-    expect(deploymentPage).toContain("Start building with Photon today");
+    expect(deploymentPage).toContain("Build with Photon");
+    expect(deploymentPage).toContain('<footer class="site-footer">');
+    expect(deploymentPage).toContain("Ship messaging apps with Spectrum");
     expect(deploymentPage).toContain(
       'href="https://photon.codes/docs/spectrum-ts/introduction"',
     );
@@ -80,6 +82,7 @@ describe("health and readiness endpoints", () => {
     expect(deploymentPage).not.toContain("gradient");
     expect(deploymentPage).not.toContain("photon-green");
     expect(deploymentPage).not.toContain("backdrop-filter");
+    expect(deploymentPage).not.toContain("photon-cta");
     expect(deploymentPage).not.toContain("Supermemory");
     expect(deploymentPage).not.toContain("photon-super-secret");
 
@@ -238,6 +241,7 @@ describe("health and readiness endpoints", () => {
     const deviceHtml = await devicePage.text();
     expect(deviceHtml).toContain("https://auth.openai.com/codex/device");
     expect(deviceHtml).toContain("ABCD-1234");
+    expect(deviceHtml).toContain('data-auth-link="chatgpt"');
     expect(deviceHtml).not.toContain("auth.json");
   });
 
@@ -290,6 +294,10 @@ describe("health and readiness endpoints", () => {
     expect(page).not.toContain("Connect ChatGPT");
     expect(page).not.toContain("ChatGPT setup could not finish");
     expect(page).toContain("Getting ready");
+    expect(page).toContain('role="progressbar"');
+    expect(page).toContain('aria-label="Codex is getting ready"');
+    expect(page).toContain("@keyframes codex-progress");
+    expect(page).toContain("prefers-reduced-motion: reduce");
   });
 
   it("renders the final agent-ready dashboard only after both setups and Codex are ready", async () => {
@@ -338,6 +346,7 @@ describe("health and readiness endpoints", () => {
     expect(page).toContain("+16285550123");
     expect(page).toContain("Your agent is ready.");
     expect(page).toContain("Text it to get started.");
+    expect(page).not.toContain('role="progressbar"');
 
     const script = await fetch(
       `http://127.0.0.1:${address.port}/agent/dashboard.js`,
@@ -440,6 +449,13 @@ describe("health and readiness endpoints", () => {
       `http://127.0.0.1:${address.port}/api/setup/photon/status`,
     );
     await expect(current.json()).resolves.toEqual(status);
+
+    const dashboard = await fetch(
+      `http://127.0.0.1:${address.port}/agent/dashboard`,
+    );
+    const page = await dashboard.text();
+    expect(page).toContain("https://app.photon.codes/device");
+    expect(page).toContain('data-auth-link="photon"');
   });
 
   it("exposes only the narrow setup methods and no command endpoint", async () => {

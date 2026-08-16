@@ -10,8 +10,8 @@ Deploy a private iMessage agent powered by Photon Spectrum, Codex, PostgreSQL, a
 
 You need:
 
-- a Photon project with Spectrum Cloud iMessage configured;
-- the phone number or email address allowed to message the agent;
+- a Photon account for Spectrum Cloud iMessage setup;
+- the owner's E.164 phone number allowed to message the agent;
 - either a ChatGPT account with Codex device login enabled or an OpenAI API key; and
 - an optional Supermemory API key if you want semantic memory.
 
@@ -20,9 +20,9 @@ Review current Render pricing before deploying. The Blueprint creates paid resou
 ## Deploy in five steps
 
 1. Click **Deploy to Render** above.
-2. Enter the Spectrum project ID, Spectrum secret, and authorized owner handle when Render prompts for them. Add a Supermemory API key or leave it blank.
+2. Enter the owner's E.164 phone number when Render prompts for it, such as `+19495550123`.
 3. Let Render create the Web Service, PostgreSQL database, persistent disk, and application encryption key. The pre-deploy command applies the checked-in database migrations.
-4. Open the Web Service's private **Manage > Shell** and run `npm run codex:login`, followed by `npm run codex:status`. If you choose API-key mode instead, set `CODEX_AUTH_MODE=api_key` and add `OPENAI_API_KEY` as a Render secret.
+4. Open the Web Service URL, authenticate Photon, then connect ChatGPT from the agent dashboard. If you choose API-key mode instead, set `CODEX_AUTH_MODE=api_key` and add `OPENAI_API_KEY` as a Render secret.
 5. Confirm `/readyz` returns HTTP 200, then message the agent from the authorized iMessage handle.
 
 Render keeps auto-deploys off for template-created services. Deploy reviewed updates manually so a push to the original template cannot redeploy every user's copy.
@@ -33,17 +33,10 @@ Render keeps auto-deploys off for template-created services. Deploy reviewed upd
 
 The default `CODEX_AUTH_MODE` is `chatgpt`.
 
-1. Open the deployed **Web Service** in Render.
-2. Open **Manage > Shell**. Do not use Connect/SSH for this flow.
-3. Run:
-
-   ```bash
-   npm run codex:login
-   npm run codex:status
-   ```
-
-4. Open the displayed device-auth URL in a trusted browser, sign in, and enter the one-time code.
-5. Restart the service, then run `npm run codex:status` again.
+1. Open the deployed **Web Service** URL in a trusted browser.
+2. Finish Photon setup first, then select **Connect ChatGPT**.
+3. Open the displayed device-auth URL, sign in, and enter the one-time code.
+4. Keep the dashboard open while it verifies the login and prepares Codex. The dashboard advances automatically when each stage is ready.
 
 ChatGPT credentials persist under `/var/data/codex`. Treat `auth.json` like a password: never print it, copy it into a ticket, or commit it.
 
@@ -77,7 +70,7 @@ The root URL is an operator status page, not an iMessage chat or Photon enrollme
 
 After `/readyz` is 200:
 
-1. Send a direct iMessage to the Spectrum-connected line from a phone number or email listed in `AGENT_OWNER_HANDLES`.
+1. Send a direct iMessage to the Spectrum-connected line from the configured owner phone number.
 2. Confirm the agent sends one terminal response.
 3. Send from an unauthorized handle and confirm no Codex process starts.
 4. Restart the Web Service, wait for `/readyz` to return 200, and send a follow-up.
@@ -110,7 +103,7 @@ The most common edits are:
 | Execution behavior | `prompts/execution.system.md` |
 | Approval rules | `prompts/approval-policy.md` |
 | Models and reasoning effort | `.env` model variables |
-| Authorized senders | `AGENT_OWNER_HANDLES` |
+| Authorized sender | `OWNER_PHONE_NUMBER` (`AGENT_OWNER_HANDLES` remains a legacy fallback) |
 | Semantic memory | `SUPERMEMORY_API_KEY` |
 | Render region, plans, and disk | `render.yaml` |
 | Concurrency and runtime limits | `.env` |

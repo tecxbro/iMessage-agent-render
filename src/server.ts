@@ -40,6 +40,10 @@ async function main(): Promise<void> {
       supermemoryConfigured:
         runtime.environment.SUPERMEMORY_API_KEY !== undefined,
     },
+    photonSetup: runtime.photonSetup,
+    ...(runtime.chatgptSetup === undefined
+      ? {}
+      : { chatgptSetup: runtime.chatgptSetup }),
     onStartupFailure: (code) => {
       runtime.logger.error(
         { component: "bootstrap", errorCode: code },

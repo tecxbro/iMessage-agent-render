@@ -13,6 +13,10 @@ import { dirname, resolve } from "node:path";
 import type { Logger } from "pino";
 import type { Space } from "spectrum-ts";
 
+import {
+  CodexAppServerAuth,
+  type ChatGptSetupController,
+} from "../agent/codex-app-server-auth.js";
 import { CodexClient } from "../agent/codex-client.js";
 import { buildCodexChildEnvironment } from "../agent/child-environment.js";
 import { ExecutionRuntime } from "../agent/execution-runtime.js";
@@ -69,12 +73,17 @@ import { OperationalRateLimits } from "../security/rate-limits.js";
 import { auditStartupSecretBoundaries } from "../security/secret-boundaries.js";
 import { runSpectrumMessageLoop } from "../transport/message-loop.js";
 import {
+  PhotonSetupService,
+  type PhotonSetupController,
+} from "../transport/photon-setup.js";
+import {
   DurableInboundConsumer,
   NativeSpectrumOutboundTransport,
 } from "../transport/operational.js";
 import { createSpectrumSpaceResolver } from "../transport/space-resolver.js";
 import {
   createSpectrumApp,
+  resolveSpectrumCloudCredentials,
   spectrumCredentialsFromEnvironment,
   type SpectrumCloudCredentials,
   type SpectrumApp,
@@ -100,6 +109,8 @@ export interface ProductionRuntime {
   logger: Logger;
   promptBundleVersion: string;
   bootstrap: AgentServiceBootstrap;
+  photonSetup: PhotonSetupController;
+  chatgptSetup?: ChatGptSetupController;
 }
 
 function required<Value>(value: Value | undefined, stage: string): Value {
@@ -118,13 +129,20 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     encryptionKey: environment.APP_ENCRYPTION_KEY,
   });
   const storedPhotonSetup = await photonCredentialsStore.load();
-  const spectrumCredentials: SpectrumCloudCredentials | undefined =
-    storedPhotonSetup === undefined
-      ? spectrumCredentialsFromEnvironment(environment)
-      : {
-          projectId: storedPhotonSetup.photonProjectId,
-          projectSecret: storedPhotonSetup.spectrumProjectSecret,
-        };
+  const legacySpectrumCredentials =
+    spectrumCredentialsFromEnvironment(environment);
+  const photonSetup = new PhotonSetupService({
+    ...(environment.OWNER_PHONE_NUMBER === undefined
+      ? {}
+      : { ownerPhoneNumber: environment.OWNER_PHONE_NUMBER }),
+    credentialsStore: photonCredentialsStore,
+    ...(storedPhotonSetup === undefined
+      ? {}
+      : { storedCredentials: storedPhotonSetup }),
+    legacyCredentialsPresent: legacySpectrumCredentials !== undefined,
+  });
+  let spectrumCredentials: SpectrumCloudCredentials | undefined =
+    resolveSpectrumCloudCredentials(storedPhotonSetup, environment);
   const ownerHandles =
     storedPhotonSetup === undefined
       ? environment.AGENT_OWNER_HANDLES
@@ -168,24 +186,32 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   };
   const promptBundle = await loadPromptBundle();
   const modelProfiles = modelProfilesFromEnvironment(environment);
+  const codexParentEnvironment = {
+    PATH: environment.PATH,
+    ...(environment.LANG === undefined ? {} : { LANG: environment.LANG }),
+    ...(environment.LANGUAGE === undefined
+      ? {}
+      : { LANGUAGE: environment.LANGUAGE }),
+    ...(environment.LC_ALL === undefined
+      ? {}
+      : { LC_ALL: environment.LC_ALL }),
+    ...(environment.LC_CTYPE === undefined
+      ? {}
+      : { LC_CTYPE: environment.LC_CTYPE }),
+  };
+  const chatgptSetup =
+    environment.CODEX_AUTH_MODE === "chatgpt"
+      ? new CodexAppServerAuth({
+          codexHome: environment.CODEX_HOME,
+          parentEnvironment: codexParentEnvironment,
+        })
+      : undefined;
 
   // Codex runtime construction
   const codex = new CodexClient({
     codexHome: environment.CODEX_HOME,
     authMode: environment.CODEX_AUTH_MODE,
-    parentEnvironment: {
-      PATH: environment.PATH,
-      ...(environment.LANG === undefined ? {} : { LANG: environment.LANG }),
-      ...(environment.LANGUAGE === undefined
-        ? {}
-        : { LANGUAGE: environment.LANGUAGE }),
-      ...(environment.LC_ALL === undefined
-        ? {}
-        : { LC_ALL: environment.LC_ALL }),
-      ...(environment.LC_CTYPE === undefined
-        ? {}
-        : { LC_CTYPE: environment.LC_CTYPE }),
-    },
+    parentEnvironment: codexParentEnvironment,
     ...(environment.OPENAI_API_KEY === undefined
       ? {}
       : { openAiApiKey: environment.OPENAI_API_KEY }),
@@ -251,6 +277,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         childEnvironment,
         protectedValues,
       });
+      await chatgptSetup?.initialize();
     },
 
     // Database and queue startup
@@ -372,15 +399,14 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
 
     // Spectrum and worker composition
     async startSpectrum({ signal, readiness }) {
+      const credentials = required(
+        spectrumCredentials,
+        "Spectrum credential setup",
+      );
       const state = required(composition, "Spectrum startup");
       const durableQueue = required(queue, "Spectrum worker startup");
       const client = required(databaseClient, "Spectrum startup");
-      if (spectrumCredentials === undefined) {
-        throw new Error(
-          "Photon setup is incomplete. Complete Photon setup or provide both legacy Spectrum environment variables, then restart.",
-        );
-      }
-      spectrumApp = await createSpectrumApp(spectrumCredentials);
+      spectrumApp = await createSpectrumApp(credentials);
       const resolver = createSpectrumSpaceResolver(spectrumApp);
       const outboundTransport = new NativeSpectrumOutboundTransport({
         operational: state.operational,
@@ -618,6 +644,10 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       spectrumApp = undefined;
     },
 
+    async stopCodex() {
+      await chatgptSetup?.close();
+    },
+
     async stopQueue() {
       await queue?.stop();
       queue = undefined;
@@ -629,10 +659,19 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     },
   };
 
+  photonSetup.onConnected((credentials) => {
+    spectrumCredentials = {
+      projectId: credentials.photonProjectId,
+      projectSecret: credentials.spectrumProjectSecret,
+    };
+  });
+
   return {
     environment,
     logger,
     promptBundleVersion: promptBundle.version,
     bootstrap,
+    photonSetup,
+    ...(chatgptSetup === undefined ? {} : { chatgptSetup }),
   };
 }

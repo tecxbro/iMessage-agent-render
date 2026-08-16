@@ -8,6 +8,11 @@ export interface SpectrumCloudCredentials {
   projectSecret: string;
 }
 
+export interface PersistedPhotonCredentials {
+  photonProjectId: string;
+  spectrumProjectSecret: string;
+}
+
 export function spectrumCredentialsFromEnvironment(
   environment: Pick<
     Environment,
@@ -24,6 +29,26 @@ export function spectrumCredentialsFromEnvironment(
     projectId: environment.SPECTRUM_PROJECT_ID,
     projectSecret: environment.SPECTRUM_PROJECT_SECRET,
   };
+}
+
+/**
+ * Resolves runtime credentials with dashboard-managed Photon setup taking
+ * precedence over the legacy environment pair.
+ */
+export function resolveSpectrumCloudCredentials(
+  persisted: PersistedPhotonCredentials | undefined,
+  environment: Pick<
+    Environment,
+    "SPECTRUM_PROJECT_ID" | "SPECTRUM_PROJECT_SECRET"
+  >,
+): SpectrumCloudCredentials | undefined {
+  if (persisted !== undefined) {
+    return {
+      projectId: persisted.photonProjectId,
+      projectSecret: persisted.spectrumProjectSecret,
+    };
+  }
+  return spectrumCredentialsFromEnvironment(environment);
 }
 
 export function buildSpectrumCloudOptions(

@@ -8,6 +8,8 @@
  * Keep provider construction here. Domain modules depend on injected
  * interfaces so they remain testable without live accounts.
  */
+import { dirname, resolve } from "node:path";
+
 import type { Logger } from "pino";
 import type { Space } from "spectrum-ts";
 
@@ -74,8 +76,10 @@ import { createSpectrumSpaceResolver } from "../transport/space-resolver.js";
 import {
   createSpectrumApp,
   spectrumCredentialsFromEnvironment,
+  type SpectrumCloudCredentials,
   type SpectrumApp,
 } from "../transport/spectrum.js";
+import { PhotonCredentialsStore } from "./photon-credentials.js";
 import { preparePersistentStorage } from "./persistent-storage.js";
 
 interface QueueComposition {
@@ -108,11 +112,38 @@ function required<Value>(value: Value | undefined, stage: string): Value {
 export async function createProductionRuntime(): Promise<ProductionRuntime> {
   // Configuration and protected values
   const environment = loadEnvironment();
+  const cipher = createDataCipher(environment.APP_ENCRYPTION_KEY);
+  const photonCredentialsStore = new PhotonCredentialsStore({
+    directory: resolve(dirname(environment.CODEX_HOME), "photon"),
+    encryptionKey: environment.APP_ENCRYPTION_KEY,
+  });
+  const storedPhotonSetup = await photonCredentialsStore.load();
+  const spectrumCredentials: SpectrumCloudCredentials | undefined =
+    storedPhotonSetup === undefined
+      ? spectrumCredentialsFromEnvironment(environment)
+      : {
+          projectId: storedPhotonSetup.photonProjectId,
+          projectSecret: storedPhotonSetup.spectrumProjectSecret,
+        };
+  const ownerHandles =
+    storedPhotonSetup === undefined
+      ? environment.AGENT_OWNER_HANDLES
+      : [storedPhotonSetup.ownerPhoneNumber];
   const protectedValues = [
     environment.DATABASE_URL,
-    environment.SPECTRUM_PROJECT_SECRET,
     environment.APP_ENCRYPTION_KEY,
-    ...environment.AGENT_OWNER_HANDLES,
+    ...ownerHandles,
+    ...(environment.SPECTRUM_PROJECT_SECRET === undefined
+      ? []
+      : [environment.SPECTRUM_PROJECT_SECRET]),
+    ...(storedPhotonSetup === undefined
+      ? []
+      : [
+          storedPhotonSetup.photonDeviceBearerToken,
+          storedPhotonSetup.photonProjectId,
+          storedPhotonSetup.spectrumProjectSecret,
+          storedPhotonSetup.assignedIMessageNumber,
+        ]),
     ...(environment.OPENAI_API_KEY === undefined
       ? []
       : [environment.OPENAI_API_KEY]),
@@ -137,7 +168,6 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   };
   const promptBundle = await loadPromptBundle();
   const modelProfiles = modelProfilesFromEnvironment(environment);
-  const cipher = createDataCipher(environment.APP_ENCRYPTION_KEY);
 
   // Codex runtime construction
   const codex = new CodexClient({
@@ -242,7 +272,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       const client = required(databaseClient, "Queue startup");
       const operational = new OperationalRepository(client.database, {
         deploymentId: environment.DEPLOYMENT_ID,
-        ownerHandles: environment.AGENT_OWNER_HANDLES,
+        ownerHandles,
         fingerprintKey: environment.APP_ENCRYPTION_KEY,
         encrypt: cipher.encrypt,
         decrypt: cipher.decrypt,
@@ -345,9 +375,12 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       const state = required(composition, "Spectrum startup");
       const durableQueue = required(queue, "Spectrum worker startup");
       const client = required(databaseClient, "Spectrum startup");
-      spectrumApp = await createSpectrumApp(
-        spectrumCredentialsFromEnvironment(environment),
-      );
+      if (spectrumCredentials === undefined) {
+        throw new Error(
+          "Photon setup is incomplete. Complete Photon setup or provide both legacy Spectrum environment variables, then restart.",
+        );
+      }
+      spectrumApp = await createSpectrumApp(spectrumCredentials);
       const resolver = createSpectrumSpaceResolver(spectrumApp);
       const outboundTransport = new NativeSpectrumOutboundTransport({
         operational: state.operational,

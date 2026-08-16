@@ -5,18 +5,19 @@ import { describe, expect, it } from "vitest";
 const blueprintUrl = new URL("../../render.yaml", import.meta.url);
 
 describe("Render Blueprint onboarding contract", () => {
-  it("prompts for provider, owner, and optional Supermemory credentials", async () => {
+  it("prompts only for the owner's E.164 phone number", async () => {
     const blueprint = await readFile(blueprintUrl, "utf8");
 
+    expect(blueprint).toMatch(
+      /- key: OWNER_PHONE_NUMBER\n\s+sync: false/u,
+    );
     for (const key of [
       "SPECTRUM_PROJECT_ID",
       "SPECTRUM_PROJECT_SECRET",
       "AGENT_OWNER_HANDLES",
       "SUPERMEMORY_API_KEY",
     ]) {
-      expect(blueprint).toMatch(
-        new RegExp(`- key: ${key}\\n\\s+sync: false`, "u"),
-      );
+      expect(blueprint).not.toContain(`- key: ${key}`);
     }
   });
 

@@ -55,7 +55,13 @@ const databaseUrlSchema = requiredText("DATABASE_URL")
     "DATABASE_URL must use the postgres or postgresql protocol",
   );
 
-const ownerHandlesSchema = requiredText("AGENT_OWNER_HANDLES").transform(
+const e164PhoneNumberSchema = (label: string) =>
+  z
+    .string({ error: `${label} must be an E.164 phone number` })
+    .trim()
+    .regex(/^\+[1-9]\d{7,14}$/u, `${label} must be an E.164 phone number`);
+
+const ownerHandlesSchema = z.string().trim().min(1).transform(
   (value, context): string[] => {
     const handles = value
       .split(",")
@@ -126,10 +132,20 @@ const rawEnvironmentSchema = z
     LC_ALL: optionalText(z.string().trim().min(1)),
     LC_CTYPE: optionalText(z.string().trim().min(1)),
 
-    SPECTRUM_PROJECT_ID: requiredText("SPECTRUM_PROJECT_ID"),
-    SPECTRUM_PROJECT_SECRET: requiredText("SPECTRUM_PROJECT_SECRET"),
+    SPECTRUM_PROJECT_ID: optionalText(
+      z.string().trim().min(1, "SPECTRUM_PROJECT_ID must not be empty"),
+    ),
+    SPECTRUM_PROJECT_SECRET: optionalText(
+      z.string().trim().min(1, "SPECTRUM_PROJECT_SECRET must not be empty"),
+    ),
     DATABASE_URL: databaseUrlSchema,
-    AGENT_OWNER_HANDLES: ownerHandlesSchema,
+    OWNER_PHONE_NUMBER: optionalText(
+      e164PhoneNumberSchema("OWNER_PHONE_NUMBER"),
+    ),
+    AGENT_OWNER_HANDLES: z.preprocess(
+      emptyToUndefined,
+      ownerHandlesSchema.optional(),
+    ),
     DEPLOYMENT_ID: requiredText("DEPLOYMENT_ID").pipe(
       z.uuid("DEPLOYMENT_ID must be a UUID"),
     ),
@@ -234,6 +250,34 @@ const rawEnvironmentSchema = z
     // Cross-field safety checks prevent individually valid values from creating
     // an unsafe combined authentication, concurrency, or storage layout.
     if (
+      (environment.SPECTRUM_PROJECT_ID === undefined) !==
+      (environment.SPECTRUM_PROJECT_SECRET === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: [
+          environment.SPECTRUM_PROJECT_ID === undefined
+            ? "SPECTRUM_PROJECT_ID"
+            : "SPECTRUM_PROJECT_SECRET",
+        ],
+        message:
+          "SPECTRUM_PROJECT_ID and SPECTRUM_PROJECT_SECRET must either both be set or both be omitted until Photon setup is complete",
+      });
+    }
+
+    if (
+      environment.OWNER_PHONE_NUMBER === undefined &&
+      environment.AGENT_OWNER_HANDLES === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["OWNER_PHONE_NUMBER"],
+        message:
+          "OWNER_PHONE_NUMBER is required unless AGENT_OWNER_HANDLES is set by an existing deployment",
+      });
+    }
+
+    if (
       environment.CODEX_AUTH_MODE === "api_key" &&
       environment.OPENAI_API_KEY === undefined
     ) {
@@ -279,7 +323,14 @@ const rawEnvironmentSchema = z
           "AGENT_WORKSPACE_ROOT and CODEX_HOME must be separate, non-overlapping paths",
       });
     }
-  });
+  })
+  .transform((environment) => ({
+    ...environment,
+    AGENT_OWNER_HANDLES:
+      environment.OWNER_PHONE_NUMBER === undefined
+        ? environment.AGENT_OWNER_HANDLES!
+        : [environment.OWNER_PHONE_NUMBER],
+  }));
 
 export type Environment = z.infer<typeof rawEnvironmentSchema>;
 

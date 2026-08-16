@@ -13,7 +13,13 @@ export function spectrumCredentialsFromEnvironment(
     Environment,
     "SPECTRUM_PROJECT_ID" | "SPECTRUM_PROJECT_SECRET"
   >,
-): SpectrumCloudCredentials {
+): SpectrumCloudCredentials | undefined {
+  if (
+    environment.SPECTRUM_PROJECT_ID === undefined ||
+    environment.SPECTRUM_PROJECT_SECRET === undefined
+  ) {
+    return undefined;
+  }
   return {
     projectId: environment.SPECTRUM_PROJECT_ID,
     projectSecret: environment.SPECTRUM_PROJECT_SECRET,

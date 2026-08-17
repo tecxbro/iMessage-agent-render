@@ -15,6 +15,7 @@ import {
   startAgentService,
   type RunningAgentService,
 } from "../../src/index.js";
+import { createOperatorAuth } from "../../src/http/operator-auth.js";
 
 interface BlackholePostgres {
   port: number;
@@ -90,6 +91,9 @@ describe("PostgreSQL timeout recovery", () => {
       host: "127.0.0.1",
       installSignalHandlers: false,
       onStartupFailure: startupFailure,
+      operatorAuth: createOperatorAuth({
+        setupSecret: "test-dashboard-setup-secret-material-1234567890",
+      }),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -118,19 +122,21 @@ describe("PostgreSQL timeout recovery", () => {
     const ready = await fetch(`http://127.0.0.1:${address.port}/readyz`);
     expect(ready.status).toBe(503);
     const body = (await ready.json()) as {
-      actions: string[];
-      components: Record<string, { code?: string; state: string }>;
       ready: boolean;
+      status: "ready" | "not_ready";
     };
-    expect(body).toMatchObject({
-      ready: false,
+    expect(body).toEqual({ status: "not_ready", ready: false });
+    const internalReadiness = service.readiness.snapshot(
+      service.spectrumReadiness.snapshot(),
+    );
+    expect(internalReadiness).toMatchObject({
       components: {
         database: { code: "DATABASE_UNAVAILABLE", state: "failed" },
         migrations: { state: "unknown" },
         queue: { state: "unknown" },
       },
     });
-    expect(body.actions).toEqual([
+    expect(internalReadiness.actions).toEqual([
       expect.stringContaining("Restore PostgreSQL connectivity"),
     ]);
     expect(JSON.stringify(body)).not.toContain("do-not-expose");

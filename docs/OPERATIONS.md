@@ -22,7 +22,15 @@ Expected composed-service states:
 - `/readyz` is HTTP 503 during shutdown, missing/expired Codex auth, database failure, migration/queue failure, invalid disk/workspace storage, or Spectrum disconnect.
 - Supermemory may be `disabled` or `degraded` without blocking the operational pipeline.
 
-Readiness responses are public and redacted. If a response contains a credential, owner handle, provider error, message, database URL, or private path, treat that as a security incident.
+The public readiness response is limited to safe aggregate state. Authenticate to the dashboard for provider and component detail. If any unauthenticated response contains a device code, verification URL, assigned number, owner information, provider error, credential, message, database URL, setup action, or private path, treat that as a security incident.
+
+## Operator dashboard access
+
+Retrieve `DASHBOARD_SETUP_SECRET` only from the private Render Web Service **Environment** page and enter it in the dashboard's **Deployment setup code** field. Successful authentication creates an eight-hour server-side session; the service retains at most eight active sessions, and the cookie contains only an opaque identifier. Setup mutations additionally require the session-bound CSRF token and same-origin request checks.
+
+Log out after setup or diagnostics on a trusted browser. Logout revokes the session immediately. Eight-hour expiration and service restart also end a session; sign in again instead of weakening the boundary or trying the removed `x-agent-setup` header.
+
+The owner phone number remains configured through the Render Blueprint prompt until Prompt 2. Operator dashboard authentication does not change the iMessage owner allowlist.
 
 ## Deploy procedure
 
@@ -57,11 +65,13 @@ Render sends `SIGTERM` using its platform-managed shutdown delay for this disk-b
 
 After restart, require reconciliation of undrained inbound messages, queued planning chains, and resumable outbound batches before readiness returns to 200. Verify no stale chain sends and no outbound cursor moves backward.
 
+Operator sessions are held in bounded server memory and are closed during graceful shutdown. A restart invalidates every dashboard session; this does not affect Photon, Codex, queue, database, memory, or owner identity state.
+
 ## Incident playbooks
 
 ### Codex auth missing or expired
 
-Symptoms: `/healthz` 200; `/readyz` 503; `codexAuth` is `missing` or `failed`; Spectrum startup remains paused.
+Symptoms: `/healthz` 200; public `/readyz` 503; the authenticated dashboard reports Codex authentication needs attention; Spectrum startup remains paused.
 
 ChatGPT mode:
 
@@ -76,7 +86,7 @@ API-key mode: replace `OPENAI_API_KEY` in Render, restart, and rerun capability 
 
 ### Spectrum disconnect
 
-Symptoms: `/readyz` 503; `spectrum` is `degraded`; code is `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`.
+Symptoms: public `/readyz` 503; the authenticated dashboard or private logs report `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`.
 
 1. Check Photon provider status and the Web Service's Spectrum credentials without printing them.
 2. Allow the bounded supervised reconnect policy to run.
@@ -86,7 +96,7 @@ Symptoms: `/readyz` 503; `spectrum` is `degraded`; code is `SPECTRUM_STREAM_DISC
 
 ### PostgreSQL timeout/outage
 
-Symptoms: `/healthz` 200; `/readyz` 503 with `DATABASE_UNAVAILABLE`; downstream startup stages do not run.
+Symptoms: `/healthz` 200; public `/readyz` 503; authenticated diagnostics or private logs report `DATABASE_UNAVAILABLE`; downstream startup stages do not run.
 
 1. Stop manual message execution.
 2. Check Render Postgres health and the dynamic `DATABASE_URL` reference.
@@ -97,7 +107,7 @@ Symptoms: `/healthz` 200; `/readyz` 503 with `DATABASE_UNAVAILABLE`; downstream 
 
 ### Supermemory timeout/outage
 
-Symptoms: memory recall is explicitly unavailable/degraded; core readiness can remain healthy.
+Symptoms: the authenticated dashboard or private logs report memory recall unavailable/degraded; core readiness can remain healthy.
 
 This is the required operating policy. The dedicated memory-provider outage exercise has not been recorded as protected release evidence. Incidental fake-provider coverage in a broad offline suite is not accepted as outage validation.
 
@@ -109,7 +119,7 @@ This is the required operating policy. The dedicated memory-provider outage exer
 
 ### Persistent disk missing or invalid
 
-Symptoms: `/readyz` 503 with `PERSISTENT_STORAGE_INVALID`.
+Symptoms: public `/readyz` 503; authenticated diagnostics or private logs report `PERSISTENT_STORAGE_INVALID`.
 
 1. Stop execution; do not create replacement Codex threads on ephemeral storage.
 2. Verify the `/var/data` mount, ownership, space, and directory permissions.
@@ -143,15 +153,27 @@ If compatibility is uncertain, roll forward with a fix or restore the applicatio
 When ownership changes or a credential may be exposed:
 
 1. Stop the service.
-2. Revoke the old ChatGPT session/API key and rotate Photon, Supermemory, encryption, and database credentials as applicable.
+2. Revoke the old ChatGPT session/API key and rotate the dashboard setup secret, Photon, Supermemory, encryption, and database credentials as applicable.
 3. Remove only the compromised Codex auth file after confirming the exact persistent path; do not delete the disk or workspace tree.
 4. Run the appropriate enrollment flow.
 5. Verify credential file permissions, status, capability probes, restart persistence, and readiness.
 6. Review failure/audit logs for unexpected use, without copying private payloads.
 
+## Setup-code rotation and recovery
+
+Rotate `DASHBOARD_SETUP_SECRET` when it is exposed, shared beyond authorized operators, or an operator's Render access changes:
+
+1. Open the Web Service's private **Environment** page in Render.
+2. Regenerate or replace `DASHBOARD_SETUP_SECRET` with new high-entropy material.
+3. Save the environment change and redeploy or restart the service.
+4. Confirm the old code is rejected and authenticate with the replacement.
+5. Log out other trusted browsers or rely on the restart to invalidate their in-memory sessions.
+
+If the code is lost, follow the same Render-side replacement procedure. Blueprint synchronization preserves an existing generated value and is not a rotation mechanism. There is intentionally no public email, URL, or browser-based reset flow.
+
 ## Evidence and escalation
 
-Record timestamps, commit, Render deploy ID, redacted readiness states, correlation IDs, tests run, and whether a live provider was actually exercised. Never paste raw messages, secrets, auth files, phone/email handles, or full provider exceptions into incident tickets.
+Record timestamps, commit, Render deploy ID, public aggregate readiness, authenticated redacted diagnostic states, correlation IDs, tests run, and whether a live provider was actually exercised. Never paste raw messages, setup codes, session identifiers, CSRF tokens, device codes, secrets, auth files, phone/email handles, or full provider exceptions into incident tickets.
 
 Escalate and keep execution paused when:
 

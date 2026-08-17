@@ -54,7 +54,7 @@ curl --fail --silent --show-error "https://<service-host>/healthz"
 
 **What it means:** One or more critical components are missing, starting, failed, or degraded.
 
-**Where to check:** The redacted `components` and `actions` in `/readyz`, then the corresponding Render service logs.
+**Where to check:** The authenticated dashboard for redacted component/setup detail, then the corresponding private Render service logs. Public `/readyz` intentionally returns only safe aggregate state.
 
 **Exact safe command:**
 
@@ -62,15 +62,55 @@ curl --fail --silent --show-error "https://<service-host>/healthz"
 curl --silent --show-error "https://<service-host>/readyz"
 ```
 
-**Expected result:** HTTP 200 only when configuration, database, migrations, queue, Codex, storage, and Spectrum are ready. HTTP 503 during incomplete setup is truthful.
+**Expected result:** HTTP 200 only when configuration, database, migrations, queue, Codex, storage, and Spectrum are ready. HTTP 503 during incomplete setup is truthful and does not expose the failing private component.
 
 **Do not:** Use `/healthz` as acceptance, paste raw provider errors into tickets, or weaken readiness checks.
+
+## Dashboard rejects the deployment setup code
+
+**What it means:** The submitted value does not match `DASHBOARD_SETUP_SECRET`, or repeated failures have reached the login-attempt rate limit.
+
+**Where to check:** The deployed Web Service's private **Environment** page in Render. Confirm the browser is using the same service whose environment you inspected.
+
+**Expected result:** A valid code creates an eight-hour server-side session and opens the private dashboard. After repeated invalid attempts, stop retrying and wait for the bounded rate-limit window before trying the verified value.
+
+**Do not:** Paste the code into a URL, command line, log, ticket, screenshot, local/session storage, or client-readable cookie. The old `x-agent-setup: dashboard` header grants no access.
+
+## Dashboard session expired or disappeared
+
+**What it means:** The eight-hour session expired, the operator logged out, it was revoked, or the service restarted. Operator sessions are intentionally in memory, limited to eight active sessions, and do not survive restart.
+
+**Where to check:** Return to the Web Service URL. The unauthenticated page must show only the **Deployment setup code** form and no provider or readiness detail.
+
+**Expected result:** Authenticate again with the current Render-managed setup code. Logout remains idempotent and revokes the old session.
+
+**Do not:** Copy another browser's cookie, put the setup secret in browser storage, or disable cookie security attributes.
+
+## Setup action returns 403
+
+**What it means:** The request lacks a valid operator session or session-bound CSRF token, has a foreign `Origin`, or reports a cross-site `Sec-Fetch-Site` value.
+
+**Where to check:** Confirm the dashboard was opened directly from the deployed service origin and the session has not expired. Refresh the login/dashboard page to obtain current session state.
+
+**Expected result:** Authenticated same-origin dashboard requests include cookies and the current CSRF token automatically. Photon/ChatGPT start and logout remain unavailable to unauthenticated or cross-site requests.
+
+**Do not:** Disable Origin/fetch-metadata validation, expose the expected token in an error, or restore the public dashboard header.
+
+## Dashboard setup code is lost or exposed
+
+**What it means:** Authorized operators can no longer retrieve the current code, or the code may no longer be private.
+
+**Where to check:** Render **Web Service > Environment** using an authorized Render account. There is no public browser recovery link.
+
+**Expected result:** Regenerate or replace `DASHBOARD_SETUP_SECRET`, save the environment change, redeploy or restart, and authenticate with the replacement. Blueprint sync alone preserves the old generated value and is not rotation.
+
+**Do not:** Recover the value from logs or source, reuse `APP_ENCRYPTION_KEY`, or send the replacement through an untrusted channel.
 
 ## Codex authentication is missing
 
 **What it means:** ChatGPT device credentials are absent/expired, or API-key mode lacks a valid secret.
 
-**Where to check:** `/readyz` for `codexAuth` and the private service shell.
+**Where to check:** The authenticated dashboard for Codex auth state and the private service shell.
 
 **Exact safe command:**
 
@@ -88,7 +128,7 @@ For ChatGPT mode, enroll with `npm run codex:login`, then rerun the status comma
 
 **What it means:** Authentication succeeded, but a configured model/effort/permission pair could not run.
 
-**Where to check:** `/readyz` for `CODEX_CAPABILITY_FAILED`, model variables, and redacted startup logs.
+**Where to check:** The authenticated dashboard for `CODEX_CAPABILITY_FAILED`, model variables, and redacted private startup logs.
 
 **Exact safe command:**
 
@@ -104,7 +144,7 @@ npm run typecheck && npm test -- test/unit/capabilities.test.ts
 
 **What it means:** The persistent `app.messages` stream is not connected or exhausted its bounded restart policy.
 
-**Where to check:** `/readyz` for `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`, Photon provider status, and redacted logs.
+**Where to check:** The authenticated dashboard or private logs for `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`, plus Photon provider status.
 
 **Exact safe command:**
 
@@ -136,7 +176,7 @@ npm test -- test/security/authorization-boundaries.test.ts test/unit/transport/s
 
 **What it means:** Inbound persistence succeeded, but planning, execution, synthesis, or outbound delivery is pending, failed, canceled, or rate-limited.
 
-**Where to check:** `/readyz`, safe correlation IDs in logs, queue/failure counts, and the release smoke record.
+**Where to check:** The authenticated dashboard, safe correlation IDs in private logs, queue/failure counts, and the release smoke record.
 
 **Exact safe command:**
 
@@ -184,7 +224,7 @@ test -d "$CODEX_HOME" && test -d "$AGENT_WORKSPACE_ROOT" && npm test -- test/uni
 
 **What it means:** The optional API key is absent, or bounded recall/write operations are unavailable. Operational PostgreSQL state is unaffected.
 
-**Where to check:** `/readyz` for `supermemory: disabled|degraded` and redacted memory receipt/failure codes.
+**Where to check:** The authenticated dashboard for `supermemory: disabled|degraded` and redacted memory receipt/failure codes in private logs.
 
 **Exact safe command:**
 
@@ -214,4 +254,4 @@ npm test -- test/chaos/outbound-restart.test.ts
 
 ## Still blocked
 
-Record the exact commit, timestamp, redacted readiness state, safe correlation IDs, commands run, and whether any live provider was exercised. Use [Operations](./OPERATIONS.md) for recovery and escalation rules. Never include secrets, owner handles, raw messages, database URLs, private paths, auth files, or full provider exceptions.
+Record the exact commit, timestamp, public aggregate readiness, authenticated redacted diagnostic state, safe correlation IDs, commands run, and whether any live provider was exercised. Use [Operations](./OPERATIONS.md) for recovery and escalation rules. Never include setup codes, session identifiers, CSRF tokens, device codes, secrets, owner handles, raw messages, database URLs, private paths, auth files, or full provider exceptions.

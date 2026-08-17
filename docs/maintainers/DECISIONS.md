@@ -34,9 +34,9 @@
 
 ## ADR-005 — ChatGPT login is deployment enrollment, not web OAuth
 
-**Decision:** the operator runs Codex device auth once in the private local/Render environment; API-key mode is the automation alternative.
+**Decision:** the operator completes Codex device auth once through the authenticated deployment dashboard or a private local/Render recovery shell; API-key mode is the automation alternative.
 
-**Why:** Codex SDK wraps the CLI and uses local credential/session state. The starter should represent this accurately.
+**Why:** the dashboard starts the supported device-code protocol and polls server-authored state; it does not invent an OAuth callback. Codex SDK wraps the CLI and uses local credential/session state under `CODEX_HOME`. The starter should represent this accurately.
 
 **Rejected:** building a fake “Sign in with ChatGPT” callback flow around unsupported assumptions.
 
@@ -96,6 +96,8 @@
 
 ## ADR-013 — No public admin UI in v1
 
+**Status:** Superseded by ADR-015. The operational dashboard is authenticated; unauthenticated visitors see only the login form and safe public health surfaces.
+
 **Decision:** HTTP exposes health/readiness only; operator actions happen through private shell/CLI and iMessage commands.
 
 **Why:** an admin UI would add another auth surface unrelated to the primary product.
@@ -105,3 +107,15 @@
 **Decision:** text DMs first, with safe existing-group support.
 
 **Why:** transport, identity, recovery, Codex, and memory correctness are the release blockers. Rich media is a bounded follow-up once text is reliable.
+
+## ADR-015 — Authenticate the single-operator setup dashboard on the server
+
+**Decision:** protect dashboard state and Photon/ChatGPT setup behind a server-side operator session. Render generates `DASHBOARD_SETUP_SECRET`; successful authentication creates an opaque session and session-bound CSRF token. Sessions expire after eight hours, the server stores at most eight, logout/revocation is idempotent, and a service restart invalidates them.
+
+State-changing setup requests require the live session, `X-CSRF-Token`, same-origin `Origin`, and non-cross-site fetch metadata. The browser cookie is `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` in production, and has no `Domain`. Public `/healthz` remains liveness; public `/readyz` is aggregate only. Unauthenticated dashboard responses contain no provider status, device/verification codes, assigned number, owner information, readiness detail, or provider errors.
+
+**Why:** provider enrollment discloses sensitive, actionable state and starts external setup work. A public custom header and possession of dashboard JavaScript cannot authenticate an operator. A small restart-invalidated in-memory session store fits the existing single-instance deployment and leaves a reusable boundary for later owner-phone endpoints.
+
+**Constraint:** the owner phone number still comes from the Render Blueprint prompt. Moving it into authenticated onboarding is Prompt 2, not part of this decision.
+
+**Rejected:** public setup/status endpoints, `x-agent-setup: dashboard`, the setup secret in a cookie or rendered page, browser storage or URL authentication, callback-shaped provider flows, and durable/multi-tenant sessions in this single-owner release.

@@ -121,6 +121,30 @@ const encryptionKeySchema = requiredText("APP_ENCRYPTION_KEY").refine((value) =>
   return Buffer.from(value, "base64").byteLength === 32;
 }, "APP_ENCRYPTION_KEY must be a 32-byte key encoded as base64 or 64 hexadecimal characters");
 
+function dashboardSetupSecretBytes(value: string): Buffer | undefined {
+  if (/^[a-f0-9]{64}$/iu.test(value)) {
+    return Buffer.from(value, "hex");
+  }
+  if (/^[A-Za-z0-9+/]{43}=$/u.test(value)) {
+    return Buffer.from(value, "base64");
+  }
+  if (/^[A-Za-z0-9_-]{43}$/u.test(value)) {
+    return Buffer.from(value, "base64url");
+  }
+  return undefined;
+}
+
+const dashboardSetupSecretSchema = z
+  .string({ error: "DASHBOARD_SETUP_SECRET must be secret material" })
+  .trim()
+  .refine(
+    (value) => {
+      const bytes = dashboardSetupSecretBytes(value);
+      return bytes !== undefined && new Set(bytes).size >= 16;
+    },
+    "DASHBOARD_SETUP_SECRET must be a high-entropy 32-byte value encoded as base64, base64url, or 64 hexadecimal characters",
+  );
+
 const rawEnvironmentSchema = z
   .object({
     // Required infrastructure and process values
@@ -155,6 +179,7 @@ const rawEnvironmentSchema = z
       z.uuid("DEPLOYMENT_ID must be a UUID"),
     ),
     APP_ENCRYPTION_KEY: encryptionKeySchema,
+    DASHBOARD_SETUP_SECRET: optionalText(dashboardSetupSecretSchema),
 
     // Codex authentication and isolated storage
     CODEX_HOME: protectedPathSchema("CODEX_HOME"),
@@ -254,6 +279,17 @@ const rawEnvironmentSchema = z
   .superRefine((environment, context) => {
     // Cross-field safety checks prevent individually valid values from creating
     // an unsafe combined authentication, concurrency, or storage layout.
+    if (
+      environment.NODE_ENV === "production" &&
+      environment.DASHBOARD_SETUP_SECRET === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["DASHBOARD_SETUP_SECRET"],
+        message: "DASHBOARD_SETUP_SECRET is required in production",
+      });
+    }
+
     if (
       (environment.SPECTRUM_PROJECT_ID === undefined) !==
       (environment.SPECTRUM_PROJECT_SECRET === undefined)

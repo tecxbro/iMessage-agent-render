@@ -15,6 +15,7 @@ describe("graceful shutdown", () => {
       ["outbound-checkpoint", 30],
       ["queue", 40],
       ["database", 50],
+      ["operator-auth", 55],
       ["health-http", 60],
     ] as const) {
       shutdown.register({
@@ -40,6 +41,7 @@ describe("graceful shutdown", () => {
       "outbound-checkpoint",
       "queue",
       "database",
+      "operator-auth",
       "health-http",
     ]);
     expect(readiness.snapshot()).toMatchObject({

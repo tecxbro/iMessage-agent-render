@@ -44,6 +44,10 @@ import { OperationalRepository } from "../db/repositories/operational.js";
 import { OrchestrationRepository } from "../db/repositories/orchestration.js";
 import { OutboundRepository } from "../db/repositories/outbound.js";
 import { RetentionRepository } from "../db/repositories/retention.js";
+import {
+  createOperatorAuth,
+  type OperatorAuth,
+} from "../http/operator-auth.js";
 import type { AgentServiceBootstrap } from "../index.js";
 import { recallMemoryContext } from "../memory/recall.js";
 import {
@@ -109,6 +113,7 @@ export interface ProductionRuntime {
   logger: Logger;
   promptBundleVersion: string;
   bootstrap: AgentServiceBootstrap;
+  operatorAuth: OperatorAuth;
   photonSetup: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
 }
@@ -123,6 +128,12 @@ function required<Value>(value: Value | undefined, stage: string): Value {
 export async function createProductionRuntime(): Promise<ProductionRuntime> {
   // Configuration and protected values
   const environment = loadEnvironment();
+  if (environment.DASHBOARD_SETUP_SECRET === undefined) {
+    throw new Error(
+      "DASHBOARD_SETUP_SECRET is required to start operator authentication.",
+    );
+  }
+  const dashboardSetupSecret = environment.DASHBOARD_SETUP_SECRET;
   const cipher = createDataCipher(environment.APP_ENCRYPTION_KEY);
   const photonCredentialsStore = new PhotonCredentialsStore({
     directory: resolve(dirname(environment.CODEX_HOME), "photon"),
@@ -150,6 +161,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   const protectedValues = [
     environment.DATABASE_URL,
     environment.APP_ENCRYPTION_KEY,
+    dashboardSetupSecret,
     ...ownerHandles,
     ...(environment.SPECTRUM_PROJECT_SECRET === undefined
       ? []
@@ -170,6 +182,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       : [environment.SUPERMEMORY_API_KEY]),
   ];
   const logger = createLogger({ protectedValues });
+  const operatorAuth = createOperatorAuth({ setupSecret: dashboardSetupSecret });
   const inFlightChains = new InFlightChainRegistry();
   const interruptSupersededChains = (chainIds: readonly string[]): void => {
     const abortedWorkCount = inFlightChains.cancel(chainIds);
@@ -671,6 +684,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     logger,
     promptBundleVersion: promptBundle.version,
     bootstrap,
+    operatorAuth,
     photonSetup,
     ...(chatgptSetup === undefined ? {} : { chatgptSetup }),
   };

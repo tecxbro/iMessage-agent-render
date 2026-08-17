@@ -60,6 +60,7 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
       "spectrum-private-secret",
       "memory-private-secret",
       "encryption-private-secret",
+      "dashboard-setup-private-secret",
     ];
     const child = buildCodexChildEnvironment({
       parentEnvironment: {
@@ -69,6 +70,7 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
         SPECTRUM_PROJECT_SECRET: protectedValues[1],
         SUPERMEMORY_API_KEY: protectedValues[2],
         APP_ENCRYPTION_KEY: protectedValues[3],
+        DASHBOARD_SETUP_SECRET: protectedValues[4],
         AWS_SECRET_ACCESS_KEY: "cloud-private-secret",
       },
       codexHome,
@@ -185,8 +187,14 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
     ).toThrow(/protected service secret/);
   });
 
-  it("redacts owner handles and arbitrary protected credentials in logs and failure-safe values", () => {
+  it("redacts owner handles, operator credentials, and provider codes from real logger output", () => {
     const protectedCredential = "provider-credential-with-unknown-format";
+    const setupSecret = "dashboard-setup-secret-that-must-not-be-logged";
+    const sessionId = "operator-session-id-that-must-not-be-logged";
+    const csrfToken = "session-csrf-token-that-must-not-be-logged";
+    const photonDeviceCode = "PHOTON-DEVICE-CODE-PRIVATE";
+    const chatGptDeviceCode = "CHATGPT-DEVICE-CODE-PRIVATE";
+    const verificationUrl = "https://private.example/device?code=secret";
     const redacted = redactLogValue(
       {
         safeLookingField: `provider said ${protectedCredential}`,
@@ -206,12 +214,37 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
 
     const output: string[] = [];
     const logger = createLogger(
-      { base: null, protectedValues: [protectedCredential] },
+      {
+        base: null,
+        protectedValues: [protectedCredential, setupSecret],
+      },
       { write: (chunk: string) => (output.push(chunk), true) },
     );
-    logger.error({ providerDetail: protectedCredential }, "owner@example.com");
-    expect(output.join("")).not.toContain(protectedCredential);
-    expect(output.join("")).not.toContain("owner@example.com");
+    logger.error(
+      {
+        providerDetail: protectedCredential,
+        setupSecret,
+        operatorSessionId: sessionId,
+        csrfToken,
+        photonDeviceCode,
+        chatGptDeviceCode,
+        verificationUrl,
+      },
+      `owner@example.com ${setupSecret}`,
+    );
+    const logOutput = output.join("");
+    for (const privateValue of [
+      protectedCredential,
+      setupSecret,
+      sessionId,
+      csrfToken,
+      photonDeviceCode,
+      chatGptDeviceCode,
+      verificationUrl,
+      "owner@example.com",
+    ]) {
+      expect(logOutput).not.toContain(privateValue);
+    }
   });
 
   it("enforces independent per-owner message and task windows", () => {

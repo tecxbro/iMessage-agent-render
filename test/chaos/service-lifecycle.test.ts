@@ -3,6 +3,7 @@ import { type AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatGptSetupController } from "../../src/agent/codex-app-server-auth.js";
+import { createOperatorAuth } from "../../src/http/operator-auth.js";
 import {
   startAgentService,
   type AgentServiceBootstrap,
@@ -15,6 +16,11 @@ import type {
 } from "../../src/transport/photon-setup.js";
 
 const runningServices: RunningAgentService[] = [];
+const TEST_SETUP_SECRET = "test-dashboard-setup-secret-material-1234567890";
+
+function createTestOperatorAuth() {
+  return createOperatorAuth({ setupSecret: TEST_SETUP_SECRET });
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -25,10 +31,8 @@ afterEach(async () => {
 async function fetchReadiness(service: RunningAgentService): Promise<{
   status: number;
   body: {
-    actions: string[];
-    components: Record<string, { code?: string; state: string }>;
     ready: boolean;
-    shuttingDown: boolean;
+    status: "ready" | "not_ready";
   };
 }> {
   const address = service.health.server.address() as AddressInfo;
@@ -36,10 +40,8 @@ async function fetchReadiness(service: RunningAgentService): Promise<{
   return {
     status: response.status,
     body: (await response.json()) as {
-      actions: string[];
-      components: Record<string, { code?: string; state: string }>;
       ready: boolean;
-      shuttingDown: boolean;
+      status: "ready" | "not_ready";
     },
   };
 }
@@ -84,6 +86,7 @@ describe("composed service lifecycle recovery", () => {
       port: 0,
       host: "127.0.0.1",
       bootstrap,
+      operatorAuth: createTestOperatorAuth(),
       installSignalHandlers: false,
     });
     runningServices.push(service);
@@ -100,7 +103,7 @@ describe("composed service lifecycle recovery", () => {
     ]);
     await expect(fetchReadiness(service)).resolves.toMatchObject({
       status: 200,
-      body: { ready: true, shuttingDown: false },
+      body: { ready: true, status: "ready" },
     });
 
     await expect(service.shutdown("SIGTERM")).resolves.toEqual({
@@ -139,6 +142,7 @@ describe("composed service lifecycle recovery", () => {
       host: "127.0.0.1",
       installSignalHandlers: false,
       onStartupFailure: startupFailure,
+      operatorAuth: createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -170,8 +174,11 @@ describe("composed service lifecycle recovery", () => {
     expect(startupFailure).toHaveBeenCalledWith("SPECTRUM_START_FAILED");
     const readiness = await fetchReadiness(service);
     expect(readiness.status).toBe(503);
-    expect(readiness.body).toMatchObject({
-      ready: false,
+    expect(readiness.body).toEqual({ status: "not_ready", ready: false });
+    const internalReadiness = service.readiness.snapshot(
+      service.spectrumReadiness.snapshot(),
+    );
+    expect(internalReadiness).toMatchObject({
       components: {
         spectrum: {
           code: "SPECTRUM_STREAM_DISCONNECTED",
@@ -179,7 +186,7 @@ describe("composed service lifecycle recovery", () => {
         },
       },
     });
-    expect(readiness.body.actions).toEqual([
+    expect(internalReadiness.actions).toEqual([
       expect.stringContaining("Photon connectivity"),
     ]);
     expect(JSON.stringify(readiness.body)).not.toContain("photon-super-secret");
@@ -196,6 +203,7 @@ describe("composed service lifecycle recovery", () => {
       port: 0,
       host: "127.0.0.1",
       installSignalHandlers: false,
+      operatorAuth: createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -219,15 +227,18 @@ describe("composed service lifecycle recovery", () => {
     expect(live.status).toBe(200);
     const readiness = await fetchReadiness(service);
     expect(readiness.status).toBe(503);
-    expect(readiness.body).toMatchObject({
-      ready: false,
+    expect(readiness.body).toEqual({ status: "not_ready", ready: false });
+    const internalReadiness = service.readiness.snapshot(
+      service.spectrumReadiness.snapshot(),
+    );
+    expect(internalReadiness).toMatchObject({
       components: {
         codexAuth: { code: "CODEX_AUTH_EXPIRED", state: "failed" },
         codexCapabilities: { state: "unknown" },
         spectrum: { state: "missing" },
       },
     });
-    expect(readiness.body.actions).toEqual([
+    expect(internalReadiness.actions).toEqual([
       expect.stringContaining("reconnect ChatGPT"),
     ]);
   });
@@ -288,6 +299,7 @@ describe("composed service lifecycle recovery", () => {
       installSignalHandlers: false,
       photonSetup,
       chatgptSetup,
+      operatorAuth: createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -322,11 +334,16 @@ describe("composed service lifecycle recovery", () => {
       status: 200,
       body: {
         ready: true,
-        components: {
-          codexAuth: { state: "ok" },
-          codexCapabilities: { state: "ok" },
-          spectrum: { state: "ok" },
-        },
+        status: "ready",
+      },
+    });
+    expect(
+      service.readiness.snapshot(service.spectrumReadiness.snapshot()),
+    ).toMatchObject({
+      components: {
+        codexAuth: { state: "ok" },
+        codexCapabilities: { state: "ok" },
+        spectrum: { state: "ok" },
       },
     });
 
@@ -376,6 +393,7 @@ describe("composed service lifecycle recovery", () => {
       installSignalHandlers: false,
       photonSetup,
       chatgptSetup,
+      operatorAuth: createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,

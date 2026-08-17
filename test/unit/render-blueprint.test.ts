@@ -29,4 +29,18 @@ describe("Render Blueprint onboarding contract", () => {
     expect(blueprint).toContain("healthCheckPath: /healthz");
     expect(blueprint).not.toContain("healthCheckPath: /readyz");
   });
+
+  it("generates the private dashboard setup secret without prompting for it", async () => {
+    const blueprint = await readFile(blueprintUrl, "utf8");
+    const setupSecretBlock = blueprint.match(
+      /- key: DASHBOARD_SETUP_SECRET\n(?<properties>(?:\s{8}[^\n]+\n?)*)/u,
+    );
+
+    expect(setupSecretBlock?.groups?.["properties"]).toContain(
+      "generateValue: true",
+    );
+    expect(setupSecretBlock?.groups?.["properties"]).not.toContain(
+      "sync: false",
+    );
+  });
 });

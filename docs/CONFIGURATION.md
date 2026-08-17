@@ -1,6 +1,6 @@
 # Configuration Reference
 
-[`../.env.example`](../.env.example) is the copyable configuration template. This file is the authoritative explanation of public environment variables. The service validates the complete environment at startup and reports all detected problems together.
+[`../.env.example`](../.env.example) is the copyable configuration template. This file is the authoritative explanation of supported environment variables, including private service secrets. The service validates the complete environment at startup and reports safe configuration problems together.
 
 All changes require a service restart. Render-managed values should be changed through the Blueprint or Web Service environment settings, never by editing files on the persistent disk.
 
@@ -29,6 +29,20 @@ The Render Blueprint uses the long `OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550
 Existing deployments and local `.env` files may continue using `OWNER_PHONE_NUMBER`. If both phone variables are set, they must match. `AGENT_OWNER_HANDLES` remains a backwards-compatible fallback for existing comma-separated phone numbers or iMessage emails; emails are normalized to lowercase. Photon line setup does not replace this application allowlist.
 
 Keep `PAIRING_MODE=off` unless pairing has been explicitly reviewed for the deployment. `GROUP_MODE=disabled` rejects group use; `owner_mentions_only` requires the owner/group policy enforced by the application.
+
+## Operator dashboard authentication
+
+| Variable | Required | Default | Where to obtain it | Restart required | Sensitive |
+|---|---:|---|---|---:|---:|
+| `DASHBOARD_SETUP_SECRET` | Production | — | Render-generated secret or independent high-entropy local value | Yes | Yes |
+
+Render declares this variable with `generateValue: true`, so a new deployment receives a random base64-encoded 256-bit value without prompting the user. Find it in the deployed Web Service's private **Environment** page and enter it only in the dashboard's **Deployment setup code** field. It is separate from the owner phone allowlist: authenticating the setup dashboard does not authorize an iMessage sender, and the owner phone remains a Render Blueprint input until Prompt 2.
+
+Each successful login creates an eight-hour server-side session, with at most eight active sessions retained. Logout revokes the session, and restarting the service invalidates every session.
+
+Production startup rejects a missing, empty, or insufficiently strong dashboard setup secret. Validation identifies only `DASHBOARD_SETUP_SECRET` and a safe configuration problem; it must never include the submitted or configured value. For local development, set an independent high-entropy value in `.env`. Do not reuse `APP_ENCRYPTION_KEY`, commit the value, put it in a URL, or store it in browser storage.
+
+Render generates the value once when the environment variable is missing and preserves it across Blueprint sync. To rotate or recover a lost value, regenerate or replace it under **Web Service > Environment**, save the change, and redeploy or restart the service. Existing in-memory operator sessions are not a substitute for retaining authorized access to the Render environment.
 
 ## Codex authentication
 
@@ -119,6 +133,7 @@ Keep `LOG_MESSAGE_CONTENT=false` in production. Enabling raw content logging mat
 Startup fails with an actionable combined error when:
 
 - API-key mode lacks `OPENAI_API_KEY`;
+- production lacks nonempty high-entropy `DASHBOARD_SETUP_SECRET` material;
 - owner concurrency exceeds global concurrency;
 - protected paths overlap, resolve to a filesystem root, or contain traversal;
 - the database URL uses a non-PostgreSQL protocol;

@@ -31,8 +31,12 @@ The remainder of this document describes the composition contract and identifies
 flowchart TB
   U["Authorized iMessage owner"] <--> P["Photon Spectrum Cloud"]
   P <-->|"persistent app.messages gRPC"| T["Spectrum receive loop"]
+  B["Trusted operator browser"]
 
   subgraph W["One Render Web Service"]
+    L["Operator login and CSRF boundary"]
+    L --> DSH["Authenticated setup dashboard"]
+    DSH --> PS["Photon and ChatGPT setup controllers"]
     T --> A["authorize + durable ingest"]
     A --> Q["pg-boss workers"]
     Q --> I["interaction Codex runtime"]
@@ -49,6 +53,7 @@ flowchart TB
   I <--> CH[("CODEX_HOME")]
   E <--> CH
 
+  B --> L
   R["Render health check"] --> H
 ```
 
@@ -87,6 +92,10 @@ These boundaries are non-interchangeable:
 - Unknown senders must be rejected before any model or child-process call.
 - Model, repository, memory, web, and tool content are untrusted data. A model cannot broaden its permission profile or approve an action.
 
+The HTTP setup surface has its own operator boundary. `DASHBOARD_SETUP_SECRET` is a private production configuration value generated in the Render Web Service environment. A successful constant-time secret check creates an opaque, server-side session and a session-bound CSRF token. The store permits at most eight active sessions, expires each after eight hours, cleans up stale sessions, and invalidates every session on restart. It is intentionally not a durable identity store.
+
+The browser receives only an opaque session cookie with `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` in production, and no `Domain`. The setup secret is never stored in that cookie, HTML, JavaScript, browser storage, or a URL. This operator boundary is reusable by the owner-phone endpoints planned for Prompt 2; this change does not move the owner phone out of the Render Blueprint prompt.
+
 ## 4. Boot sequence
 
 The final composition boundary starts the HTTP listener first so the process can remain live while setup is incomplete.
@@ -120,7 +129,7 @@ sequenceDiagram
 The ordered startup stages in `startAgentService()` are:
 
 1. listen on HTTP;
-2. validate configuration;
+2. validate configuration, including production dashboard-secret material;
 3. prepare the two persistent directories and Codex config;
 4. connect PostgreSQL;
 5. apply or verify migrations;
@@ -131,7 +140,7 @@ The ordered startup stages in `startAgentService()` are:
 
 The integration bootstrap must make `startSpectrum()` resolve after supervision has been launched and connection state can be tracked; it must not block bootstrap completion for the lifetime of the stream. It must also run durable-pipeline reconciliation before accepting normal work.
 
-Missing or expired ChatGPT auth is a setup state, not a crash loop. Liveness remains healthy, readiness stays false, and Spectrum execution is not started. In ChatGPT mode the operator runs `npm run codex:login` and `npm run codex:status` using the same persistent `CODEX_HOME`, then restarts. In API-key mode readiness requires `OPENAI_API_KEY`; the key is copied only into the explicit Codex child environment.
+Missing or expired ChatGPT auth is a setup state, not a crash loop. Liveness remains healthy, readiness stays false, and Spectrum execution is not started. In ChatGPT mode the authenticated operator reconnects through the dashboard device-code flow; `npm run codex:login` and `npm run codex:status` in the private service shell remain recovery tools using the same persistent `CODEX_HOME`. In API-key mode readiness requires `OPENAI_API_KEY`; the key is copied only into the explicit Codex child environment.
 
 ## 5. Message pipeline
 
@@ -236,42 +245,30 @@ Consequential actions use immutable approval data bound to owner, allowed space,
 The composed health server returns:
 
 ```text
-GET /          -> 200 operator setup/readiness page; never the iMessage conversation
-GET /healthz  -> 200 {"status":"ok"}
-GET /readyz   -> 200 only when every critical component is ready
-GET /readyz   -> 503 with redacted component states and safe actions otherwise
+GET /          -> public operator entry point; never the iMessage conversation
+GET /healthz  -> public 200 {"status":"ok"}
+GET /readyz   -> public safe aggregate state; 200 only when critical components are ready
+GET /readyz   -> public safe aggregate state with 503 otherwise
 ```
 
-Critical readiness components are configuration, database, migrations, queue, Spectrum, Codex auth, Codex capabilities, disk, and workspace. Supermemory may be `disabled` or degraded without making operational readiness depend on semantic storage.
+Critical readiness components are configuration, database, migrations, queue, Spectrum, Codex auth, Codex capabilities, disk, and workspace. Supermemory may be `disabled` or degraded without making operational readiness depend on semantic storage. Public `/readyz` reports only their aggregate result; it does not include component names, setup actions, owner information, provider states, or provider errors. The authenticated dashboard's same-origin `/readyz` request receives the detailed readiness snapshot.
 
-Example setup response:
-
-```json
-{
-  "status": "not_ready",
-  "ready": false,
-  "shuttingDown": false,
-  "components": {
-    "configuration": { "state": "ok" },
-    "database": { "state": "ok" },
-    "migrations": { "state": "ok" },
-    "queue": { "state": "ok" },
-    "spectrum": { "state": "missing" },
-    "codexAuth": { "state": "missing", "code": "CODEX_AUTH_MISSING" },
-    "codexCapabilities": { "state": "unknown" },
-    "disk": { "state": "ok" },
-    "workspace": { "state": "ok" },
-    "supermemory": { "state": "disabled" }
-  },
-  "actions": [
-    "Run npm run codex:login in the private service shell, verify with npm run codex:status, then restart the service."
-  ]
-}
-```
-
-Raw provider errors, credentials, handles, message content, and unrestricted paths never enter readiness. The root operator page renders only this redacted state and safe setup actions. Render uses `/healthz` to avoid turning incomplete private enrollment into a restart loop. Operators use `/readyz` as the acceptance gate.
+Raw provider errors, credentials, handles, message content, device codes, verification URLs, assigned numbers, detailed readiness, and unrestricted paths never enter unauthenticated responses. Render uses `/healthz` to avoid turning incomplete private enrollment into a restart loop. Operators use `/readyz` as the aggregate acceptance gate and the authenticated dashboard for setup and component detail.
 
 The current `src/server.ts` starts this health server first, runs each operational stage, and shuts the composition down on process signals. Its `/healthz` proves only that the HTTP process is alive; `/readyz` becomes `200` only after PostgreSQL, migrations, queue, Codex auth/capabilities, storage, and Spectrum are ready.
+
+### 8.1 Operator route boundary
+
+| Route | Boundary |
+|---|---|
+| `GET /`, `GET /healthz`, `GET /agent/photon-logo.png`, `GET /agent/operator-login.js` | Public; the login script contains no private state |
+| `GET /readyz` | Public aggregate state; detailed snapshot only with a live operator session |
+| `GET /agent/dashboard` | Public login page when unauthenticated; operational dashboard only with a live session |
+| `POST /api/operator/session` | Public strict, size-limited login attempt with failed-attempt rate limiting |
+| `GET /agent/dashboard.js`, Photon status, ChatGPT status | Live operator session |
+| Photon setup start, ChatGPT setup start, `DELETE /api/operator/session` | Live operator session plus session-bound CSRF token, same-origin `Origin`, and fetch-metadata validation |
+
+The server rejects unexpected JSON fields at route boundaries. The public `x-agent-setup` convention is removed; possession of dashboard JavaScript never proves authorization. Setup-secret, session, CSRF, and device-code values are excluded from logs.
 
 ## 9. Failure and recovery contract
 
@@ -323,7 +320,7 @@ On `SIGTERM` or `SIGINT` the coordinator:
 7. closes PostgreSQL; and
 8. closes the health listener last.
 
-Each hook has a timeout. Cleanup continues after a hook fails, and results contain bounded failure codes rather than raw exception text. A critical failure sets a nonzero exit status.
+The production composition also closes the operator-authentication service, invalidating its in-memory sessions. Each hook has a timeout. Cleanup continues after a hook fails, and results contain bounded failure codes rather than raw exception text. A critical failure sets a nonzero exit status.
 
 ## 11. Extension points
 
@@ -346,6 +343,7 @@ Bounded product extensions can add attachment normalization, additional slash co
 
 The current disk and private-auth design cannot safely run multiple Web Service instances. Before horizontal scaling:
 
+- replace or deliberately distribute the in-memory operator-session store without weakening expiry, revocation, or CSRF binding;
 - move credentials to a supported per-worker/enterprise secret mechanism;
 - move or explicitly shard workspaces onto durable per-worker storage;
 - partition receive and execution ownership by deployment/owner;

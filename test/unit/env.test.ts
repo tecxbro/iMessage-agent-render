@@ -68,6 +68,65 @@ describe("loadEnvironment", () => {
     expect(message).not.toContain("undefined");
   });
 
+  it("requires a high-entropy dashboard setup secret in production", () => {
+    expect(() =>
+      loadEnvironment(validEnvironment({ NODE_ENV: "production" })),
+    ).toThrow(/DASHBOARD_SETUP_SECRET is required in production/u);
+
+    const setupSecret = "B0jrphAPOY7pg92AN0c9MN4yecczLMdwnx4OkA1KFUk=";
+    expect(
+      loadEnvironment(
+        validEnvironment({
+          NODE_ENV: "production",
+          DASHBOARD_SETUP_SECRET: setupSecret,
+        }),
+      ).DASHBOARD_SETUP_SECRET,
+    ).toBe(setupSecret);
+  });
+
+  it("allows local configuration to omit the dashboard setup secret", () => {
+    expect(
+      loadEnvironment(validEnvironment()).DASHBOARD_SETUP_SECRET,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["base64", "B0jrphAPOY7pg92AN0c9MN4yecczLMdwnx4OkA1KFUk="],
+    ["base64url", "B0jrphAPOY7pg92AN0c9MN4yecczLMdwnx4OkA1KFUk"],
+    [
+      "hexadecimal",
+      "0748eba6100f398ee983dd8037473d30de3279c7332cc7709f1e0e900d4a1549",
+    ],
+  ])("accepts a diverse 32-byte %s setup secret", (_encoding, setupSecret) => {
+    expect(
+      loadEnvironment(
+        validEnvironment({
+          NODE_ENV: "production",
+          DASHBOARD_SETUP_SECRET: setupSecret,
+        }),
+      ).DASHBOARD_SETUP_SECRET,
+    ).toBe(setupSecret);
+  });
+
+  it("rejects weak dashboard setup secrets without echoing submitted material", () => {
+    const submittedSecret = "weak-dashboard-secret";
+    let error: unknown;
+    try {
+      loadEnvironment(
+        validEnvironment({
+          NODE_ENV: "production",
+          DASHBOARD_SETUP_SECRET: submittedSecret,
+        }),
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(EnvironmentValidationError);
+    expect((error as Error).message).toContain("DASHBOARD_SETUP_SECRET");
+    expect((error as Error).message).not.toContain(submittedSecret);
+  });
+
   it.each([
     ["database protocol", { DATABASE_URL: "https://database.example.com" }],
     ["owner phone", { OWNER_PHONE_NUMBER: "not-a-phone" }],
@@ -79,6 +138,11 @@ describe("loadEnvironment", () => {
       },
     ],
     ["encryption key", { APP_ENCRYPTION_KEY: "too-short" }],
+    ["dashboard setup secret", { DASHBOARD_SETUP_SECRET: "too-short" }],
+    [
+      "low-diversity setup secret",
+      { DASHBOARD_SETUP_SECRET: "00".repeat(32) },
+    ],
     ["filesystem root", { CODEX_HOME: "/" }],
     ["path traversal", { AGENT_WORKSPACE_ROOT: "../outside" }],
     [

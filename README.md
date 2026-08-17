@@ -4,7 +4,7 @@ Deploy a private iMessage agent powered by Photon Spectrum, Codex, PostgreSQL, a
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/tecxbro/iMessage-agent-render)
 
-> This provisions a paid Render Web Service, a Render PostgreSQL database, and a persistent disk. The deployed web URL is an operator status page. You talk to the agent through iMessage.
+> This provisions a paid Render Web Service, a Render PostgreSQL database, and a persistent disk. The deployed web URL opens an operator login before the private setup dashboard. You talk to the agent through iMessage.
 
 ## Before you deploy
 
@@ -12,6 +12,7 @@ You need:
 
 - a Photon account for Spectrum Cloud iMessage setup;
 - the owner's E.164 phone number allowed to message the agent;
+- access to the Render service Environment page to retrieve its generated deployment setup code;
 - either a ChatGPT account with Codex device login enabled or an OpenAI API key; and
 - an optional Supermemory API key if you want semantic memory.
 
@@ -21,11 +22,19 @@ Review current Render pricing before deploying. The Blueprint creates paid resou
 
 1. Click **Deploy to Render** above.
 2. Enter the owner's E.164 phone number when Render prompts for it, such as `+19495550123`.
-3. Let Render create the Web Service, PostgreSQL database, persistent disk, and application encryption key. The pre-deploy command applies the checked-in database migrations.
-4. Open the Web Service URL, authenticate Photon, then connect ChatGPT from the agent dashboard. If you choose API-key mode instead, set `CODEX_AUTH_MODE=api_key` and add `OPENAI_API_KEY` as a Render secret.
+3. Let Render create the Web Service, PostgreSQL database, persistent disk, application encryption key, and dashboard setup secret. The pre-deploy command applies the checked-in database migrations.
+4. Open **Web Service > Environment**, reveal `DASHBOARD_SETUP_SECRET`, and use it as the **Deployment setup code** at the Web Service URL. After login, authenticate Photon, then connect ChatGPT from the agent dashboard. If you choose API-key mode instead, set `CODEX_AUTH_MODE=api_key` and add `OPENAI_API_KEY` as a Render secret.
 5. Confirm `/readyz` returns HTTP 200, then message the agent from the authorized iMessage handle.
 
 Render keeps auto-deploys off for template-created services. Deploy reviewed updates manually so a push to the original template cannot redeploy every user's copy.
+
+## Authenticate to the dashboard
+
+Render generates `DASHBOARD_SETUP_SECRET` inside the private Web Service environment. It is not a Blueprint prompt and is never stored in this repository. People who have access to the Render service can find it under **Web Service > Environment** and enter it only in the deployed page's **Deployment setup code** field.
+
+A successful login creates an eight-hour server-side operator session; the service holds at most eight active sessions. The browser receives an `HttpOnly`, `SameSite=Strict`, `Path=/` cookie that is also `Secure` in production; the setup secret itself is not stored in the cookie or browser storage. Protected setup changes require a session-bound CSRF token and same-origin request. Logout revokes the session, and a service restart invalidates all dashboard sessions.
+
+The owner phone number is still entered in Render during Blueprint deployment. It is not collected by this dashboard; moving it is reserved for the separate Prompt 2 work.
 
 ## Finish Codex authentication
 
@@ -34,9 +43,10 @@ Render keeps auto-deploys off for template-created services. Deploy reviewed upd
 The default `CODEX_AUTH_MODE` is `chatgpt`.
 
 1. Open the deployed **Web Service** URL in a trusted browser.
-2. Finish Photon setup first, then select **Connect ChatGPT**.
-3. Open the displayed device-auth URL, sign in, and enter the one-time code.
-4. Keep the dashboard open while it verifies the login and prepares Codex. The dashboard advances automatically when each stage is ready.
+2. Enter the Render-generated deployment setup code.
+3. Finish Photon setup first, then select **Connect ChatGPT**.
+4. Open the displayed device-auth URL, sign in, and enter the one-time code.
+5. Keep the dashboard open while it verifies the login and prepares Codex. The dashboard advances automatically when each stage is ready.
 
 ChatGPT credentials persist under `/var/data/codex`. Treat `auth.json` like a password: never print it, copy it into a ticket, or commit it.
 
@@ -62,9 +72,9 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 - `/healthz` returning 200 means the HTTP process is alive.
 - `/readyz` returning 200 means critical storage, PostgreSQL, migration, queue, Codex, and Spectrum checks are ready.
-- `/readyz` returning 503 means setup is incomplete or a dependency is degraded. Its response contains redacted component states and safe next actions.
+- `/readyz` returning 503 means setup is incomplete or a dependency is degraded. Its public response is limited to safe aggregate readiness state.
 
-The root URL is an operator status page, not an iMessage chat or Photon enrollment link. It must never display credentials, owner handles, message content, provider errors, database URLs, or private paths.
+The root URL is an operator entry point, not an iMessage chat or Photon enrollment link. Before authentication it displays only the deployment setup-code form. Provider status, device codes, verification URLs, the assigned number, owner information, detailed readiness, and provider errors remain inside the authenticated dashboard.
 
 ## Send the first iMessage
 
@@ -87,6 +97,7 @@ The checked-in [`render.yaml`](./render.yaml) creates:
 - `/var/data/codex` for Codex credentials and sessions;
 - `/var/data/workspaces` for agent workspaces;
 - a generated application encryption key;
+- a generated dashboard setup secret available only through the private Web Service environment;
 - a dynamic `DATABASE_URL` from the attached database;
 - `npm run db:migrate` before each deploy; and
 - `/healthz` as Render's liveness check.
@@ -130,7 +141,7 @@ npm ci
 cp .env.example .env
 ```
 
-Edit `.env`, then generate the required encryption key:
+Edit `.env`, then run this command separately for `APP_ENCRYPTION_KEY` and `DASHBOARD_SETUP_SECRET` so they use independent values:
 
 ```bash
 openssl rand -base64 32
@@ -186,6 +197,7 @@ PostgreSQL is the operational source of truth. Supermemory stores only bounded, 
 ## Security and privacy
 
 - Unknown senders are rejected before persistence, queueing, or model work.
+- The setup dashboard requires an eight-hour server-side operator session (at most eight active); protected changes also require a session-bound CSRF token and same-origin request.
 - Authorization is checked again immediately before Codex or another child process starts.
 - Codex children receive an explicit environment allowlist, never the full server environment.
 - Models cannot approve actions or broaden code-owned permission profiles.

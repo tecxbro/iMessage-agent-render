@@ -77,7 +77,7 @@ curl --silent --show-error http://127.0.0.1:10000/readyz
 | `CODEX_HOME` | absolute directory, mode `0700` | | |
 | Workspace root | separate absolute directory, mode `0700` | | |
 | Codex auth | chosen mode reported; no secret printed | | |
-| Public setup page | HTTP 200 without a password; phone setup remains in the dashboard; readiness is claimed only after critical checks pass | | |
+| Setup page | HTTP 200; phone setup remains in the dashboard; readiness is claimed only after critical checks pass | | |
 | `/healthz` | HTTP 200 | | |
 | `/readyz` | HTTP 200 only after full composition | | |
 | Authorized first message | one terminal response | | |
@@ -97,12 +97,12 @@ Create the Blueprint in a fresh Render workspace from the exact commit above.
 | Codex path | `CODEX_HOME=/var/data/codex` | | |
 | Workspace path | `AGENT_WORKSPACE_ROOT=/var/data/workspaces` | | |
 | Database wiring | `DATABASE_URL` dynamic reference; no manual URL | | |
-| User-supplied prompts | none; no owner phone or dashboard credential appears in the Blueprint | | |
-| Generated values | application encryption only; no generated dashboard credential | | |
+| User-supplied prompts | none; onboarding remains in the dashboard | | |
+| Generated values | application encryption material | | |
 | Build | `npm ci --include=dev && npm run build` exits 0 | | |
 | Pre-deploy | `npm run db:migrate` exits 0 | | |
 | Start | `npm start` binds Render `PORT` | | |
-| Public setup page | generated URL opens directly, identifies public setup exposure, and reports truthful readiness | | |
+| Setup page | generated URL opens the dashboard and reports truthful readiness | | |
 | Liveness | external `/healthz` HTTP 200 | | |
 | Initial readiness | 503 only for expected missing auth/dependency | | |
 

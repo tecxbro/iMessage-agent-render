@@ -128,7 +128,7 @@ imessage-codex-agent-boilerplate/
 | Environment | `src/config/env.ts` | Validates all required and optional variables at startup |
 | Model selection | `src/agent/model-selection.ts`, `src/db/repositories/model-settings.ts` | Resolves account-visible preference/effective state and snapshots new chains |
 | Spectrum | `src/transport/*` | Uses native Spectrum concepts; never runs Codex inline |
-| Health | `src/http/*` | Liveness/readiness only; no public admin UI in v1 |
+| Health and setup | `src/http/*` | Liveness, readiness, and deployment dashboard HTTP surfaces |
 | Database | `src/db/*` | Schema, migrations, transaction boundaries, repositories |
 | Queue | `src/queue/*` | Job names, payload schemas, handlers, retry policy |
 | Codex | `src/agent/*` | Thread lifecycle, structured outputs, environment, aborts |

@@ -21,7 +21,7 @@ This starter runs code and handles private iMessage content. The model is useful
 | Input | Trust level |
 |---|---|
 | Environment/secrets provisioned by operator | trusted configuration, still validate |
-| Public browser and HTTP headers | untrusted; public JavaScript, `Origin`, or fetch metadata proves no identity |
+| Browser input and HTTP headers | untrusted; validate exact payloads, `Origin`, and fetch metadata |
 | Authorized sender identity from deterministic lookup | trusted identity |
 | User message text | untrusted instructions within owner permissions |
 | Group participant text | untrusted; often unauthorized |
@@ -31,18 +31,14 @@ This starter runs code and handles private iMessage content. The model is useful
 | Codex/execution-agent output | untrusted until schema and policy validation |
 | Approval record consumed by code | trusted only for the exact hashed operation |
 
-## 4. Public dashboard boundary
+## 4. Dashboard request boundary
 
-The setup dashboard is public and is not an operator identity boundary. There is no dashboard password, login route, server-side operator session, session cookie, or browser CSRF credential. Anyone who deliberately opens the service URL can view setup status and invoke setup actions. The owner phone still controls who may use the iMessage agent after setup; it does not protect the web dashboard.
-
-The server limits this exposure by:
+The server applies these controls to dashboard setup state:
 
 1. returning only a masked owner phone and never echoing a submitted raw number;
 2. keeping provider access tokens, project secrets, Codex credentials, database credentials, raw messages, and unrestricted provider errors server-side;
 3. accepting setup mutations only when `Origin` matches the request target; and
 4. rejecting cross-site `Sec-Fetch-Site` values when present.
-
-The last two checks reduce drive-by cross-site submissions. They are not authentication because a visitor who opens the public dashboard has the correct origin.
 
 ## 5. HTTP route boundary
 
@@ -51,19 +47,23 @@ Every setup `POST` requires:
 1. a same-origin `Origin`; and
 2. no cross-site `Sec-Fetch-Site` value when that header is present.
 
-Rejections use a stable HTTP 403 response. These checks are defense against cross-site browser requests, not access control.
+Rejections use a stable HTTP 403 response.
 
-| Surface | Public behavior | Additional mutation control |
-|---|---|---|
-| `/`, `/healthz`, `/agent/photon-logo.png` | Public | None |
-| `/readyz` | Public detailed readiness snapshot | None for `GET` |
-| `/agent/dashboard`, `/agent/dashboard.js` | Public setup UI | None for `GET` |
-| Photon/ChatGPT status routes | Public, including active device-flow values | None for `GET` |
-| `GET /api/setup/owner/status` | Public; masked phone only | None for `GET` |
-| `POST /api/setup/owner` | Public; exact size-limited country and phone JSON normalized server-side to E.164, or legacy exact E.164 JSON | Origin and fetch-metadata checks |
-| Photon/ChatGPT setup start routes | Public | Origin and fetch-metadata checks |
+| Surface | Contract |
+|---|---|
+| `/`, `/healthz`, `/agent/photon-logo.png` | Setup entry point, liveness, and dashboard asset |
+| `/readyz` | Detailed readiness snapshot |
+| `/agent/dashboard`, `/agent/dashboard.js` | Setup UI |
+| Photon/ChatGPT status routes | Setup status, including active device-flow values |
+| `GET /api/setup/owner/status` | Masked phone only |
+| `POST /api/setup/owner` | Exact size-limited country and phone JSON normalized server-side to E.164, or legacy exact E.164 JSON; Origin and fetch-metadata checks |
+| Photon/ChatGPT setup start routes | Exact empty JSON; Origin and fetch-metadata checks |
 
-Public responses may include provider status, device codes, verification URLs, assigned iMessage numbers, masked owner information, detailed readiness, and bounded error codes. They never include the raw owner phone, access tokens, project secrets, Codex credentials, database credentials, message content, or unrestricted provider exceptions.
+Dashboard responses may include provider status, device codes, verification
+URLs, assigned iMessage numbers, masked owner information, detailed readiness,
+and bounded error codes. They never include the raw owner phone, access tokens,
+project secrets, Codex credentials, database credentials, message content, or
+unrestricted provider exceptions.
 
 ## 6. Sender authorization
 
@@ -238,7 +238,6 @@ No device code, verification URL, raw message, prompt, full command output, hand
 
 | Scenario | Required control |
 |---|---|
-| Stranger opens deployment URL | Accepted risk: public setup/status and deliberate mutations; keep raw secrets and phone input server-side |
 | Cross-site form/script starts setup | same-origin `Origin` and fetch-metadata checks |
 | Stranger texts line | deterministic allowlist rejection before model |
 | Sender is revoked after queueing | captured identity reference plus live pre-child reauthorization |
@@ -256,7 +255,7 @@ No device code, verification URL, raw message, prompt, full command output, hand
 ## 17. Security release checklist
 
 - Secret scanner passes repository and generated artifacts.
-- Public dashboard exposure is documented and responses contain no raw owner phone, provider credentials, database credentials, Codex credentials, message content, or unrestricted errors.
+- Dashboard responses contain no raw owner phone, provider credentials, database credentials, Codex credentials, message content, or unrestricted errors.
 - Origin/fetch-metadata denial and same-origin setup tests pass.
 - Logs contain no device codes or verification URLs.
 - Unauthorized paths show zero Codex process spawns.

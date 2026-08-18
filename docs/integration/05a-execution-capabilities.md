@@ -121,7 +121,7 @@ database are ready:
   or overlaps `CODEX_HOME` after realpath resolution;
 - report zero enabled bindings as execution unavailable without pretending a
   live Codex execution path exists; and
-- keep raw absolute paths out of public readiness details.
+- keep raw absolute paths out of readiness details.
 
 Whether “no execution binding” blocks overall readiness is an integration
 product decision: the current architecture permits conversational turns on a

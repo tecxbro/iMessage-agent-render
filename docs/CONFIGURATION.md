@@ -24,17 +24,18 @@ All changes require a service restart. Render-managed values should be changed t
 | `PAIRING_MODE` | No | `off` | Operator policy | Yes | No |
 | `GROUP_MODE` | No | `owner_mentions_only` | Operator policy | Yes | No |
 
-Fresh deployments leave every owner variable unset and save the owner through the public dashboard. The dashboard defaults to U.S. national entry and supports country-aware international entry, then normalizes a valid number to E.164 before persistence. The Render Blueprint never asks for a phone number. Startup first prefers an active encrypted database identity. Only when none exists does it import `OWNER_PHONE_NUMBER`, then the former long Render alias, then a single unambiguous E.164 `AGENT_OWNER_HANDLES` value. These legacy environment inputs remain strict E.164 migration values; conflicting phone variables are rejected, and multiple handles or a non-phone handle produce a stable migration-required state instead of a silent choice.
+Fresh deployments leave every owner variable unset and save the owner through the deployment dashboard. The dashboard defaults to U.S. national entry and supports country-aware international entry, then normalizes a valid number to E.164 before persistence. The Render Blueprint never asks for a phone number. Startup first prefers an active encrypted database identity. Only when none exists does it import `OWNER_PHONE_NUMBER`, then the former long Render alias, then a single unambiguous E.164 `AGENT_OWNER_HANDLES` value. These legacy environment inputs remain strict E.164 migration values; conflicting phone variables are rejected, and multiple handles or a non-phone handle produce a stable migration-required state instead of a silent choice.
 
 Imported values are one-time inputs: successful import persists the encrypted identity and later restarts do not overwrite it from the environment. Stored Photon owner metadata is provider setup state, never sender-authorization authority. After the masked dashboard status and an authorized message verify migration, remove old environment values manually if desired.
 
 Keep `PAIRING_MODE=off` unless pairing has been explicitly reviewed for the deployment. `GROUP_MODE=disabled` rejects group use; `owner_mentions_only` requires the owner/group policy enforced by the application.
 
-## Public dashboard
+## Dashboard onboarding
 
-The dashboard has no password environment variable, login route, session cookie, or CSRF credential. Fresh Blueprint deployment prompts for zero user-supplied environment values. The former dashboard credential variables are unsupported and startup rejects them if they are still present, including when set to an empty string. Existing services must delete those two legacy variables in Render before deploying this version; see [Troubleshooting](./TROUBLESHOOTING.md).
+Fresh Blueprint deployment prompts for zero user-supplied environment values. The former dashboard credential variables are unsupported and startup rejects them if they are still present, including when set to an empty string. Existing services must delete those two legacy variables in Render before deploying this version; see [Troubleshooting](./TROUBLESHOOTING.md).
 
-The dashboard is public. Read-only setup status and detailed readiness are available to any visitor, and a visitor who opens the page can submit owner, Photon, and ChatGPT setup changes. Mutations require a matching `Origin` and reject cross-site fetch metadata, which reduces drive-by cross-site requests but is not user authentication.
+Owner, Photon, and ChatGPT setup are managed from the dashboard. Mutations
+require a matching `Origin` and reject cross-site fetch metadata.
 
 ## Codex authentication
 

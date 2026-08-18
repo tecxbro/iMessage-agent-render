@@ -22,11 +22,15 @@ Expected composed-service states:
 - `/readyz` is HTTP 503 during shutdown, missing owner setup, a Photon installation not validated for the current owner revision, missing/expired Codex auth, capability loss, database failure, migration/queue failure, invalid disk/workspace storage, or Spectrum disconnect.
 - Supermemory may be `disabled` or `degraded` without blocking the operational pipeline.
 
-The public readiness response includes detailed component state, bounded error codes, and remediation actions. The public dashboard also exposes setup status, active device codes and verification URLs, the assigned number, and masked owner state. Treat a raw owner phone, provider credential, database credential, message, unrestricted provider error, or private path in these responses as a security incident.
+The readiness response includes detailed component state, bounded error codes,
+and remediation actions. The dashboard reports setup status, active device codes
+and verification URLs, the assigned number, and masked owner state. Treat a raw
+owner phone, provider credential, database credential, message, unrestricted
+provider error, or private path in these responses as a security incident.
 
-## Public dashboard access
+## Dashboard operations
 
-The dashboard has no login and is public to anyone who can reach the service URL. Same-origin and fetch-metadata checks reduce drive-by cross-site mutations but do not prevent a visitor who opens the dashboard from changing setup. If that exposure is unacceptable, stop the service or put an independently authenticated access-control layer in front of it.
+Dashboard setup mutations require same-origin and fetch-metadata validation.
 
 The owner card shows either the setup form or only the masked active phone. The saved personal phone is the only authorized iMessage sender; the separately assigned Photon number is the destination shown at completion. The phone is entered in the dashboard and is not a fresh-deployment environment value.
 
@@ -69,7 +73,7 @@ After restart, require reconciliation of undrained inbound messages, queued plan
 
 ### Codex auth missing or expired
 
-Symptoms: `/healthz` 200; public `/readyz` 503; the public dashboard reports Codex authentication needs attention; Spectrum startup remains paused.
+Symptoms: `/healthz` 200; `/readyz` 503; the dashboard reports Codex authentication needs attention; Spectrum startup remains paused.
 
 ChatGPT mode:
 
@@ -84,7 +88,7 @@ API-key mode: replace `OPENAI_API_KEY` in Render, restart, and rerun capability 
 
 ### Owner identity missing or legacy migration required
 
-Symptoms: `/healthz` 200; public `/readyz` 503; Spectrum intake remains stopped; the public dashboard asks for an owner phone.
+Symptoms: `/healthz` 200; `/readyz` 503; Spectrum intake remains stopped; the dashboard asks for an owner phone.
 
 For a fresh deployment, save the personal owner phone in the dashboard and continue to Photon. U.S. entry defaults to national format; international entry requires a selected country, and the server normalizes both to E.164. For an existing deployment, first verify whether `OWNER_PHONE_NUMBER`, the former long Render alias, or `AGENT_OWNER_HANDLES` is present. The runtime imports only one unambiguous E.164 value and never imports owner identity from Photon credentials. A legacy Photon credential file may be imported into the durable installation record, but Spectrum remains blocked until the provider validates it for the current owner revision. If multiple handles or an email-only handle caused migration-required state, open the dashboard and save the intended phone explicitly. Verify the masked status, current-revision Photon connection, and an authorized message before manually removing old environment values.
 
@@ -100,7 +104,7 @@ Symptoms: `/healthz` 200; `/readyz` 503; the dashboard reports Photon setup requ
 
 ### Spectrum disconnect
 
-Symptoms: public `/readyz` 503; the public dashboard or private logs report `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`.
+Symptoms: `/readyz` 503; the dashboard or private logs report `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`.
 
 1. Check Photon provider status and the Web Service's Spectrum credentials without printing them.
 2. Allow the bounded supervised reconnect policy to run.
@@ -110,7 +114,7 @@ Symptoms: public `/readyz` 503; the public dashboard or private logs report `SPE
 
 ### PostgreSQL timeout/outage
 
-Symptoms: `/healthz` 200; public `/readyz` 503; public readiness or private logs report `DATABASE_UNAVAILABLE`; downstream startup stages do not run.
+Symptoms: `/healthz` 200; `/readyz` 503; readiness or private logs report `DATABASE_UNAVAILABLE`; downstream startup stages do not run.
 
 1. Stop manual message execution.
 2. Check Render Postgres health and the dynamic `DATABASE_URL` reference.
@@ -121,7 +125,7 @@ Symptoms: `/healthz` 200; public `/readyz` 503; public readiness or private logs
 
 ### Supermemory timeout/outage
 
-Symptoms: the public dashboard or private logs report memory recall unavailable/degraded; core readiness can remain healthy.
+Symptoms: the dashboard or private logs report memory recall unavailable/degraded; core readiness can remain healthy.
 
 This is the required operating policy. Automated integration coverage verifies that each application retry uses a fresh abort signal and chaos coverage verifies durable candidate recovery after queue publication failure. A protected live-provider outage exercise is still separate release evidence.
 
@@ -143,7 +147,7 @@ Symptoms: a task remains `needs_approval`, an approved action remains pending, o
 
 ### Persistent disk missing or invalid
 
-Symptoms: public `/readyz` 503; public readiness or private logs report `PERSISTENT_STORAGE_INVALID`.
+Symptoms: `/readyz` 503; readiness or private logs report `PERSISTENT_STORAGE_INVALID`.
 
 1. Stop execution; do not create replacement Codex threads on ephemeral storage.
 2. Verify the `/var/data` mount, ownership, space, and directory permissions.
@@ -185,16 +189,16 @@ When ownership changes or a credential may be exposed:
 
 ## Remove obsolete dashboard credential variables
 
-This release has no dashboard password. Before upgrading an existing service:
+Before upgrading an existing service:
 
 1. Open the Web Service's private **Environment** page in Render.
 2. Delete both former dashboard credential variables using Render's save-without-deploy option.
 3. Deploy this release. Startup intentionally rejects either obsolete key, even when it is empty.
-4. Open the public dashboard and verify owner, Photon, and ChatGPT state.
+4. Open the dashboard and verify owner, Photon, and ChatGPT state.
 
 ## Evidence and escalation
 
-Record timestamps, commit, Render deploy ID, public readiness, redacted diagnostic states, correlation IDs, tests run, and whether a live provider was actually exercised. Never paste raw messages, device codes, secrets, auth files, phone/email handles, or full provider exceptions into incident tickets.
+Record timestamps, commit, Render deploy ID, readiness evidence, redacted diagnostic states, correlation IDs, tests run, and whether a live provider was actually exercised. Never paste raw messages, device codes, secrets, auth files, phone/email handles, or full provider exceptions into incident tickets.
 
 Escalate and keep execution paused when:
 

@@ -54,7 +54,7 @@ curl --fail --silent --show-error "https://<service-host>/healthz"
 
 **What it means:** One or more critical components are missing, starting, failed, or degraded.
 
-**Where to check:** Public `/readyz` or the public dashboard for bounded component/setup detail, then the corresponding private Render service logs.
+**Where to check:** `/readyz` or the dashboard for bounded component/setup detail, then the corresponding private Render service logs.
 
 **Exact safe command:**
 
@@ -68,11 +68,11 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 ## Obsolete dashboard credential variable blocks startup
 
-**What it means:** An existing Render service still has one of the two removed dashboard credential variables. This release has no dashboard password and rejects either legacy key, including an empty value.
+**What it means:** An existing Render service still has one of the two removed dashboard credential variables. This release rejects either legacy key, including an empty value.
 
 **Where to check:** The deployed Web Service's private **Environment** page in Render. Do not print or copy the values.
 
-**Expected result:** Delete both former dashboard credential variables using Render's save-without-deploy option, then deploy this release. The service starts without any dashboard credential in its environment and the public dashboard opens directly.
+**Expected result:** Delete both former dashboard credential variables using Render's save-without-deploy option, then deploy this release. The service starts and the dashboard opens directly.
 
 **Do not:** Re-add either removed credential to `render.yaml`, `.env.example`, the environment schema, or deployment instructions.
 
@@ -82,9 +82,9 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 **Where to check:** Confirm the dashboard was opened directly from the deployed service origin and refresh it before retrying.
 
-**Expected result:** Same-origin dashboard requests include the correct browser `Origin` automatically. Cross-site requests remain unavailable, while a visitor who directly opens the public dashboard can submit setup changes.
+**Expected result:** Same-origin dashboard requests include the correct browser `Origin` automatically, and cross-site requests remain unavailable.
 
-**Do not:** Disable Origin/fetch-metadata validation or misrepresent it as visitor authentication.
+**Do not:** Disable Origin/fetch-metadata validation.
 
 ## Owner setup is missing or migration is required
 
@@ -94,7 +94,7 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 **Expected result:** Saving one valid dashboard phone creates a masked configured status, keeps the raw phone out of responses and logs, unlocks Photon setup, and survives restart. U.S. national entry and country-selected international entry are normalized to E.164 before storage. An already active database identity takes precedence over every legacy environment value.
 
-**Do not:** Select one legacy handle silently, copy the owner from Photon credential metadata, expose a public fallback route, or delete old environment values before verifying the migrated identity.
+**Do not:** Select one legacy handle silently, copy the owner from Photon credential metadata, add a fallback route, or delete old environment values before verifying the migrated identity.
 
 ## Previous owner can still message after replacement
 
@@ -110,7 +110,7 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 **What it means:** ChatGPT device credentials are absent/expired, or API-key mode lacks a valid secret.
 
-**Where to check:** The public dashboard for Codex auth state and the private service shell.
+**Where to check:** The dashboard for Codex auth state and the private service shell.
 
 **Exact safe command:**
 
@@ -128,7 +128,7 @@ For ChatGPT mode, enroll with `npm run codex:login`, then rerun the status comma
 
 **What it means:** Authentication succeeded, but a configured model/effort/permission pair could not run.
 
-**Where to check:** The public dashboard for `CODEX_CAPABILITY_FAILED`, model variables, and redacted private startup logs.
+**Where to check:** The dashboard for `CODEX_CAPABILITY_FAILED`, model variables, and redacted private startup logs.
 
 **Exact safe command:**
 
@@ -144,7 +144,7 @@ npm run typecheck && npm test -- test/unit/capabilities.test.ts
 
 **What it means:** The persistent `app.messages` stream is not connected or exhausted its bounded restart policy.
 
-**Where to check:** The public dashboard or private logs for `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`, plus Photon provider status.
+**Where to check:** The dashboard or private logs for `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`, plus Photon provider status.
 
 **Exact safe command:**
 
@@ -176,7 +176,7 @@ npm test -- test/security/authorization-boundaries.test.ts test/unit/transport/s
 
 **What it means:** Inbound persistence succeeded, but planning, execution, synthesis, or outbound delivery is pending, failed, canceled, or rate-limited.
 
-**Where to check:** The public dashboard, safe correlation IDs in private logs, queue/failure counts, and the release smoke record.
+**Where to check:** The dashboard, safe correlation IDs in private logs, queue/failure counts, and the release smoke record.
 
 **Exact safe command:**
 
@@ -224,7 +224,7 @@ test -d "$CODEX_HOME" && test -d "$AGENT_WORKSPACE_ROOT" && npm test -- test/uni
 
 **What it means:** The optional API key is absent, or bounded recall/write operations are unavailable. Operational PostgreSQL state is unaffected.
 
-**Where to check:** The public dashboard for `supermemory: disabled|degraded` and redacted memory receipt/failure codes in private logs.
+**Where to check:** The dashboard for `supermemory: disabled|degraded` and redacted memory receipt/failure codes in private logs.
 
 **Exact safe command:**
 
@@ -254,4 +254,4 @@ npm test -- test/chaos/outbound-restart.test.ts
 
 ## Still blocked
 
-Record the exact commit, timestamp, public readiness, redacted diagnostic state, safe correlation IDs, commands run, and whether any live provider was exercised. Use [Operations](./OPERATIONS.md) for recovery and escalation rules. Never include device codes, secrets, owner handles, raw messages, database URLs, private paths, auth files, or full provider exceptions.
+Record the exact commit, timestamp, readiness evidence, redacted diagnostic state, safe correlation IDs, commands run, and whether any live provider was exercised. Use [Operations](./OPERATIONS.md) for recovery and escalation rules. Never include device codes, secrets, owner handles, raw messages, database URLs, private paths, auth files, or full provider exceptions.

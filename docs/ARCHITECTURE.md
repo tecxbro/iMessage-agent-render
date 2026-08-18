@@ -31,11 +31,11 @@ The remainder of this document describes the composition contract and identifies
 flowchart TB
   U["Authorized iMessage owner"] <--> P["Photon Spectrum Cloud"]
   P <-->|"persistent app.messages gRPC"| T["Spectrum receive loop"]
-  B["Public browser"]
+  B["Setup browser"]
 
   subgraph W["One Render Web Service"]
-    L["Same-origin mutation boundary"]
-    L --> DSH["Public setup dashboard"]
+    L["Setup request validation"]
+    L --> DSH["Setup dashboard"]
     DSH --> PS["Photon and ChatGPT setup controllers"]
     T --> A["authorize + durable ingest"]
     A --> Q["pg-boss workers"]
@@ -92,9 +92,11 @@ These boundaries are non-interchangeable:
 - Unknown senders must be rejected before any model or child-process call.
 - Model, repository, memory, web, and tool content are untrusted data. A model cannot broaden its permission profile or approve an action.
 
-The HTTP setup surface is public. It has no password, operator session, or browser authentication state. Anyone who deliberately opens the service URL can view the setup dashboard and invoke setup actions. This is an accepted single-deployment limitation, not an identity boundary.
-
-State-changing setup requests require an exact same-origin `Origin` and reject cross-site fetch metadata. This reduces drive-by cross-site submissions but does not authenticate the browser. Public owner status and rendered pages contain only the masked owner phone; submitted raw numbers are never echoed. Provider credentials, database credentials, Codex credentials, and unrestricted errors stay server-side.
+State-changing setup requests require an exact same-origin `Origin` and reject
+cross-site fetch metadata. Owner status and rendered pages contain only the
+masked owner phone; submitted raw numbers are never echoed. Provider
+credentials, database credentials, Codex credentials, and unrestricted errors
+stay server-side.
 
 `DeploymentIdentityController` can exist before PostgreSQL is connected. After migrations, `OperationalRepository.ensureDeployment()` creates the deployment and primary owner without a channel identity, then the controller binds to the repository. An active database identity wins; only when none exists may one valid legacy environment phone be imported. Stored Photon metadata is never an authorization source. The controller serializes replacements, exposes masked state, and notifies activation only after persistence succeeds. Replacing the owner increments the owner's binding revision in the same transaction and invalidates the prior Photon binding.
 
@@ -133,7 +135,7 @@ sequenceDiagram
 The ordered startup stages in `startAgentService()` are:
 
 1. listen on HTTP;
-2. validate configuration, including rejection of removed dashboard credential keys;
+2. validate configuration, including rejection of unsupported legacy keys;
 3. prepare the two persistent directories and Codex config;
 4. connect PostgreSQL;
 5. apply or verify migrations;
@@ -147,7 +149,7 @@ The ordered startup stages in `startAgentService()` are:
 
 Queue workers are one-time process infrastructure. Spectrum intake is a separate restartable run owned by `ActivationCoordinator`. Capability, Photon, or owner loss stops the current intake; recovery starts at most one replacement; and restart exhaustion clears the active run ID before entering bounded recovery. Durable-pipeline reconciliation completes before normal intake is accepted.
 
-Missing or expired ChatGPT auth is a setup state, not a crash loop. Liveness remains healthy, readiness stays false, and Spectrum execution is not started. In ChatGPT mode the user reconnects through the public dashboard device-code flow; `npm run codex:login` and `npm run codex:status` in the private service shell remain recovery tools using the same persistent `CODEX_HOME`. In API-key mode readiness requires `OPENAI_API_KEY`; the key is copied only into the explicit Codex child environment.
+Missing or expired ChatGPT auth is a setup state, not a crash loop. Liveness remains healthy, readiness stays false, and Spectrum execution is not started. In ChatGPT mode the user reconnects through the dashboard device-code flow; `npm run codex:login` and `npm run codex:status` in the private service shell remain recovery tools using the same persistent `CODEX_HOME`. In API-key mode readiness requires `OPENAI_API_KEY`; the key is copied only into the explicit Codex child environment.
 
 `ModelSettingsService` is the only subscriber to account-capability events and the only domain component that persists the refreshed catalog. The HTTP controller maps domain failures into route-specific errors. ChatGPT account `model/list` is the authority for the Advanced picker and
 supported reasoning efforts; `account/read` and `account/updated` supply only
@@ -279,33 +281,40 @@ Consequential actions use immutable approval data bound to owner, allowed space,
 The composed health server returns:
 
 ```text
-GET /          -> public setup entry point; never the iMessage conversation
-GET /healthz  -> public 200 {"status":"ok"}
-GET /readyz   -> public detailed readiness snapshot; 200 only when critical components are ready
-GET /readyz   -> public detailed readiness snapshot with 503 otherwise
+GET /          -> setup dashboard; never the iMessage conversation
+GET /healthz  -> 200 {"status":"ok"} while the HTTP process is live
+GET /readyz   -> detailed readiness snapshot; 200 only when critical components are ready
+GET /readyz   -> detailed readiness snapshot with 503 otherwise
 ```
 
-Critical readiness components are configuration, database, migrations, queue, owner identity, Spectrum, Codex auth, Codex capabilities, disk, and workspace. Supermemory may be `disabled` or degraded without making operational readiness depend on semantic storage. Public `/readyz` reports the detailed component snapshot, bounded error codes, and remediation actions.
+Critical readiness components are configuration, database, migrations, queue, owner identity, Spectrum, Codex auth, Codex capabilities, disk, and workspace. Supermemory may be `disabled` or degraded without making operational readiness depend on semantic storage. `/readyz` reports the detailed component snapshot, bounded error codes, and remediation actions.
 
-Device codes, verification URLs, assigned numbers, masked owner state, bounded provider error codes, and detailed readiness are public through the dashboard and setup routes. Raw owner phone values, provider credentials, database credentials, message content, unrestricted errors, and private paths stay server-side. Render uses `/healthz` to avoid turning incomplete enrollment into a restart loop.
+The dashboard and setup routes report device codes, verification URLs, assigned
+numbers, masked owner state, bounded provider error codes, and detailed
+readiness. Raw owner phone values, provider credentials, database credentials,
+message content, unrestricted errors, and private paths stay server-side.
+Render uses `/healthz` to avoid turning incomplete enrollment into a restart
+loop.
 
 The current `src/server.ts` starts this health server first, runs each operational stage, and shuts the composition down on process signals. Its `/healthz` proves only that the HTTP process is alive; `/readyz` becomes `200` only after the owner, PostgreSQL, migrations, queue, Codex auth/capabilities, storage, and Spectrum are ready. A fresh deployment without an owner is deliberately live but not ready, and Spectrum intake remains stopped.
 
-### 8.1 Public route boundary
+### 8.1 Setup HTTP boundary
 
-| Route | Boundary |
+| Route | Behavior |
 |---|---|
-| `GET /`, `GET /healthz`, `GET /agent/photon-logo.png` | Public |
-| `GET /readyz` | Public detailed readiness snapshot |
-| `GET /agent/dashboard`, `GET /agent/dashboard.js` | Public setup UI |
-| Photon status, ChatGPT status | Public setup status, including device-flow values when active |
-| `GET /api/setup/owner/status` | Public; masked owner only |
+| `GET /`, `GET /healthz`, `GET /agent/photon-logo.png` | Setup entry point, liveness, and dashboard asset |
+| `GET /readyz` | Detailed readiness snapshot |
+| `GET /agent/dashboard`, `GET /agent/dashboard.js` | Setup UI |
+| Photon status, ChatGPT status | Setup status, including device-flow values when active |
+| `GET /api/setup/owner/status` | Masked owner only |
 | `POST /api/setup/owner` | Same-origin and fetch-metadata checks; exact size-limited country-aware JSON normalized server-side to E.164, plus the legacy exact E.164 shape |
 | Photon setup start, ChatGPT setup start | Same-origin and fetch-metadata checks; exact empty JSON object |
-| `GET /api/settings/model` | Public plan and picker metadata; private `no-store`; never returns email |
+| `GET /api/settings/model` | Plan and picker metadata; `no-store`; never returns email |
 | `PUT /api/settings/model` | Same-origin and fetch-metadata checks; exact model/effort JSON; server refresh and bounded probe |
 
-The server rejects unexpected JSON fields at route boundaries. Same-origin checks reduce drive-by requests but do not prove authorization. Device-code values are excluded from logs.
+The server rejects unexpected JSON fields at route boundaries. State-changing
+setup requests require same-origin and fetch-metadata validation. Device-code
+values are excluded from logs.
 
 ## 9. Failure and recovery contract
 

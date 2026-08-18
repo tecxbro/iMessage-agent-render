@@ -119,7 +119,7 @@ sequenceDiagram
   B->>D: connect database and verify migrations
   B->>O: ensure deployment and initialize owner
   B->>D: start pg-boss and reconciliation
-  B->>C: inspect auth and probe model/effort/sandbox
+  B->>C: refresh account catalog and probe effective pair
   alt owner, auth, and capabilities ready
     B->>S: launch supervised gRPC receive loop
     S-->>B: connected
@@ -139,13 +139,21 @@ The ordered startup stages in `startAgentService()` are:
 5. apply or verify migrations;
 6. ensure the deployment, bind the owner identity repository, and import one valid legacy owner only when no database identity exists;
 7. start pg-boss;
-8. inspect Codex auth and probe configured capabilities;
+8. refresh Codex account capabilities, resolve the effective model pair, and
+   probe only that pair;
 9. configure optional Supermemory; and
 10. start Spectrum only when owner identity, Photon, Codex auth, and capabilities are ready.
 
 The integration bootstrap must make `startSpectrum()` resolve after supervision has been launched and connection state can be tracked; it must not block bootstrap completion for the lifetime of the stream. It must also run durable-pipeline reconciliation before accepting normal work.
 
 Missing or expired ChatGPT auth is a setup state, not a crash loop. Liveness remains healthy, readiness stays false, and Spectrum execution is not started. In ChatGPT mode the user reconnects through the public dashboard device-code flow; `npm run codex:login` and `npm run codex:status` in the private service shell remain recovery tools using the same persistent `CODEX_HOME`. In API-key mode readiness requires `OPENAI_API_KEY`; the key is copied only into the explicit Codex child environment.
+
+ChatGPT account `model/list` is the authority for the Advanced picker and
+supported reasoning efforts; `account/read` and `account/updated` supply only
+displayed plan metadata. PostgreSQL stores GPT-5.6 Luna / High as the default
+preference separately from the effective pair. If the exact preference is not
+advertised, Codex's advertised default model and effort become effective
+without overwriting the preference.
 
 ## 5. Message pipeline
 
@@ -174,7 +182,7 @@ If queue scheduling fails after insert, the message remains durable. Reconciliat
 
 ### 5.3 Flush
 
-The flush transaction drains undrained and carried messages in order, creates a versioned chain, cancels the stale chain, and enqueues one `turn.plan` job. Queue payloads contain identifiers and expected versions/states, not raw personal content.
+The flush transaction drains undrained and carried messages in order, creates a versioned chain with the deployment's current effective model/effort snapshot, cancels the stale chain, and enqueues one `turn.plan` job. Queue payloads contain identifiers and expected versions/states, not raw personal content. A later dashboard change affects the next chain and cannot change running work.
 
 ### 5.4 Plan
 
@@ -183,21 +191,34 @@ The `turn.plan` handler:
 1. verify the chain ID, version, and current state;
 2. load authoritative history from PostgreSQL;
 3. optionally recall bounded, owner-scoped Supermemory context;
-4. resolve an exact model/effort profile;
+4. load the exact model/effort snapshot from the chain;
 5. run the interaction Codex thread with structured output; and
 6. either materialize a direct response or enqueue bounded execution tasks.
 
-The production composition registers this handler with its model profiles, prompt bundle, durable repositories, queue publisher, optional memory recall, and outbound status transport. Offline tests cover those boundaries; protected live-provider execution remains a separate release check.
+The production composition registers this handler with its prompt bundle,
+durable repositories, queue publisher, optional memory recall, and outbound
+status transport. The interaction model cannot select a harness model through
+structured output. Offline tests cover those boundaries; protected
+live-provider execution remains a separate release check.
 
 ### 5.5 Execute
 
 Each `task.execute` handler re-checks chain/task state and current workspace capability, resolves a named thread and explicit workspace, creates a minimal child environment, applies a code-owned permission profile, runs with timeout/cancellation/output bounds, validates `ExecutionResult`, and persists a terminal task result or exact approval proposal.
 
-Execution agents cannot message the owner or consume their own approval. Their results return through synthesis. The production composition registers the durable execution worker with bounded concurrency, cancellation, model routing, prompts, and the shared orchestration repository.
+Execution agents cannot message the owner or consume their own approval. Their
+results return through synthesis. Every task loads the parent chain's persisted
+model pair; there is no task-complexity router or automatic escalation. The
+production composition registers the durable execution worker with bounded
+concurrency, cancellation, prompts, and the shared orchestration repository.
 
 ### 5.6 Synthesize
 
-The singleton `turn.synthesize` handler loads terminal task results, preserves truthful partial failures, requires confirmation for consequential operations, produces the final user-facing response, and materializes every outbound part before sending. The production composition registers this worker and the outbound sender against the same durable repository and queue.
+The singleton `turn.synthesize` handler loads terminal task results and the same
+chain model pair, preserves truthful partial failures, requires confirmation
+for consequential operations, produces the final user-facing response, and
+materializes every outbound part before sending. The production composition
+registers this worker and the outbound sender against the same durable
+repository and queue.
 
 ### 5.7 Send
 
@@ -239,7 +260,10 @@ Handlers compare their expected version and state with the authoritative row. A 
 
 The interaction lane owns concise user-facing answers, decomposition, status wording, approvals, and final synthesis. Its default permissions are read-only with network disabled.
 
-Execution lanes receive one bounded purpose, one explicit workspace, a model profile, a permission profile, runtime/output limits, and only relevant context. Independent tasks may run concurrently within the configured global limit; dependent tasks form a validated DAG.
+Execution lanes receive one bounded purpose, one explicit workspace, the
+chain's code-owned model selection, a permission profile, runtime/output
+limits, and only relevant context. Independent tasks may run concurrently
+within the configured global limit; dependent tasks form a validated DAG.
 
 The Codex child environment is constructed from an allowlist. It excludes database, Photon, Supermemory, encryption, and unrelated cloud credentials. `OPENAI_API_KEY` is included only in explicit API-key mode. `danger-full-access` is forbidden.
 
@@ -273,6 +297,8 @@ The current `src/server.ts` starts this health server first, runs each operation
 | `GET /api/setup/owner/status` | Public; masked owner only |
 | `POST /api/setup/owner` | Same-origin and fetch-metadata checks; exact size-limited country-aware JSON normalized server-side to E.164, plus the legacy exact E.164 shape |
 | Photon setup start, ChatGPT setup start | Same-origin and fetch-metadata checks; exact empty JSON object |
+| `GET /api/settings/model` | Public plan and picker metadata; private `no-store`; never returns email |
+| `PUT /api/settings/model` | Same-origin and fetch-metadata checks; exact model/effort JSON; server refresh and bounded probe |
 
 The server rejects unexpected JSON fields at route boundaries. Same-origin checks reduce drive-by requests but do not prove authorization. Device-code values are excluded from logs.
 

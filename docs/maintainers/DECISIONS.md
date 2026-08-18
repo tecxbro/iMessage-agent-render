@@ -74,6 +74,8 @@
 
 ## ADR-010 — Configurable GPT-5.6 profiles with explicit capability probes
 
+**Status:** Superseded by ADR-020.
+
 **Decision:** expose Luna, Terra, and Sol profiles; verify configured model/effort pairs at startup.
 
 **Why:** the user requested configurable routing, and SDK/CLI support for new effort values can lag documentation.
@@ -161,3 +163,26 @@ The public owner route accepts exact `{ countryCode, phoneNumber }` dashboard JS
 **Why:** the product assumes most deployers are in the United States, so requiring them to understand or type `+1` adds avoidable onboarding friction. Keeping validation server-side preserves the authorization, masking, replacement, and Photon contracts while still giving international owners an explicit path.
 
 **Rejected:** requiring E.164 in the default field, inferring country from IP or browser locale, maintaining a hand-written calling-code table, trusting browser-only normalization, or weakening canonical storage validation.
+
+## ADR-020 — Account-aware deployment model selection
+
+**Decision:** store GPT-5.6 Luna / High as the default deployment preference.
+After ChatGPT sign-in, use Codex `model/list` as the authoritative visible
+model/effort catalog and `account/read` or `account/updated` only for displayed
+plan metadata. The dashboard Advanced picker changes one deployment-wide
+preference. Each new chain snapshots the effective pair and planning,
+execution, and synthesis all use it.
+
+When the exact preference is unavailable, use Codex's advertised default model
+and default effort without overwriting the preference. Probe only the effective
+pair for readiness and probe a requested pair before saving it.
+
+**Why:** account entitlements vary and Codex explicitly exposes the current
+picker contract. Separating preferred and effective state keeps a deployment
+usable when Luna High is absent while allowing it to return automatically when
+the account later advertises it.
+
+**Rejected:** hard-coded plan entitlement tables, request-complexity routing,
+five static profiles, per-space overrides, model-generated profile choice,
+automatic escalation, repeated pair retries, environment-based model policy,
+and deleting legacy profile columns in the same compatibility migration.

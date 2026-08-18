@@ -204,7 +204,43 @@ function renderFinalPage(
       </ul>
       ${number}
       <p class="ready-message"><strong>Your agent is ready.</strong><br>Text it to get started.</p>
-    </section>`;
+    </section>${authMode === "chatgpt" ? renderAdvancedSettings() : ""}`;
+}
+
+function renderAdvancedSettings(): string {
+  return `<details id="advanced-settings" class="card advanced-card">
+    <summary>Advanced</summary>
+    <dl class="model-summary">
+      <div>
+        <dt>ChatGPT plan</dt>
+        <dd id="chatgpt-plan">Loading</dd>
+      </div>
+      <div id="preferred-model-row" hidden>
+        <dt>Preferred</dt>
+        <dd id="preferred-model">GPT-5.6 Luna · High</dd>
+      </div>
+      <div>
+        <dt>Active model</dt>
+        <dd id="active-model">Loading</dd>
+      </div>
+      <div>
+        <dt>Reasoning</dt>
+        <dd id="active-effort">Loading</dd>
+      </div>
+    </dl>
+    <form id="model-settings-form" class="model-settings-form">
+      <label for="model-select">Model</label>
+      <select id="model-select" disabled></select>
+      <label for="effort-select">Reasoning</label>
+      <select id="effort-select" disabled></select>
+      <div class="model-actions">
+        <button class="button" type="submit" disabled>Save model</button>
+        <button id="restore-luna-default" class="button secondary-button" type="button" disabled>Use Luna High</button>
+      </div>
+      <p id="model-fallback-explanation" class="progress" hidden></p>
+      <p id="model-settings-status" class="progress" aria-live="polite"></p>
+    </form>
+  </details>`;
 }
 
 export function renderDeploymentPage(
@@ -299,6 +335,11 @@ export function renderDeploymentPage(
         </div>`
         }
       </section>`
+          : ""
+      }
+      ${
+        options.authMode === "chatgpt" && chatGptConnected
+          ? renderAdvancedSettings()
           : ""
       }
     </div>`;
@@ -407,6 +448,20 @@ export function renderDeploymentPage(
     .agent-number span { color: var(--muted); }
     .agent-number strong { font-size: clamp(2rem, 7vw, 3.5rem); font-weight: 400; letter-spacing: -0.035em; }
     .ready-message { margin: 0; font-size: 1.3rem; }
+    .advanced-card { margin-block-start: 1.5rem; }
+    .advanced-card summary { min-block-size: 2.75rem; cursor: pointer; font-size: 1.15rem; font-variation-settings: "wght" 600; }
+    .advanced-card[open] summary { margin-block-end: 1.5rem; }
+    .model-summary { display: grid; gap: 0.8rem; margin: 0 0 1.5rem; }
+    .model-summary div { display: grid; grid-template-columns: minmax(8rem, 0.35fr) 1fr; gap: 1rem; }
+    .model-summary dt { color: var(--muted); }
+    .model-summary dd { margin: 0; }
+    .model-settings-form { display: grid; max-inline-size: 32rem; gap: 0.65rem; }
+    .model-settings-form label { margin-block-start: 0.35rem; font-variation-settings: "wght" 600; }
+    .model-settings-form select { inline-size: 100%; min-block-size: 3rem; padding: 0.7rem 2.25rem 0.7rem 0.85rem; border: 0.0625rem solid var(--line); border-radius: 0.4rem; background: var(--surface); color: var(--text); font: inherit; }
+    .model-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-block-start: 0.75rem; }
+    .secondary-button { background: var(--surface); color: var(--text); }
+    .secondary-button:hover, .secondary-button:focus-visible { background: var(--soft); }
+    #model-settings-status:empty, #model-fallback-explanation[hidden] { display: none; }
     .site-footer { border-block-start: 0.0625rem solid var(--line); background: var(--soft); }
     .footer-inner { display: flex; inline-size: min(100% - 2.5rem, 64rem); min-block-size: 5rem; margin-inline: auto; align-items: center; justify-content: space-between; gap: 1.5rem; padding-block: 1rem; }
     .footer-copy { margin: 0; color: var(--muted); }
@@ -502,6 +557,175 @@ export function renderDashboardScript(): string {
     } finally {
       reload();
     }
+  }
+  let availableModels = [];
+  function titleCase(value) {
+    if (typeof value !== "string" || !value) return "Unknown";
+    return value.charAt(0).toUpperCase() + value.slice(1);
+  }
+  function modelDisplayName(modelId) {
+    const model = availableModels.find((candidate) => candidate.id === modelId);
+    if (model) return model.displayName;
+    const match = /^gpt-([0-9.]+)(?:-(.+))?$/i.exec(modelId);
+    if (!match) return modelId;
+    const suffix = match[2]
+      ? " " + match[2].split("-").map(titleCase).join(" ")
+      : "";
+    return "GPT-" + match[1] + suffix;
+  }
+  function selectedModel() {
+    const select = document.getElementById("model-select");
+    return select
+      ? availableModels.find((model) => model.id === select.value)
+      : undefined;
+  }
+  function fillEfforts(model, requestedEffort) {
+    const select = document.getElementById("effort-select");
+    if (!select) return;
+    select.replaceChildren();
+    if (!model) {
+      select.disabled = true;
+      return;
+    }
+    for (const effort of model.supportedReasoningEfforts) {
+      const option = document.createElement("option");
+      option.value = effort.reasoningEffort;
+      option.textContent = titleCase(effort.reasoningEffort);
+      option.title = effort.description;
+      select.append(option);
+    }
+    const supported = model.supportedReasoningEfforts.some(
+      (effort) => effort.reasoningEffort === requestedEffort
+    );
+    select.value = supported ? requestedEffort : model.defaultReasoningEffort;
+    select.disabled = false;
+  }
+  function setModelSettingsUnavailable() {
+    for (const id of ["model-select", "effort-select", "restore-luna-default"]) {
+      const control = document.getElementById(id);
+      if (control) control.disabled = true;
+    }
+    const submit = document.querySelector('#model-settings-form button[type="submit"]');
+    if (submit) submit.disabled = true;
+    const status = document.getElementById("model-settings-status");
+    if (status) status.textContent = "Model options could not be loaded.";
+  }
+  function applyModelSettings(settings) {
+    availableModels = Array.isArray(settings.availableModels)
+      ? settings.availableModels
+      : [];
+    if (!settings.effective || availableModels.length === 0) {
+      setModelSettingsUnavailable();
+      return;
+    }
+    const plan = document.getElementById("chatgpt-plan");
+    const activeModel = document.getElementById("active-model");
+    const activeEffort = document.getElementById("active-effort");
+    const preferredModel = document.getElementById("preferred-model");
+    const preferredRow = document.getElementById("preferred-model-row");
+    const fallback = document.getElementById("model-fallback-explanation");
+    const modelSelect = document.getElementById("model-select");
+    const restore = document.getElementById("restore-luna-default");
+    const submit = document.querySelector('#model-settings-form button[type="submit"]');
+    const status = document.getElementById("model-settings-status");
+    if (plan) plan.textContent = titleCase(settings.planType || "unknown");
+    if (activeModel) activeModel.textContent = modelDisplayName(settings.effective.modelId);
+    if (activeEffort) activeEffort.textContent = titleCase(settings.effective.reasoningEffort);
+    if (preferredModel) {
+      preferredModel.textContent = modelDisplayName(settings.preferred.modelId) +
+        " · " + titleCase(settings.preferred.reasoningEffort);
+    }
+    if (preferredRow) preferredRow.hidden = settings.selectionState !== "fallback";
+    if (fallback) {
+      fallback.hidden = settings.selectionState !== "fallback";
+      fallback.textContent = settings.selectionState === "fallback"
+        ? modelDisplayName(settings.preferred.modelId) + " " +
+          titleCase(settings.preferred.reasoningEffort) +
+          " is not currently available for this ChatGPT account."
+        : "";
+    }
+    if (modelSelect) {
+      modelSelect.replaceChildren();
+      for (const model of availableModels) {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = model.displayName;
+        modelSelect.append(option);
+      }
+      const preferredAvailable = availableModels.some(
+        (model) => model.id === settings.preferred.modelId
+      );
+      modelSelect.value = preferredAvailable
+        ? settings.preferred.modelId
+        : settings.effective.modelId;
+      modelSelect.disabled = false;
+      fillEfforts(
+        selectedModel(),
+        preferredAvailable
+          ? settings.preferred.reasoningEffort
+          : settings.effective.reasoningEffort
+      );
+    }
+    if (restore) restore.disabled = false;
+    if (submit) submit.disabled = false;
+    if (status) status.textContent = "";
+  }
+  async function loadModelSettings() {
+    if (!document.getElementById("advanced-settings")) return;
+    try {
+      const response = await fetch("/api/settings/model", {
+        cache: "no-store",
+        credentials: "same-origin"
+      });
+      if (!response.ok) {
+        setModelSettingsUnavailable();
+        return;
+      }
+      applyModelSettings(await response.json());
+    } catch {
+      setModelSettingsUnavailable();
+    }
+  }
+  async function saveModelSettings(selection) {
+    const status = document.getElementById("model-settings-status");
+    const form = document.getElementById("model-settings-form");
+    if (form) form.setAttribute("aria-busy", "true");
+    if (status) status.textContent = "Saving…";
+    try {
+      const response = await fetch("/api/settings/model", {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(selection)
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (status) {
+          status.textContent = result.error === "MODEL_SELECTION_STALE"
+            ? "Those model options changed. Reload Advanced and choose again."
+            : result.error === "MODEL_PAIR_UNAVAILABLE"
+              ? "Codex could not use that model and reasoning pair."
+              : "Model settings could not be saved.";
+        }
+        return;
+      }
+      applyModelSettings(result);
+      if (status) status.textContent = "Saved. New message chains will use this model.";
+    } catch {
+      if (status) status.textContent = "Model settings could not be saved.";
+    } finally {
+      if (form) form.removeAttribute("aria-busy");
+    }
+  }
+  async function submitModelSettings(event) {
+    event.preventDefault();
+    const model = document.getElementById("model-select");
+    const effort = document.getElementById("effort-select");
+    if (!model || !effort) return;
+    await saveModelSettings({
+      modelId: model.value,
+      reasoningEffort: effort.value
+    });
   }
   function updatePhonePrefix() {
     const country = document.getElementById("owner-country");
@@ -654,6 +878,24 @@ export function renderDashboardScript(): string {
   }
   const ownerCountry = document.getElementById("owner-country");
   if (ownerCountry) ownerCountry.addEventListener("change", updatePhonePrefix);
+  const modelSelect = document.getElementById("model-select");
+  if (modelSelect) {
+    modelSelect.addEventListener("change", () => {
+      const model = selectedModel();
+      fillEfforts(model, model ? model.defaultReasoningEffort : "medium");
+    });
+  }
+  const modelSettingsForm = document.getElementById("model-settings-form");
+  if (modelSettingsForm) {
+    modelSettingsForm.addEventListener("submit", (event) => void submitModelSettings(event));
+  }
+  const restoreLuna = document.getElementById("restore-luna-default");
+  if (restoreLuna) {
+    restoreLuna.addEventListener("click", () => void saveModelSettings({
+      modelId: "gpt-5.6-luna",
+      reasoningEffort: "high"
+    }));
+  }
   for (const kind of ["photon", "chatgpt"]) {
     const control = document.getElementById(kind + "-start");
     if (control) control.addEventListener("click", () => void start(kind));
@@ -661,6 +903,7 @@ export function renderDashboardScript(): string {
   for (const control of document.querySelectorAll("[data-auth-link]")) {
     control.addEventListener("click", openAuthentication);
   }
+  void loadModelSettings();
   if (script && script.dataset.polling === "true") timer = window.setTimeout(refresh, 2000);
   window.addEventListener("pagehide", () => window.clearTimeout(timer), { once: true });
 })();`;

@@ -3,12 +3,6 @@ import { isAbsolute, parse, relative, resolve } from "node:path";
 
 import { z } from "zod";
 
-import {
-  modelIdentifierSchema,
-  modelProfilesSchema,
-  reasoningEffortSchema,
-  type ModelProfiles,
-} from "./model-profiles.js";
 
 const emptyToUndefined = (value: unknown): unknown =>
   typeof value === "string" && value.trim() === "" ? undefined : value;
@@ -179,22 +173,6 @@ const rawEnvironmentSchema = z
           .regex(/^[a-z0-9][a-z0-9-]*$/i)
           .default("imessage-agent"),
       ),
-
-    // Model profiles
-    MODEL_FAST: modelIdentifierSchema.default("gpt-5.6-luna"),
-    MODEL_FAST_EFFORT: reasoningEffortSchema.default("medium"),
-    MODEL_MAIN: modelIdentifierSchema.default("gpt-5.6-luna"),
-    MODEL_MAIN_EFFORT: reasoningEffortSchema.default("high"),
-    MODEL_BALANCED: modelIdentifierSchema.default("gpt-5.6-terra"),
-    MODEL_BALANCED_EFFORT: reasoningEffortSchema.default("high"),
-    MODEL_HARD: modelIdentifierSchema.default("gpt-5.6-luna"),
-    MODEL_HARD_EFFORT: reasoningEffortSchema.default("max"),
-    MODEL_DEEP: modelIdentifierSchema.default("gpt-5.6-sol"),
-    MODEL_DEEP_EFFORT: reasoningEffortSchema.default("max"),
-    ALLOW_REASONING_FALLBACK: booleanFromEnvironment(
-      "ALLOW_REASONING_FALLBACK",
-      false,
-    ),
 
     // Operational limits, retention, and logging
     INBOUND_DEBOUNCE_MS: integerFromEnvironment(
@@ -454,31 +432,4 @@ export function loadEnvironment(source?: NodeJS.ProcessEnv): Environment {
   }
 
   return result.data;
-}
-
-export function modelProfilesFromEnvironment(
-  environment: Environment,
-): ModelProfiles {
-  return modelProfilesSchema.parse({
-    fast: {
-      model: environment.MODEL_FAST,
-      effort: environment.MODEL_FAST_EFFORT,
-    },
-    main: {
-      model: environment.MODEL_MAIN,
-      effort: environment.MODEL_MAIN_EFFORT,
-    },
-    balanced: {
-      model: environment.MODEL_BALANCED,
-      effort: environment.MODEL_BALANCED_EFFORT,
-    },
-    hard: {
-      model: environment.MODEL_HARD,
-      effort: environment.MODEL_HARD_EFFORT,
-    },
-    deep: {
-      model: environment.MODEL_DEEP,
-      effort: environment.MODEL_DEEP_EFFORT,
-    },
-  });
 }

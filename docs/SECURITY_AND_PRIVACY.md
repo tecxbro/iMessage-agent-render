@@ -221,7 +221,8 @@ Every log record should use correlation IDs and safe metadata:
   "component": "task-execute",
   "chainId": "...",
   "taskId": "...",
-  "modelProfile": "balanced",
+  "modelId": "gpt-5.6-luna",
+  "reasoningEffort": "high",
   "state": "failed",
   "errorCode": "CODEX_AUTH_EXPIRED",
   "retryable": false

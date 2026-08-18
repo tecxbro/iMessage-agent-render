@@ -5,6 +5,7 @@ import {
 } from "./http/readiness.js";
 import type { ChatGptSetupController } from "./agent/codex-app-server-auth.js";
 import { startHealthServer, type HealthServer } from "./http/server.js";
+import type { ModelSettingsController } from "./http/server.js";
 import type { DeploymentPageOptions } from "./http/deployment-page.js";
 import type {
   DeploymentIdentityController,
@@ -64,6 +65,7 @@ export interface StartAgentServiceOptions {
   deploymentPage?: Omit<DeploymentPageOptions, "runtimeMode">;
   photonSetup?: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
+  modelSettings?: ModelSettingsController;
   installSignalHandlers?: boolean;
   onStartupFailure?: (code: string) => void;
 }
@@ -121,6 +123,9 @@ export async function startAgentService(
     ...(options.chatgptSetup === undefined
       ? {}
       : { chatgptSetup: options.chatgptSetup }),
+    ...(options.modelSettings === undefined
+      ? {}
+      : { modelSettings: options.modelSettings }),
   });
 
   shutdown.register({
@@ -175,7 +180,7 @@ export async function startAgentService(
   };
 
   const tryUnlockAgent = async (forceProbe: boolean): Promise<void> => {
-    if (!startupStagesReady || shutdown.signal.aborted || spectrumStarted) {
+    if (!startupStagesReady || shutdown.signal.aborted) {
       return;
     }
 
@@ -183,6 +188,10 @@ export async function startAgentService(
       if (!(await refreshCodexReadiness())) {
         return;
       }
+    }
+
+    if (spectrumStarted) {
+      return;
     }
 
     if (
@@ -243,6 +252,21 @@ export async function startAgentService(
   }
   options.photonSetup?.onConnected?.(() => requestUnlock(false));
   options.chatgptSetup?.onConnected(() => requestUnlock(true));
+  const disposeCapabilitiesListener =
+    options.chatgptSetup?.onCapabilitiesChanged(() => {
+      // A catalog refresh awaits its listeners. Start the readiness re-probe
+      // without returning that promise so checkCodex can safely await the same
+      // in-flight refresh instead of creating a listener cycle.
+      void requestUnlock(true);
+    });
+  if (disposeCapabilitiesListener !== undefined) {
+    shutdown.register({
+      name: "codex-capabilities-listener",
+      priority: 5,
+      timeoutMs: 1_000,
+      stop: async () => disposeCapabilitiesListener(),
+    });
+  }
 
   try {
     readiness.mark("configuration", "starting");

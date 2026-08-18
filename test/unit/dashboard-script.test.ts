@@ -238,7 +238,167 @@ function createOwnerFormHarness(responseOk = true) {
   };
 }
 
+function createModelSettingsHarness() {
+  type Listener = (event?: { preventDefault(): void }) => void | Promise<void>;
+  const listeners = new Map<string, Listener>();
+  const createText = () => ({ textContent: "", hidden: false });
+  const createSelect = (id: string) => ({
+    id,
+    value: "",
+    disabled: true,
+    options: [] as Array<{ value: string; textContent: string; title: string }>,
+    replaceChildren() {
+      this.options = [];
+      this.value = "";
+    },
+    append(option: { value: string; textContent: string; title: string }) {
+      this.options.push(option);
+      if (!this.value) this.value = option.value;
+    },
+    addEventListener(type: string, listener: Listener) {
+      listeners.set(`${id}:${type}`, listener);
+    },
+  });
+  const modelSelect = createSelect("model-select");
+  const effortSelect = createSelect("effort-select");
+  const form = {
+    addEventListener(type: string, listener: Listener) {
+      listeners.set(`form:${type}`, listener);
+    },
+    setAttribute: vi.fn(),
+    removeAttribute: vi.fn(),
+  };
+  const restore = {
+    disabled: true,
+    addEventListener(type: string, listener: Listener) {
+      listeners.set(`restore:${type}`, listener);
+    },
+  };
+  const submit = { disabled: true };
+  const elements: Record<string, unknown> = {
+    "advanced-settings": {},
+    "model-select": modelSelect,
+    "effort-select": effortSelect,
+    "model-settings-form": form,
+    "restore-luna-default": restore,
+    "model-settings-status": createText(),
+    "chatgpt-plan": createText(),
+    "active-model": createText(),
+    "active-effort": createText(),
+    "preferred-model": createText(),
+    "preferred-model-row": { hidden: true },
+    "model-fallback-explanation": { textContent: "", hidden: true },
+  };
+  const settings = {
+    planType: "plus",
+    preferred: { modelId: "gpt-5.6-luna", reasoningEffort: "high" },
+    effective: { modelId: "gpt-5.6-terra", reasoningEffort: "low" },
+    selectionState: "fallback",
+    availableModels: [
+      {
+        id: "gpt-5.6-luna",
+        displayName: "GPT-5.6 Luna",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "medium", description: "Default" },
+          { reasoningEffort: "high", description: "More reasoning" },
+        ],
+        defaultReasoningEffort: "medium",
+      },
+      {
+        id: "gpt-5.6-terra",
+        displayName: "GPT-5.6 Terra",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "low", description: "Fast" },
+        ],
+        defaultReasoningEffort: "low",
+      },
+    ],
+  };
+  const fetchImplementation = vi.fn(async (_url: string, init?: RequestInit) => ({
+    ok: true,
+    json: async () =>
+      init?.method === "PUT"
+        ? {
+            ...settings,
+            preferred: { modelId: "gpt-5.6-luna", reasoningEffort: "high" },
+            effective: { modelId: "gpt-5.6-luna", reasoningEffort: "high" },
+            selectionState: "preferred",
+          }
+        : settings,
+  }));
+
+  runInNewContext(renderDashboardScript(), {
+    document: {
+      currentScript: { dataset: { polling: "false" } },
+      body: { dataset: {} },
+      createElement: () => ({ value: "", textContent: "", title: "" }),
+      getElementById: (id: string) => elements[id] ?? null,
+      querySelector: (selector: string) =>
+        selector === '#model-settings-form button[type="submit"]'
+          ? submit
+          : null,
+      querySelectorAll: () => [],
+    },
+    fetch: fetchImplementation,
+    window: {
+      addEventListener: vi.fn(),
+      clearTimeout: vi.fn(),
+    },
+  });
+
+  return {
+    effortSelect,
+    elements,
+    fetchImplementation,
+    listeners,
+    modelSelect,
+    restore,
+    submit,
+  };
+}
+
 describe("dashboard authentication popup", () => {
+  it("loads account options, changes efforts with the model, and restores Luna High", async () => {
+    const harness = createModelSettingsHarness();
+    await vi.waitFor(() => expect(harness.modelSelect.options).toHaveLength(2));
+
+    expect(harness.modelSelect.value).toBe("gpt-5.6-luna");
+    expect(harness.effortSelect.options.map((option) => option.value)).toEqual([
+      "medium",
+      "high",
+    ]);
+    expect(harness.effortSelect.value).toBe("high");
+    expect(harness.restore.disabled).toBe(false);
+    expect(harness.submit.disabled).toBe(false);
+    expect(
+      harness.elements["model-fallback-explanation"],
+    ).toMatchObject({
+      hidden: false,
+      textContent:
+        "GPT-5.6 Luna High is not currently available for this ChatGPT account.",
+    });
+
+    harness.modelSelect.value = "gpt-5.6-terra";
+    await harness.listeners.get("model-select:change")?.();
+    expect(harness.effortSelect.options.map((option) => option.value)).toEqual([
+      "low",
+    ]);
+
+    await harness.listeners.get("restore:click")?.();
+    await vi.waitFor(() =>
+      expect(harness.fetchImplementation).toHaveBeenCalledWith(
+        "/api/settings/model",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            modelId: "gpt-5.6-luna",
+            reasoningEffort: "high",
+          }),
+        }),
+      ),
+    );
+  });
+
   it("uses same-origin setup requests without a password or CSRF credential", () => {
     const script = renderDashboardScript();
 

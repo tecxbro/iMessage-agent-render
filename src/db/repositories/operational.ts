@@ -73,7 +73,6 @@ export class OperationalRepository {
         .onConflictDoUpdate({
           target: deployments.id,
           set: {
-            defaultModelProfile: "main",
             updatedAt: new Date(),
           },
         });

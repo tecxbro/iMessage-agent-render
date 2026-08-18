@@ -20,10 +20,15 @@ function dependencies(): CommandHandlersDependencies {
       work: "ready" as const,
       memory: "disabled" as const,
       activeTaskCount: 2,
-      modelProfile: "main" as const,
+      modelSelection: {
+        modelId: "gpt-5.6-luna",
+        reasoningEffort: "high" as const,
+      },
     })),
-    getModelProfile: vi.fn(async () => "auto" as const),
-    setModelProfile: vi.fn(async () => undefined),
+    getModelSelection: vi.fn(async () => ({
+      modelId: "gpt-5.6-luna",
+      reasoningEffort: "high" as const,
+    })),
     cancelActive: vi.fn(async () => ({ canceledCount: 1 })),
     resetInteractionThread: vi.fn(async () => undefined),
     listAgents: vi.fn(async () => [
@@ -110,11 +115,11 @@ describe("Step 5 slash-command handlers", () => {
     expect(deps.getStatus).toHaveBeenCalledWith(context);
     expect(result.message).toContain("messaging: ready");
     expect(result.message).toContain("work: ready (2 active)");
-    expect(result.message).toContain("model mode: main");
-    expect(result.message).not.toMatch(/task\.execute|queue|gpt-5|codex event|raw log/i);
+    expect(result.message).toContain("model: GPT-5.6 Luna · high");
+    expect(result.message).not.toMatch(/task\.execute|queue|codex event|raw log/i);
   });
 
-  it("shows, sets, and clears only the future per-space model override", async () => {
+  it("shows the deployment model and keeps arguments read-only", async () => {
     const deps = dependencies();
 
     const shown = await handleSlashCommand(command("/model"), context, deps);
@@ -134,16 +139,12 @@ describe("Step 5 slash-command handlers", () => {
       deps,
     );
 
-    expect(deps.getModelProfile).toHaveBeenCalledWith(context);
-    expect(shown.message).toContain("model mode: auto");
-    expect(deps.setModelProfile).toHaveBeenNthCalledWith(1, context, "deep");
-    expect(deps.setModelProfile).toHaveBeenNthCalledWith(2, context, null);
-    expect(deps.setModelProfile).toHaveBeenCalledTimes(2);
-    expect(selected.message).toBe("model mode set to deep");
-    expect(automatic.message).toBe("model mode set to auto");
-    expect(invalid.message).toBe(
-      "unknown model mode. choose auto, fast, main, balanced, hard, or deep",
-    );
+    expect(deps.getModelSelection).toHaveBeenCalledTimes(4);
+    expect(deps.getModelSelection).toHaveBeenCalledWith(context);
+    for (const result of [shown, selected, automatic, invalid]) {
+      expect(result.message).toContain("model: GPT-5.6 Luna · high");
+      expect(result.message).toContain("Advanced in your dashboard");
+    }
   });
 
   it("scopes cancel and new-thread changes while preserving saved memory", async () => {
@@ -204,6 +205,5 @@ describe("Step 5 slash-command handlers", () => {
     expect(extraCancel.message).toBe("usage: /cancel");
     expect(deps.cancelActive).not.toHaveBeenCalled();
     expect(deps.resetInteractionThread).not.toHaveBeenCalled();
-    expect(deps.setModelProfile).not.toHaveBeenCalled();
   });
 });

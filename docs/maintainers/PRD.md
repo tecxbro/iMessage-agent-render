@@ -199,20 +199,19 @@ A team that wants to fork the starter for a customer or employee use case and ad
 - Never send an iMessage directly; only the interaction/synthesis path may produce outbound content.
 - Store artifacts in the configured workspace or object-storage extension, not inside model output.
 
-### 9.6 Model routing
+### 9.6 Account-aware model selection
 
-- Provide named profiles: `fast`, `main`, `balanced`, `hard`, and `deep`.
-- Default mapping:
-  - `fast`: GPT-5.6 Luna, medium effort.
-  - `main`: GPT-5.6 Luna, high effort.
-  - `balanced`: GPT-5.6 Terra, high effort.
-  - `hard`: GPT-5.6 Luna, max effort.
-  - `deep`: GPT-5.6 Sol, max effort.
-- All model names and efforts are environment-configurable.
-- `/model auto|fast|main|balanced|hard|deep` controls the current space.
-- Auto-routing is deterministic first and model-assisted only for ambiguous cases.
-- Startup probes the installed Codex CLI/SDK for configured model/effort support.
-- Unsupported `max` must not be silently changed to `xhigh`; production either fails with a clear diagnostic or uses an explicitly enabled fallback.
+- Store GPT-5.6 Luna / High as the default deployment preference.
+- Display `planType` from the Codex account APIs, but use live `model/list`
+  results—not the plan label—as the model/effort entitlement authority.
+- Let the owner change one deployment-wide preference under dashboard
+  **Advanced**; `/model` only displays the current pair.
+- Snapshot the effective pair when a chain is created and use it for planning,
+  every task, and synthesis.
+- If the preference is unavailable, use Codex's advertised default pair while
+  preserving the preference and explaining the fallback.
+- Probe only the effective or newly requested pair. Do not route by task
+  complexity, escalate after failure, or retry multiple pairs during a turn.
 
 ### 9.7 PostgreSQL state and queue
 
@@ -239,8 +238,8 @@ A team that wants to fork the starter for a customer or employee use case and ad
 V1 commands:
 
 - `/help` — show concise capabilities and safety limits.
-- `/status` — show auth, transport, queue, memory, active jobs, and selected model profile.
-- `/model <profile>` — set per-space model mode.
+- `/status` — show auth, transport, queue, memory, active jobs, and selected deployment model.
+- `/model` — display the deployment model and point to dashboard Advanced.
 - `/cancel` — cancel active interruptible chains for the space.
 - `/new` — start a fresh interaction thread while preserving owner memory.
 - `/agents` — list named execution agents and current status.

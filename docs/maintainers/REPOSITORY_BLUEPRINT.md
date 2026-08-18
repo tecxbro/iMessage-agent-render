@@ -86,7 +86,8 @@ imessage-codex-agent-boilerplate/
 │   │   ├── interaction-runtime.ts
 │   │   ├── execution-runtime.ts
 │   │   ├── thread-store.ts
-│   │   ├── model-router.ts
+│   │   ├── model-selection.ts
+│   │   ├── codex-account-capabilities.ts
 │   │   ├── prompt-builder.ts
 │   │   └── schemas.ts
 │   ├── memory/
@@ -125,7 +126,7 @@ imessage-codex-agent-boilerplate/
 |---|---|---|
 | Process boot | `src/index.ts` | Starts dependencies in order; owns shutdown |
 | Environment | `src/config/env.ts` | Validates all required and optional variables at startup |
-| Model profiles | `src/config/model-profiles.ts`, `src/agent/model-router.ts` | Converts profile to tested Codex model/effort/options |
+| Model selection | `src/agent/model-selection.ts`, `src/db/repositories/model-settings.ts` | Resolves account-visible preference/effective state and snapshots new chains |
 | Spectrum | `src/transport/*` | Uses native Spectrum concepts; never runs Codex inline |
 | Health | `src/http/*` | Liveness/readiness only; no public admin UI in v1 |
 | Database | `src/db/*` | Schema, migrations, transaction boundaries, repositories |
@@ -165,21 +166,11 @@ CODEX_AUTH_MODE=chatgpt
 # OPENAI_API_KEY=        # used only when CODEX_AUTH_MODE=api_key
 ```
 
-### Model defaults
+### Model default
 
-```dotenv
-MODEL_FAST=gpt-5.6-luna
-MODEL_FAST_EFFORT=medium
-MODEL_MAIN=gpt-5.6-luna
-MODEL_MAIN_EFFORT=high
-MODEL_BALANCED=gpt-5.6-terra
-MODEL_BALANCED_EFFORT=high
-MODEL_HARD=gpt-5.6-luna
-MODEL_HARD_EFFORT=max
-MODEL_DEEP=gpt-5.6-sol
-MODEL_DEEP_EFFORT=max
-ALLOW_REASONING_FALLBACK=false
-```
+GPT-5.6 Luna / High is stored in PostgreSQL. In ChatGPT mode, the owner changes
+the deployment-wide preference under **Dashboard → Advanced** using the live
+Codex `model/list` catalog. There are no model environment variables.
 
 ### Behavior and limits
 
@@ -233,7 +224,6 @@ export interface AuthorizedInbound {
 
 export interface InteractionDecision {
   mode: "direct" | "delegate" | "confirm" | "silent";
-  modelProfile: "fast" | "main" | "balanced" | "hard" | "deep";
   userMessage?: string;
   statusMessage?: string;
   tasks: ExecutionTask[];
@@ -247,7 +237,6 @@ export interface ExecutionTask {
   purpose: string;
   instructions: string;
   workspaceBinding?: string;
-  modelProfile: string;
   permissionProfile: "read" | "workspace-write" | "network-read" | "approval-required";
   dependsOn: string[];
 }

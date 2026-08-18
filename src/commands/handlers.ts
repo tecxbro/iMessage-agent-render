@@ -1,7 +1,4 @@
-import {
-  MODEL_PROFILE_NAMES,
-  type ModelProfileName,
-} from "../config/model-profiles.js";
+import type { ModelSelection } from "../agent/model-selection.js";
 import type {
   ApprovalActor,
   ApprovalService,
@@ -29,7 +26,7 @@ export interface CommandStatusSnapshot {
   work: ComponentStatus;
   memory: ComponentStatus | "disabled";
   activeTaskCount: number;
-  modelProfile: ModelProfileName | "auto";
+  modelSelection: ModelSelection;
 }
 
 export interface NamedAgentSummary {
@@ -40,13 +37,7 @@ export interface NamedAgentSummary {
 
 export interface CommandHandlersDependencies {
   getStatus(context: CommandContext): Promise<CommandStatusSnapshot>;
-  getModelProfile(
-    context: CommandContext,
-  ): Promise<ModelProfileName | "auto">;
-  setModelProfile(
-    context: CommandContext,
-    profile: ModelProfileName | null,
-  ): Promise<void>;
+  getModelSelection(context: CommandContext): Promise<ModelSelection>;
   cancelActive(context: CommandContext): Promise<{ canceledCount: number }>;
   resetInteractionThread(context: CommandContext): Promise<void>;
   listAgents(context: CommandContext): Promise<readonly NamedAgentSummary[]>;
@@ -56,8 +47,6 @@ export interface CommandResult {
   handled: true;
   message: string;
 }
-
-const profiles = new Set<string>(MODEL_PROFILE_NAMES);
 
 function noArguments(
   command: ParsedSlashCommand,
@@ -97,7 +86,7 @@ function helpMessage(): string {
     "i can answer directly or do bounded work in an approved workspace",
     "",
     "/status — check service readiness and active work",
-    "/model [auto|fast|main|balanced|hard|deep] — view or set the mode for future turns",
+    "/model — view the deployment model selected in the dashboard",
     "/cancel — cancel active work in this conversation",
     "/new — start a fresh conversation thread while keeping your saved memory",
     "/agents — list your named work contexts",
@@ -130,43 +119,18 @@ export async function handleSlashCommand(
           `sign-in: ${statusLabel(status.signIn)}`,
           `work: ${statusLabel(status.work)}${activeTaskCount === 0 ? "" : ` (${activeTaskCount} active)`}`,
           `memory: ${statusLabel(status.memory)}`,
-          `model mode: ${status.modelProfile}`,
+          `model: ${formatModelName(status.modelSelection.modelId)} · ${status.modelSelection.reasoningEffort}`,
         ].join("\n"),
       };
     }
     case "model": {
-      if (command.args.length === 0) {
-        const current = await dependencies.getModelProfile(context);
-        return {
-          handled: true,
-          message: `model mode: ${current}. available: auto, ${MODEL_PROFILE_NAMES.join(", ")}`,
-        };
-      }
-      if (command.args.length !== 1) {
-        return {
-          handled: true,
-          message: "usage: /model [auto|fast|main|balanced|hard|deep]",
-        };
-      }
-      const requested = command.args[0]?.toLowerCase();
-      if (requested === "auto") {
-        await dependencies.setModelProfile(context, null);
-        return {
-          handled: true,
-          message: "model mode set to auto",
-        };
-      }
-      if (requested === undefined || !profiles.has(requested)) {
-        return {
-          handled: true,
-          message: "unknown model mode. choose auto, fast, main, balanced, hard, or deep",
-        };
-      }
-      const profile = requested as ModelProfileName;
-      await dependencies.setModelProfile(context, profile);
+      const current = await dependencies.getModelSelection(context);
       return {
         handled: true,
-        message: `model mode set to ${profile}`,
+        message: [
+          `model: ${formatModelName(current.modelId)} · ${current.reasoningEffort}`,
+          "change it under Advanced in your dashboard",
+        ].join("\n"),
       };
     }
     case "cancel": {
@@ -225,6 +189,18 @@ export async function handleSlashCommand(
         message: "unknown command. try /help",
       };
   }
+}
+
+function formatModelName(modelId: string): string {
+  const match = /^gpt-([0-9.]+)(?:-(.+))?$/iu.exec(modelId);
+  if (match !== null) {
+    const suffix = match[2]
+      ?.split("-")
+      .map((part) => part[0]!.toUpperCase() + part.slice(1))
+      .join(" ");
+    return `GPT-${match[1]}${suffix === undefined ? "" : ` ${suffix}`}`;
+  }
+  return modelId;
 }
 
 const explicitApprovalPattern = /^\/(approve|reject)\s+([a-f0-9-]{36})$/iu;

@@ -9,7 +9,7 @@ Use the narrowest change that matches the desired behavior. Prompt and configura
 | Agent personality and conversational style | `prompts/interaction.system.md`, `prompts/voice-policy.md` |
 | How execution tasks behave | `prompts/execution.system.md` |
 | Approval rules | `prompts/approval-policy.md` |
-| Models and reasoning effort | `.env` model variables |
+| Models and reasoning effort | **Advanced** in the deployment dashboard |
 | Who can message the agent | `AGENT_OWNER_HANDLES` |
 | Semantic memory | `SUPERMEMORY_API_KEY` |
 | Render region, plan, and disk | `render.yaml` |
@@ -39,9 +39,11 @@ Do not make a prompt change that allows the model to approve, reinterpret, or br
 
 ## Models and reasoning effort
 
-Change the `MODEL_*` and `MODEL_*_EFFORT` variables documented in [Configuration](./CONFIGURATION.md). The model router selects profiles in code and probes configured pairs before Spectrum starts.
-
-Keep `ALLOW_REASONING_FALLBACK=false` unless a reviewed product requirement permits fallback. Never silently downgrade the configured model, effort, authentication mode, memory policy, or permissions.
+Connect ChatGPT, then use **Advanced** in the deployment dashboard. The picker
+shows only models and efforts from the live Codex account catalog. The default
+preference is GPT-5.6 Luna / High; a Codex-advertised fallback is shown
+separately and never overwrites that preference. Changes apply to new chains,
+not work already running.
 
 ## Authorized senders
 

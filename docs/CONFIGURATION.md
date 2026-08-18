@@ -71,23 +71,22 @@ Leave `SUPERMEMORY_API_KEY` blank to disable semantic memory. PostgreSQL remains
 
 The container prefix must be 1–64 letters, digits, or hyphens and begin with a letter or digit.
 
-## Model routing
+## Account-aware model selection
 
-| Variable | Required | Default | Restart required | Sensitive |
-|---|---:|---|---:|---:|
-| `MODEL_FAST` | No | `gpt-5.6-luna` | Yes | No |
-| `MODEL_FAST_EFFORT` | No | `medium` | Yes | No |
-| `MODEL_MAIN` | No | `gpt-5.6-luna` | Yes | No |
-| `MODEL_MAIN_EFFORT` | No | `high` | Yes | No |
-| `MODEL_BALANCED` | No | `gpt-5.6-terra` | Yes | No |
-| `MODEL_BALANCED_EFFORT` | No | `high` | Yes | No |
-| `MODEL_HARD` | No | `gpt-5.6-luna` | Yes | No |
-| `MODEL_HARD_EFFORT` | No | `max` | Yes | No |
-| `MODEL_DEEP` | No | `gpt-5.6-sol` | Yes | No |
-| `MODEL_DEEP_EFFORT` | No | `max` | Yes | No |
-| `ALLOW_REASONING_FALLBACK` | No | `false` | Yes | No |
+Model selection has no environment variables. The stored deployment default is
+`gpt-5.6-luna` with `high` reasoning and the owner changes it under
+**Dashboard → Advanced** after ChatGPT connects.
 
-Configured model/effort pairs are capability-probed before Spectrum intake starts. Keep `ALLOW_REASONING_FALLBACK=false` unless an explicit product policy permits a different effort level. The runtime must not silently downgrade models or reasoning effort.
+In ChatGPT mode, `account/read` and `account/updated` supply the displayed plan
+name. Codex `model/list` is the authority for visible models and supported
+reasoning efforts; the plan name is never interpreted through a hard-coded
+entitlement table. If Luna High is unavailable, the runtime uses Codex's
+advertised default model and effort while preserving Luna High as the owner
+preference. Settings are stored in PostgreSQL and apply to new message chains.
+An existing chain keeps the pair it captured at creation.
+
+API-key mode has no account catalog or plan display. It uses the stored default
+only after the exact pair passes the bounded Codex capability probe.
 
 ## Concurrency and limits
 
@@ -130,6 +129,6 @@ Startup fails with an actionable combined error when:
 - protected paths overlap, resolve to a filesystem root, or contain traversal;
 - the database URL uses a non-PostgreSQL protocol;
 - the encryption key has the wrong encoding or byte length; or
-- owner handles, model identifiers, effort values, durations, booleans, or enum values are invalid.
+- owner handles, durations, booleans, or enum values are invalid.
 
 Fix the reported values and restart. Never work around validation by weakening schemas or logging secrets.

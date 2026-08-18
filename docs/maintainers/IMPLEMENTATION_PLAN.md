@@ -49,7 +49,7 @@ Create the new repository shape, pin the runtime, define validated interfaces, a
 | `.env.example` | Add all documented variables with safe placeholders |
 | `.gitignore` | Ignore `.env`, `dist`, local Codex state, workspaces, test secrets |
 | `src/config/env.ts` | Zod-validated environment loader; no `process.env` reads elsewhere |
-| `src/config/model-profiles.ts` | Model profile schema and defaults |
+| `src/config/model-profiles.ts` | Low-level model/effort validation schemas |
 | `src/agent/schemas.ts` | `InteractionDecision`, `ExecutionTask`, `ExecutionResult`, memory and action schemas |
 | `src/queue/names.ts` | Queue names as literal constants |
 | `src/queue/payloads.ts` | ID-only validated job payloads |
@@ -84,7 +84,7 @@ Create the new repository shape, pin the runtime, define validated interfaces, a
 ### Tests
 
 - Environment loader rejects missing and malformed variables with one combined actionable report.
-- Model profile schema accepts all documented profiles and rejects unknown efforts.
+- Model/effort schemas accept documented values and reject unknown efforts.
 - Representative model JSON fixtures validate or fail deterministically.
 - Logger redaction removes phone/email patterns, auth tokens, and raw message fields.
 - Typecheck passes on Node 22.12.
@@ -217,11 +217,13 @@ A database/schema reviewer and a separate recovery-test agent are useful. They s
 
 ---
 
-## Step 4 — Codex runtime, ChatGPT enrollment, and model router
+## Step 4 — Codex runtime, ChatGPT enrollment, and account-aware model selection
 
 ### Goal
 
-Add a constrained, testable Codex adapter that supports resumable threads, local or Render execution, model profiles, capability probing, and cancellation.
+Add a constrained, testable Codex adapter that supports resumable threads,
+local or Render execution, account-aware model selection, capability probing,
+and cancellation. ADR-020 supersedes the original static-profile router scope.
 
 ### Worktree
 
@@ -233,7 +235,7 @@ Add a constrained, testable Codex adapter that supports resumable threads, local
 |---|---|
 | `src/agent/codex-client.ts` | Single wrapper around `@openai/codex-sdk` |
 | `src/agent/thread-store.ts` | Start/resume/reset interaction and named-agent threads |
-| `src/agent/model-router.ts` | Profile resolution and deterministic auto-routing |
+| `src/agent/model-selection.ts` | Preferred/effective pair resolution from the live account catalog |
 | `src/config/capabilities.ts` | Startup probe for auth, models, effort, sandbox, disk |
 | `src/agent/prompt-builder.ts` | Structured context assembly and prompt hashes |
 | `src/agent/interaction-runtime.ts` | Schema-bound interaction turn |
@@ -252,8 +254,10 @@ Add a constrained, testable Codex adapter that supports resumable threads, local
 6. Use output schemas for every runtime call.
 7. Use `runStreamed()` only where progress/cancellation needs it; filter events.
 8. Map permission profiles to sandbox, working directory, network, and approval options.
-9. Probe every configured model/effort at startup or through a deterministic CLI capability command.
-10. Treat `max` support as a versioned capability. No silent downgrade.
+9. Refresh account capabilities, resolve the effective pair, and probe only
+   that pair at startup.
+10. Snapshot the effective pair on each new chain; do not route or escalate by
+    request complexity.
 11. Abort superseded tasks and record a retryable/canceled terminal result.
 12. Bound task runtime, output bytes, and concurrent child processes.
 
@@ -264,8 +268,10 @@ Add a constrained, testable Codex adapter that supports resumable threads, local
 - Child environment excludes database and messaging secrets.
 - Thread start/resume/reset paths persist correct IDs.
 - Missing session recovers using the stored summary.
-- Auto-router selects deterministic profiles for fixture classes.
-- Unsupported model or `max` effort fails readiness with remediation text.
+- Account catalog fallback preserves the owner preference and selects the
+  Codex-advertised default pair.
+- Unsupported unused models do not fail readiness; an unavailable effective
+  pair does, with remediation text.
 - Abort terminates the fake CLI and transitions the task to canceled.
 - Structured-output validation rejects malformed or oversized responses.
 

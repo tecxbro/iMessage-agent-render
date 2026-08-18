@@ -42,6 +42,7 @@ async function main(): Promise<void> {
         runtime.environment.SUPERMEMORY_API_KEY !== undefined,
     },
     photonSetup: runtime.photonSetup,
+    modelSettings: runtime.modelSettings,
     ...(runtime.chatgptSetup === undefined
       ? {}
       : { chatgptSetup: runtime.chatgptSetup }),

@@ -6,7 +6,6 @@ import {
   deploymentIdFromRenderServiceId,
   EnvironmentValidationError,
   loadEnvironment,
-  modelProfilesFromEnvironment,
 } from "../../src/config/env.js";
 
 function validEnvironment(
@@ -28,7 +27,7 @@ function validEnvironment(
 }
 
 describe("loadEnvironment", () => {
-  it("normalizes documented defaults, handles, paths, and model profiles", () => {
+  it("normalizes documented defaults, handles, and paths", () => {
     const environment = loadEnvironment(validEnvironment());
 
     expect(environment.OWNER_PHONE_NUMBER).toBe("+15551234567");
@@ -39,10 +38,6 @@ describe("loadEnvironment", () => {
     );
     expect(environment.INBOUND_DEBOUNCE_MS).toBe(4_000);
     expect(environment.LOG_MESSAGE_CONTENT).toBe(false);
-    expect(modelProfilesFromEnvironment(environment).deep).toEqual({
-      model: "gpt-5.6-sol",
-      effort: "max",
-    });
   });
 
   it("reports all missing required variables in one actionable error", () => {
@@ -114,13 +109,23 @@ describe("loadEnvironment", () => {
     ],
     ["duration", { MAX_TASK_RUNTIME_MS: "0" }],
     ["debounce", { INBOUND_DEBOUNCE_MS: "2500" }],
-    ["model", { MODEL_MAIN: "not a model/name" }],
-    ["effort", { MODEL_HARD_EFFORT: "ultra" }],
     ["boolean", { LOG_MESSAGE_CONTENT: "yes" }],
   ])("rejects malformed %s configuration", (_label, override) => {
     expect(() => loadEnvironment(validEnvironment(override))).toThrow(
       EnvironmentValidationError,
     );
+  });
+
+  it("ignores removed model-profile environment variables", () => {
+    expect(() =>
+      loadEnvironment(
+        validEnvironment({
+          MODEL_MAIN: "not a model/name",
+          MODEL_HARD_EFFORT: "ultra",
+          ALLOW_REASONING_FALLBACK: "true",
+        }),
+      ),
+    ).not.toThrow();
   });
 
   it("requires an API key only in API-key authentication mode", () => {

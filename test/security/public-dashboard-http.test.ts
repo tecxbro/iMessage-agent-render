@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatGptSetupController } from "../../src/agent/codex-app-server-auth.js";
 import { ReadinessRegistry } from "../../src/http/readiness.js";
 import { startHealthServer, type HealthServer } from "../../src/http/server.js";
+import type { ModelSettingsController } from "../../src/http/server.js";
 import type { DeploymentIdentityController } from "../../src/runtime/deployment-identity.js";
 import type { PhotonSetupController } from "../../src/transport/photon-setup.js";
 
@@ -51,6 +52,19 @@ function photonSetup(): PhotonSetupController {
 
 function chatGptSetup(): ChatGptSetupController {
   return {
+    capabilities: () => ({
+      state: "unavailable",
+      planType: null,
+      models: [],
+      refreshedAt: null,
+    }),
+    refreshCapabilities: async () => ({
+      state: "unavailable",
+      planType: null,
+      models: [],
+      refreshedAt: null,
+    }),
+    onCapabilitiesChanged: () => () => undefined,
     initialize: async () => ({ state: "not_connected" }),
     status: () => ({ state: "not_connected" }),
     start: async () => ({
@@ -67,6 +81,7 @@ async function startTestServer(input: {
   identity?: DeploymentIdentityController;
   photon?: PhotonSetupController;
   chatgpt?: ChatGptSetupController;
+  modelSettings?: ModelSettingsController;
 } = {}): Promise<string> {
   const readiness = new ReadinessRegistry();
   readiness.mark("disk", "ok");
@@ -78,6 +93,9 @@ async function startTestServer(input: {
     deploymentIdentity: input.identity ?? configuredIdentity(),
     photonSetup: input.photon ?? photonSetup(),
     chatgptSetup: input.chatgpt ?? chatGptSetup(),
+    ...(input.modelSettings === undefined
+      ? {}
+      : { modelSettings: input.modelSettings }),
     deploymentPage: {
       authMode: "chatgpt",
       runtimeMode: "agent",
@@ -152,17 +170,23 @@ describe("public dashboard HTTP boundary", () => {
       { path: "/api/setup/owner", body: '{"phoneNumber":"+442071838750"}' },
       { path: "/api/setup/photon/start", body: "{}" },
       { path: "/api/setup/chatgpt/start", body: "{}" },
+      {
+        path: "/api/settings/model",
+        body: '{"modelId":"gpt-5.6-luna","reasoningEffort":"high"}',
+        method: "PUT",
+      },
     ];
 
     for (const target of targets) {
       const denials = await Promise.all([
         fetch(`${base}${target.path}`, {
-          method: "POST",
+          method: target.method ?? "POST",
           headers: { "content-type": "application/json" },
           body: target.body,
         }),
         fetch(`${base}${target.path}`, {
           ...mutation(base, target.body),
+          method: target.method ?? "POST",
           headers: {
             origin: "https://attacker.example",
             "content-type": "application/json",
@@ -170,6 +194,7 @@ describe("public dashboard HTTP boundary", () => {
         }),
         fetch(`${base}${target.path}`, {
           ...mutation(base, target.body),
+          method: target.method ?? "POST",
           headers: {
             origin: base,
             "content-type": "application/json",

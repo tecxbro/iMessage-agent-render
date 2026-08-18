@@ -13,6 +13,7 @@ import { ApprovalRepository } from "../../src/db/repositories/approvals.js";
 import { InboundRepository } from "../../src/db/repositories/inbound.js";
 import { OutboundRepository } from "../../src/db/repositories/outbound.js";
 import { OperationalRepository } from "../../src/db/repositories/operational.js";
+import { ModelSettingsRepository } from "../../src/db/repositories/model-settings.js";
 import { RetentionRepository } from "../../src/db/repositories/retention.js";
 import {
   approvals,
@@ -90,6 +91,9 @@ describeDatabase("PostgreSQL durable pipeline", () => {
       id: deploymentId,
       name: "integration",
       defaultModelProfile: "main",
+      effectiveModelId: "gpt-5.6-luna",
+      effectiveReasoningEffort: "high",
+      modelSelectionState: "preferred",
     });
     await client.database.insert(owners).values({
       id: ownerId,
@@ -129,6 +133,146 @@ describeDatabase("PostgreSQL durable pipeline", () => {
       retentionExpiresAt: new Date("2026-09-14T00:00:00Z"),
     });
   }
+
+  it("snapshots model settings per chain and preserves preferences across restart", async () => {
+    const settings = new ModelSettingsRepository(client.database, deploymentId);
+    const catalog = [
+      {
+        id: "gpt-5.6-luna",
+        model: "gpt-5.6-luna",
+        displayName: "GPT-5.6 Luna",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "high" as const, description: "High" },
+        ],
+        defaultReasoningEffort: "high" as const,
+        isDefault: true,
+      },
+      {
+        id: "gpt-5.6-terra",
+        model: "gpt-5.6-terra",
+        displayName: "GPT-5.6 Terra",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "low" as const, description: "Low" },
+        ],
+        defaultReasoningEffort: "low" as const,
+        isDefault: false,
+      },
+    ];
+    await settings.syncAccountCapabilities({
+      planType: "plus",
+      models: [catalog[1]!],
+      refreshedAt: new Date("2026-08-17T19:59:00Z"),
+    });
+    await expect(settings.read()).resolves.toMatchObject({
+      preferred: {
+        modelId: "gpt-5.6-luna",
+        reasoningEffort: "high",
+      },
+      effective: {
+        modelId: "gpt-5.6-terra",
+        reasoningEffort: "low",
+      },
+      selectionState: "fallback",
+    });
+    await settings.syncAccountCapabilities({
+      planType: "plus",
+      models: catalog,
+      refreshedAt: new Date("2026-08-17T20:00:00Z"),
+    });
+    await settings.updatePreference({
+      modelId: "gpt-5.6-terra",
+      reasoningEffort: "low",
+      currentCatalog: catalog,
+    });
+    await client.database
+      .update(deployments)
+      .set({ defaultModelProfile: "deep" })
+      .where(eq(deployments.id, deploymentId));
+    await client.database
+      .update(spaces)
+      .set({ modelProfileOverride: "fast" })
+      .where(eq(spaces.id, spaceId));
+
+    await ingest("terra-chain", new Date("2026-08-17T20:00:01Z"));
+    const terraChain = await chainRepository.flushInboundMessages(
+      spaceId,
+      new Date("2026-08-17T20:00:02Z"),
+    );
+    const [terraSnapshot] = await client.database
+      .select({
+        modelId: chains.modelId,
+        reasoningEffort: chains.reasoningEffort,
+        source: chains.modelSelectionSource,
+      })
+      .from(chains)
+      .where(eq(chains.id, terraChain?.chainId ?? ""));
+    expect(terraSnapshot).toEqual({
+      modelId: "gpt-5.6-terra",
+      reasoningEffort: "low",
+      source: "preferred",
+    });
+
+    await settings.updatePreference({
+      modelId: "gpt-5.6-luna",
+      reasoningEffort: "high",
+      currentCatalog: catalog,
+    });
+    const [unchangedActiveChain] = await client.database
+      .select({
+        modelId: chains.modelId,
+        reasoningEffort: chains.reasoningEffort,
+      })
+      .from(chains)
+      .where(eq(chains.id, terraChain?.chainId ?? ""));
+    expect(unchangedActiveChain).toEqual({
+      modelId: "gpt-5.6-terra",
+      reasoningEffort: "low",
+    });
+    await client.database
+      .update(chains)
+      .set({ state: "complete", completedAt: new Date() })
+      .where(eq(chains.id, terraChain?.chainId ?? ""));
+
+    await ingest("luna-chain", new Date("2026-08-17T20:00:03Z"));
+    const lunaChain = await chainRepository.flushInboundMessages(
+      spaceId,
+      new Date("2026-08-17T20:00:04Z"),
+    );
+    const [lunaSnapshot] = await client.database
+      .select({
+        modelId: chains.modelId,
+        reasoningEffort: chains.reasoningEffort,
+      })
+      .from(chains)
+      .where(eq(chains.id, lunaChain?.chainId ?? ""));
+    expect(lunaSnapshot).toEqual({
+      modelId: "gpt-5.6-luna",
+      reasoningEffort: "high",
+    });
+
+    await settings.updatePreference({
+      modelId: "gpt-5.6-terra",
+      reasoningEffort: "low",
+      currentCatalog: catalog,
+    });
+    const restarted = new OperationalRepository(client.database, {
+      deploymentId,
+      fingerprintKey: "restart-model-settings-fixture-key",
+      encrypt: (value) => `cipher:${value}`,
+      decrypt: (value) => value.replace(/^cipher:/u, ""),
+    });
+    await restarted.ensureDeployment();
+    await expect(settings.read()).resolves.toMatchObject({
+      preferred: {
+        modelId: "gpt-5.6-terra",
+        reasoningEffort: "low",
+      },
+      effective: {
+        modelId: "gpt-5.6-terra",
+        reasoningEffort: "low",
+      },
+    });
+  });
 
   it("persists one replaceable owner identity and fails closed on invariant violations", async () => {
     const identityDeploymentId = "20000000-0000-4000-8000-000000000001";

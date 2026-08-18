@@ -8,6 +8,12 @@ import express, {
 
 import type { ChatGptSetupController } from "../agent/codex-app-server-auth.js";
 import {
+  modelSelectionSchema,
+  type DeploymentModelSettings,
+  type ModelSelection,
+} from "../agent/model-selection.js";
+import type { CodexModelOption } from "../agent/codex-account-capabilities.js";
+import {
   OwnerPhoneNumberValidationError,
   type DeploymentIdentityController,
 } from "../runtime/deployment-identity.js";
@@ -32,6 +38,28 @@ export interface HealthApplicationOptions {
   deploymentIdentity?: DeploymentIdentityController;
   photonSetup?: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
+  modelSettings?: ModelSettingsController;
+}
+
+export type ModelSettingsApiErrorCode =
+  | "MODEL_SELECTION_STALE"
+  | "MODEL_PAIR_UNAVAILABLE"
+  | "MODEL_SETTINGS_UNAVAILABLE";
+
+export class ModelSettingsApiError extends Error {
+  public constructor(public readonly code: ModelSettingsApiErrorCode) {
+    super(code);
+    this.name = "ModelSettingsApiError";
+  }
+}
+
+export interface ModelSettingsApiSnapshot extends DeploymentModelSettings {
+  availableModels: readonly CodexModelOption[];
+}
+
+export interface ModelSettingsController {
+  read(): Promise<ModelSettingsApiSnapshot>;
+  update(selection: ModelSelection): Promise<ModelSettingsApiSnapshot>;
 }
 
 export interface HealthServer {
@@ -66,6 +94,35 @@ function isExactObject(
 function sendInvalidRequest(response: Response): void {
   response.set("cache-control", "no-store");
   response.status(400).json({ error: "INVALID_REQUEST" });
+}
+
+function sendModelSettingsError(
+  response: Response,
+  error: ModelSettingsApiErrorCode,
+): void {
+  response.set("cache-control", "private, no-store");
+  const status =
+    error === "MODEL_SETTINGS_UNAVAILABLE"
+      ? 503
+      : error === "MODEL_PAIR_UNAVAILABLE" || error === "MODEL_SELECTION_STALE"
+        ? 409
+        : 500;
+  response.status(status).json({ error });
+}
+
+function publicModelSettings(snapshot: ModelSettingsApiSnapshot) {
+  return {
+    planType: snapshot.planType,
+    preferred: snapshot.preferred,
+    effective: snapshot.effective,
+    selectionState: snapshot.selectionState,
+    availableModels: snapshot.availableModels.map((model) => ({
+      id: model.id,
+      displayName: model.displayName,
+      supportedReasoningEfforts: model.supportedReasoningEfforts,
+      defaultReasoningEffort: model.defaultReasoningEffort,
+    })),
+  };
 }
 
 const jsonErrorHandler: ErrorRequestHandler = (
@@ -333,6 +390,56 @@ export function createHealthApplication(
     response.status(200).json(chatGptStatus());
   });
 
+  application.get("/api/settings/model", async (_request, response) => {
+    response.set("cache-control", "private, no-store");
+    if (options.modelSettings === undefined) {
+      sendModelSettingsError(response, "MODEL_SETTINGS_UNAVAILABLE");
+      return;
+    }
+    try {
+      response.status(200).json(publicModelSettings(await options.modelSettings.read()));
+    } catch (error) {
+      sendModelSettingsError(
+        response,
+        error instanceof ModelSettingsApiError
+          ? error.code
+          : "MODEL_SETTINGS_UNAVAILABLE",
+      );
+    }
+  });
+
+  application.put(
+    "/api/settings/model",
+    sameOrigin,
+    async (request, response) => {
+      response.set("cache-control", "private, no-store");
+      if (
+        !isExactObject(request.body, ["modelId", "reasoningEffort"]) ||
+        !modelSelectionSchema.safeParse(request.body).success
+      ) {
+        response.status(400).json({ error: "INVALID_MODEL_SETTINGS" });
+        return;
+      }
+      if (options.modelSettings === undefined) {
+        sendModelSettingsError(response, "MODEL_SETTINGS_UNAVAILABLE");
+        return;
+      }
+      try {
+        const snapshot = await options.modelSettings.update(
+          modelSelectionSchema.parse(request.body),
+        );
+        response.status(200).json(publicModelSettings(snapshot));
+      } catch (error) {
+        sendModelSettingsError(
+          response,
+          error instanceof ModelSettingsApiError
+            ? error.code
+            : "MODEL_SETTINGS_UNAVAILABLE",
+        );
+      }
+    },
+  );
+
   application.get("/healthz", (_request, response) => {
     response.set("cache-control", "no-store");
     response.status(200).json({ status: "ok" });
@@ -357,6 +464,7 @@ export async function startHealthServer(input: {
   deploymentIdentity?: DeploymentIdentityController;
   photonSetup?: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
+  modelSettings?: ModelSettingsController;
 }): Promise<HealthServer> {
   const application = createHealthApplication(input);
   const server = await new Promise<Server>((resolve, reject) => {

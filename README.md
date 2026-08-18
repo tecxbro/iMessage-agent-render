@@ -45,6 +45,13 @@ The default `CODEX_AUTH_MODE` is `chatgpt`.
 3. Open the displayed device-auth URL, sign in, and enter the one-time code.
 4. Keep the dashboard open while it verifies the login and prepares Codex. The dashboard advances automatically when each stage is ready.
 
+After ChatGPT connects, **Advanced** displays the account plan and only the
+models and reasoning efforts advertised by Codex for that account. The stored
+deployment default is GPT-5.6 Luna with High reasoning. If that exact pair is
+unavailable, the agent uses Codex's advertised default pair without changing
+the stored preference, and Advanced explains the fallback. Saved changes apply
+to new message chains; running work keeps its chain snapshot.
+
 ChatGPT credentials persist under `/var/data/codex`. Treat `auth.json` like a password: never print it, copy it into a ticket, or commit it.
 
 ### OpenAI API key
@@ -109,7 +116,7 @@ The most common edits are:
 | Personality and conversational style | `prompts/interaction.system.md`, `prompts/voice-policy.md` |
 | Execution behavior | `prompts/execution.system.md` |
 | Approval rules | `prompts/approval-policy.md` |
-| Models and reasoning effort | `.env` model variables |
+| Models and reasoning effort | **Advanced** in the deployment dashboard |
 | Authorized sender | **Change phone number** in the public dashboard; owner environment values are migration inputs only |
 | Semantic memory | `SUPERMEMORY_API_KEY` |
 | Render region, plans, and disk | `render.yaml` |

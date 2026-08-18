@@ -18,6 +18,22 @@ import type { PhotonSetupController } from "../../src/transport/photon-setup.js"
 
 let health: HealthServer | undefined;
 
+const chatGptCapabilityMethods = {
+  capabilities: () => ({
+    state: "unavailable" as const,
+    planType: null,
+    models: [],
+    refreshedAt: null,
+  }),
+  refreshCapabilities: async () => ({
+    state: "unavailable" as const,
+    planType: null,
+    models: [],
+    refreshedAt: null,
+  }),
+  onCapabilitiesChanged: () => () => undefined,
+};
+
 afterEach(async () => {
   await health?.close();
   health = undefined;
@@ -372,6 +388,7 @@ describe("health and readiness endpoints", () => {
       state: "not_connected" as const,
     } as ReturnType<ChatGptSetupController["status"]>;
     const chatgptSetup = {
+      ...chatGptCapabilityMethods,
       initialize: async () => chatGptStatus,
       status: () => chatGptStatus,
       start: async () => {
@@ -436,6 +453,7 @@ describe("health and readiness endpoints", () => {
       start: async () => ({ state: "connected" as const }),
     } satisfies PhotonSetupController;
     const chatgptSetup = {
+      ...chatGptCapabilityMethods,
       initialize: async () => ({
         state: "failed" as const,
         code: "CHATGPT_APP_SERVER_UNAVAILABLE" as const,
@@ -491,6 +509,7 @@ describe("health and readiness endpoints", () => {
       start: async () => ({ state: "connected" as const }),
     } satisfies PhotonSetupController;
     const chatgptSetup = {
+      ...chatGptCapabilityMethods,
       initialize: async () => ({ state: "connected" as const }),
       status: () => ({ state: "connected" as const }),
       start: async () => ({ state: "connected" as const }),
@@ -524,6 +543,11 @@ describe("health and readiness endpoints", () => {
     expect(page).toContain("+16285550123");
     expect(page).toContain("Your agent is ready.");
     expect(page).toContain("Text it to get started.");
+    expect(page).toContain('<details id="advanced-settings"');
+    expect(page).toContain("ChatGPT plan");
+    expect(page).toContain('id="model-select"');
+    expect(page).toContain('id="effort-select"');
+    expect(page).toContain("Use Luna High");
     expect(page).not.toContain('role="progressbar"');
 
     const script = await fetch(`${base}/agent/dashboard.js`);
@@ -545,6 +569,7 @@ describe("health and readiness endpoints", () => {
       start: async () => ({ state: "connected" as const }),
     } satisfies PhotonSetupController;
     const chatgptSetup = {
+      ...chatGptCapabilityMethods,
       initialize: async () => ({
         state: "failed" as const,
         code: "CHATGPT_APP_SERVER_UNAVAILABLE" as const,

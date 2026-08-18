@@ -19,6 +19,21 @@ import type {
 } from "../../src/transport/photon-setup.js";
 
 const runningServices: RunningAgentService[] = [];
+const chatGptCapabilityMethods = {
+  capabilities: () => ({
+    state: "unavailable" as const,
+    planType: null,
+    models: [],
+    refreshedAt: null,
+  }),
+  refreshCapabilities: async () => ({
+    state: "unavailable" as const,
+    planType: null,
+    models: [],
+    refreshedAt: null,
+  }),
+  onCapabilitiesChanged: () => () => undefined,
+};
 afterEach(async () => {
   await Promise.all(
     runningServices.splice(0).map(async (service) => service.shutdown("test")),
@@ -348,6 +363,7 @@ describe("composed service lifecycle recovery", () => {
     let chatGptConnected = false;
     let chatGptListener: (() => void | Promise<void>) | undefined;
     const chatgptSetup = {
+      ...chatGptCapabilityMethods,
       initialize: async () => ({ state: "not_connected" as const }),
       status: () =>
         chatGptConnected
@@ -437,6 +453,7 @@ describe("composed service lifecycle recovery", () => {
     let connected = false;
     let completion: (() => void | Promise<void>) | undefined;
     const chatgptSetup = {
+      ...chatGptCapabilityMethods,
       initialize: async () => ({ state: "not_connected" as const }),
       status: () =>
         connected
@@ -497,5 +514,85 @@ describe("composed service lifecycle recovery", () => {
       status: 200,
       body: { ready: true },
     });
+  });
+
+  it("re-probes readiness when account model capabilities change", async () => {
+    let pairAvailable = true;
+    let capabilitiesListener: (() => void | Promise<void>) | undefined;
+    let listenerDisposed = false;
+    const chatgptSetup = {
+      ...chatGptCapabilityMethods,
+      initialize: async () => ({ state: "connected" as const }),
+      status: () => ({ state: "connected" as const }),
+      start: async () => ({ state: "connected" as const }),
+      onConnected: () => () => undefined,
+      onCapabilitiesChanged: (listener) => {
+        capabilitiesListener = async () => {
+          await listener({
+            state: "available",
+            planType: "plus",
+            models: [],
+            refreshedAt: new Date(),
+          });
+        };
+        return () => {
+          listenerDisposed = true;
+          capabilitiesListener = undefined;
+        };
+      },
+      close: async () => undefined,
+    } satisfies ChatGptSetupController;
+    const checkCodex = vi.fn(async () =>
+      pairAvailable
+        ? ({ auth: "ok", capabilities: "ok" } as const)
+        : ({
+            auth: "ok",
+            capabilities: "failed",
+            capabilityCode: "CODEX_CAPABILITY_FAILED",
+          } as const),
+    );
+    const startSpectrum = vi.fn(async ({ readiness }) => {
+      readiness.markConnected();
+    });
+    const service = await startAgentService({
+      port: 0,
+      host: "127.0.0.1",
+      installSignalHandlers: false,
+      chatgptSetup,
+      bootstrap: {
+        prepareConfiguration: async () => undefined,
+        prepareStorage: async () => undefined,
+        connectDatabase: async () => undefined,
+        applyMigrations: async () => undefined,
+        startQueue: async () => undefined,
+        checkCodex,
+        configureSupermemory: async () => "disabled",
+        startSpectrum,
+      },
+    });
+    runningServices.push(service);
+
+    expect(checkCodex).toHaveBeenCalledOnce();
+    expect(startSpectrum).toHaveBeenCalledOnce();
+
+    pairAvailable = false;
+    await capabilitiesListener?.();
+    await vi.waitFor(() => expect(checkCodex).toHaveBeenCalledTimes(2));
+    await expect(fetchReadiness(service)).resolves.toMatchObject({
+      status: 503,
+      body: { ready: false },
+    });
+
+    pairAvailable = true;
+    await capabilitiesListener?.();
+    await vi.waitFor(() => expect(checkCodex).toHaveBeenCalledTimes(3));
+    expect(startSpectrum).toHaveBeenCalledOnce();
+    await expect(fetchReadiness(service)).resolves.toMatchObject({
+      status: 200,
+      body: { ready: true },
+    });
+
+    await service.shutdown("test");
+    expect(listenerDisposed).toBe(true);
   });
 });

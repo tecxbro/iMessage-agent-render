@@ -1,10 +1,8 @@
 import { type Server } from "node:http";
 
 import express, {
-  type CookieOptions,
   type ErrorRequestHandler,
   type Express,
-  type Request,
   type Response,
 } from "express";
 
@@ -15,31 +13,19 @@ import {
 } from "../runtime/deployment-identity.js";
 import type { PhotonSetupController } from "../transport/photon-setup.js";
 import {
-  OPERATOR_SESSION_COOKIE,
-  operatorSessionFromResponse,
-  readOperatorSession,
-  requireOperatorCsrf,
-} from "./csrf.js";
-import {
   renderDashboardScript,
   renderDeploymentPage,
   type DeploymentPageOptions,
 } from "./deployment-page.js";
-import type { OperatorAuth, OperatorSession } from "./operator-auth.js";
-import {
-  renderOperatorLoginPage,
-  renderOperatorLoginScript,
-} from "./operator-login-page.js";
 import { PHOTON_LOGO_BASE64 } from "./photon-logo.js";
 import {
   ReadinessRegistry,
   type SpectrumReadiness,
 } from "./readiness.js";
+import { requireSameOrigin } from "./same-origin.js";
 
 export interface HealthApplicationOptions {
   readiness: ReadinessRegistry;
-  operatorAuth: OperatorAuth;
-  secureSessionCookie?: boolean;
   spectrum?: SpectrumReadiness;
   deploymentPage?: DeploymentPageOptions;
   deploymentIdentity?: DeploymentIdentityController;
@@ -53,43 +39,6 @@ export interface HealthServer {
   close(): Promise<void>;
 }
 
-const LOGIN_ATTEMPT_LIMIT = 5;
-const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1_000;
-
-class LoginAttemptLimiter {
-  #failedAt: number[] = [];
-
-  public isLimited(now = Date.now()): boolean {
-    this.#removeExpired(now);
-    return this.#failedAt.length >= LOGIN_ATTEMPT_LIMIT;
-  }
-
-  public recordFailure(now = Date.now()): void {
-    this.#removeExpired(now);
-    if (this.#failedAt.length < LOGIN_ATTEMPT_LIMIT) {
-      this.#failedAt.push(now);
-    }
-  }
-
-  public reset(): void {
-    this.#failedAt = [];
-  }
-
-  #removeExpired(now: number): void {
-    const cutoff = now - LOGIN_ATTEMPT_WINDOW_MS;
-    this.#failedAt = this.#failedAt.filter((failedAt) => failedAt > cutoff);
-  }
-}
-
-function sessionCookieOptions(secure: boolean): CookieOptions {
-  return {
-    httpOnly: true,
-    secure,
-    sameSite: "strict",
-    path: "/",
-  };
-}
-
 function setPrivateResponseHeaders(response: Response): void {
   response.set({
     "cache-control": "no-store",
@@ -97,23 +46,6 @@ function setPrivateResponseHeaders(response: Response): void {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
   });
-}
-
-function sendUnauthorized(response: Response): void {
-  response.set("cache-control", "no-store");
-  response.status(401).json({ error: "UNAUTHORIZED" });
-}
-
-function requireReadSession(
-  request: Request,
-  response: Response,
-  operatorAuth: OperatorAuth,
-): OperatorSession | undefined {
-  const session = readOperatorSession(request, operatorAuth);
-  if (session === undefined) {
-    sendUnauthorized(response);
-  }
-  return session;
 }
 
 function isExactObject(
@@ -168,12 +100,7 @@ export function createHealthApplication(
       strict: true,
     }),
   );
-  const secureSessionCookie = options.secureSessionCookie ?? false;
-  const loginAttempts = new LoginAttemptLimiter();
-  const csrf = requireOperatorCsrf({
-    operatorAuth: options.operatorAuth,
-    secureSessionCookie,
-  });
+  const sameOrigin = requireSameOrigin();
   const chatGptStatus = () => {
     if (options.chatgptSetup !== undefined) {
       return options.chatgptSetup.status();
@@ -192,18 +119,8 @@ export function createHealthApplication(
     response.redirect(302, "/agent/dashboard");
   });
 
-  application.get("/agent/dashboard", (request, response) => {
-    const session = readOperatorSession(request, options.operatorAuth);
+  application.get("/agent/dashboard", (_request, response) => {
     setPrivateResponseHeaders(response);
-    if (session === undefined) {
-      response.set(
-        "content-security-policy",
-        "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-      );
-      response.status(200).type("html").send(renderOperatorLoginPage());
-      return;
-    }
-
     const snapshot = options.readiness.snapshot(options.spectrum?.snapshot());
     response.set(
       "content-security-policy",
@@ -220,7 +137,6 @@ export function createHealthApplication(
             runtimeMode: "foundation",
             supermemoryConfigured: false,
           },
-          session.csrfToken,
           options.deploymentIdentity?.status() ?? {
             state: "not_configured",
           },
@@ -230,22 +146,7 @@ export function createHealthApplication(
       );
   });
 
-  application.get("/agent/operator-login.js", (_request, response) => {
-    response.set({
-      "cache-control": "no-store",
-      "content-security-policy": "default-src 'none'",
-      "x-content-type-options": "nosniff",
-    });
-    response
-      .status(200)
-      .type("application/javascript")
-      .send(renderOperatorLoginScript());
-  });
-
-  application.get("/agent/dashboard.js", (request, response) => {
-    if (requireReadSession(request, response, options.operatorAuth) === undefined) {
-      return;
-    }
+  application.get("/agent/dashboard.js", (_request, response) => {
     response.set({
       "cache-control": "no-store",
       "content-security-policy": "default-src 'none'",
@@ -263,76 +164,7 @@ export function createHealthApplication(
     response.status(200).send(Buffer.from(PHOTON_LOGO_BASE64, "base64"));
   });
 
-  application.post("/api/operator/session", async (request, response) => {
-    response.set("cache-control", "no-store");
-    if (
-      !isExactObject(request.body, ["password"]) ||
-      typeof request.body["password"] !== "string"
-    ) {
-      sendInvalidRequest(response);
-      return;
-    }
-    let password = request.body["password"];
-    request.body["password"] = "";
-    let authenticated = false;
-    try {
-      authenticated = await options.operatorAuth.authenticatePassword(password);
-    } catch {
-      response.status(503).json({ error: "OPERATOR_AUTH_UNAVAILABLE" });
-      return;
-    } finally {
-      password = "";
-    }
-    if (!authenticated) {
-      const wasLimited = loginAttempts.isLimited();
-      loginAttempts.recordFailure();
-      // Continue returning a stable throttled response for failures without
-      // turning anonymous failures into an operator-wide availability attack.
-      if (wasLimited || loginAttempts.isLimited()) {
-        response.status(429).json({ error: "RATE_LIMITED" });
-      } else {
-        response.status(403).json({ error: "INVALID_PASSWORD" });
-      }
-      return;
-    }
-
-    loginAttempts.reset();
-    let session: OperatorSession;
-    try {
-      session = options.operatorAuth.createSession();
-    } catch {
-      response.status(503).json({ error: "OPERATOR_SESSION_UNAVAILABLE" });
-      return;
-    }
-    response.cookie(
-      OPERATOR_SESSION_COOKIE,
-      session.id,
-      sessionCookieOptions(secureSessionCookie),
-    );
-    response.status(201).json({ csrfToken: session.csrfToken });
-  });
-
-  application.delete("/api/operator/session", csrf, (request, response) => {
-    if (request.body !== undefined && !isExactObject(request.body, [])) {
-      sendInvalidRequest(response);
-      return;
-    }
-    const session = operatorSessionFromResponse(response);
-    if (session !== undefined) {
-      options.operatorAuth.revokeSession(session.id);
-    }
-    response.clearCookie(
-      OPERATOR_SESSION_COOKIE,
-      sessionCookieOptions(secureSessionCookie),
-    );
-    response.set("cache-control", "no-store");
-    response.status(200).json({ success: true });
-  });
-
-  application.get("/api/setup/owner/status", (request, response) => {
-    if (requireReadSession(request, response, options.operatorAuth) === undefined) {
-      return;
-    }
+  application.get("/api/setup/owner/status", (_request, response) => {
     response.set("cache-control", "no-store");
     const status = options.deploymentIdentity?.status();
     if (status?.state === "configured") {
@@ -354,7 +186,7 @@ export function createHealthApplication(
     });
   });
 
-  application.post("/api/setup/owner", csrf, async (request, response) => {
+  application.post("/api/setup/owner", sameOrigin, async (request, response) => {
     response.set("cache-control", "no-store");
     if (!isExactObject(request.body, ["phoneNumber"])) {
       sendInvalidRequest(response);
@@ -395,7 +227,7 @@ export function createHealthApplication(
     }
   });
 
-  application.post("/api/setup/photon/start", csrf, async (request, response) => {
+  application.post("/api/setup/photon/start", sameOrigin, async (request, response) => {
     response.set("cache-control", "no-store");
     if (!isExactObject(request.body, [])) {
       sendInvalidRequest(response);
@@ -427,17 +259,14 @@ export function createHealthApplication(
     }
   });
 
-  application.get("/api/setup/photon/status", (request, response) => {
-    if (requireReadSession(request, response, options.operatorAuth) === undefined) {
-      return;
-    }
+  application.get("/api/setup/photon/status", (_request, response) => {
     response.set("cache-control", "no-store");
     response.status(200).json(
       options.photonSetup?.status() ?? { state: "not_connected" },
     );
   });
 
-  application.post("/api/setup/chatgpt/start", csrf, async (request, response) => {
+  application.post("/api/setup/chatgpt/start", sameOrigin, async (request, response) => {
     response.set("cache-control", "no-store");
     if (!isExactObject(request.body, [])) {
       sendInvalidRequest(response);
@@ -477,10 +306,7 @@ export function createHealthApplication(
     }
   });
 
-  application.get("/api/setup/chatgpt/status", (request, response) => {
-    if (requireReadSession(request, response, options.operatorAuth) === undefined) {
-      return;
-    }
+  application.get("/api/setup/chatgpt/status", (_request, response) => {
     response.set("cache-control", "no-store");
     response.status(200).json(chatGptStatus());
   });
@@ -490,17 +316,10 @@ export function createHealthApplication(
     response.status(200).json({ status: "ok" });
   });
 
-  application.get("/readyz", (request, response) => {
+  application.get("/readyz", (_request, response) => {
     const snapshot = options.readiness.snapshot(options.spectrum?.snapshot());
     response.set("cache-control", "no-store");
-    const session = readOperatorSession(request, options.operatorAuth);
-    response
-      .status(snapshot.ready ? 200 : 503)
-      .json(
-        session === undefined
-          ? { status: snapshot.status, ready: snapshot.ready }
-          : snapshot,
-      );
+    response.status(snapshot.ready ? 200 : 503).json(snapshot);
   });
 
   application.use(jsonErrorHandler);
@@ -511,8 +330,6 @@ export async function startHealthServer(input: {
   port: number;
   host?: string;
   readiness: ReadinessRegistry;
-  operatorAuth: OperatorAuth;
-  secureSessionCookie?: boolean;
   spectrum?: SpectrumReadiness;
   deploymentPage?: DeploymentPageOptions;
   deploymentIdentity?: DeploymentIdentityController;

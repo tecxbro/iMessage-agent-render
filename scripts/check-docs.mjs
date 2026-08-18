@@ -23,9 +23,11 @@ const STALE_USER_PHRASES = [
 ];
 const FORBIDDEN_PUBLIC_ONBOARDING_PHRASES = [
   "Deployment setup code",
-  "Web Service > Environment",
   "reveal DASHBOARD_SETUP_SECRET",
   "private code from your service environment",
+  "Choose an agent password",
+  "Enter the agent password",
+  "authenticated dashboard",
 ];
 
 function walkFiles(directory) {

@@ -29,7 +29,6 @@ import {
 import {
   loadEnvironment,
   modelProfilesFromEnvironment,
-  operatorPasswordFromEnvironment,
   type Environment,
 } from "../config/env.js";
 import { loadPromptBundle } from "../config/prompt-bundle.js";
@@ -45,10 +44,6 @@ import { OperationalRepository } from "../db/repositories/operational.js";
 import { OrchestrationRepository } from "../db/repositories/orchestration.js";
 import { OutboundRepository } from "../db/repositories/outbound.js";
 import { RetentionRepository } from "../db/repositories/retention.js";
-import {
-  createOperatorAuth,
-  type OperatorAuth,
-} from "../http/operator-auth.js";
 import type { AgentServiceBootstrap } from "../index.js";
 import { recallMemoryContext } from "../memory/recall.js";
 import {
@@ -120,7 +115,6 @@ export interface ProductionRuntime {
   logger: Logger;
   promptBundleVersion: string;
   bootstrap: AgentServiceBootstrap;
-  operatorAuth: OperatorAuth;
   deploymentIdentity: DeploymentIdentityController;
   photonSetup: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
@@ -136,12 +130,6 @@ function required<Value>(value: Value | undefined, stage: string): Value {
 export async function createProductionRuntime(): Promise<ProductionRuntime> {
   // Configuration and protected values
   const environment = loadEnvironment();
-  const operatorPassword = operatorPasswordFromEnvironment(environment);
-  if (operatorPassword === undefined) {
-    throw new Error(
-      "An operator password is required to start operator authentication.",
-    );
-  }
   const cipher = createDataCipher(environment.APP_ENCRYPTION_KEY);
   const photonCredentialsStore = new PhotonCredentialsStore({
     directory: resolve(dirname(environment.CODEX_HOME), "photon"),
@@ -164,10 +152,6 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   const protectedValues: string[] = [
     environment.DATABASE_URL,
     environment.APP_ENCRYPTION_KEY,
-    operatorPassword,
-    ...(environment.DASHBOARD_SETUP_SECRET === undefined
-      ? []
-      : [environment.DASHBOARD_SETUP_SECRET]),
     ...(environment.OWNER_PHONE_NUMBER === undefined
       ? []
       : [environment.OWNER_PHONE_NUMBER]),
@@ -201,7 +185,6 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       protectedValues.push(value);
     }
   };
-  const operatorAuth = await createOperatorAuth({ password: operatorPassword });
   const inFlightChains = new InFlightChainRegistry();
   const interruptSupersededChains = (chainIds: readonly string[]): void => {
     const abortedWorkCount = inFlightChains.cancel(chainIds);
@@ -735,7 +718,6 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     logger,
     promptBundleVersion: promptBundle.version,
     bootstrap,
-    operatorAuth,
     deploymentIdentity,
     photonSetup,
     ...(chatgptSetup === undefined ? {} : { chatgptSetup }),

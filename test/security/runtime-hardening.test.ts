@@ -60,8 +60,6 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
       "spectrum-private-secret",
       "memory-private-secret",
       "encryption-private-secret",
-      "agent-password-private-secret",
-      "dashboard-setup-private-secret",
     ];
     const child = buildCodexChildEnvironment({
       parentEnvironment: {
@@ -71,8 +69,6 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
         SPECTRUM_PROJECT_SECRET: protectedValues[1],
         SUPERMEMORY_API_KEY: protectedValues[2],
         APP_ENCRYPTION_KEY: protectedValues[3],
-        AGENT_PASSWORD: protectedValues[4],
-        DASHBOARD_SETUP_SECRET: protectedValues[5],
         AWS_SECRET_ACCESS_KEY: "cloud-private-secret",
       },
       codexHome,
@@ -189,12 +185,8 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
     ).toThrow(/protected service secret/);
   });
 
-  it("redacts owner handles, operator credentials, and provider codes from real logger output", () => {
+  it("redacts owner handles and provider codes from real logger output", () => {
     const protectedCredential = "provider-credential-with-unknown-format";
-    const agentPassword = "agent-password-that-must-not-be-logged";
-    const setupSecret = "dashboard-setup-secret-that-must-not-be-logged";
-    const sessionId = "operator-session-id-that-must-not-be-logged";
-    const csrfToken = "session-csrf-token-that-must-not-be-logged";
     const photonDeviceCode = "PHOTON-DEVICE-CODE-PRIVATE";
     const chatGptDeviceCode = "CHATGPT-DEVICE-CODE-PRIVATE";
     const verificationUrl = "https://private.example/device?code=secret";
@@ -219,30 +211,22 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
     const logger = createLogger(
       {
         base: null,
-        protectedValues: [protectedCredential, agentPassword, setupSecret],
+        protectedValues: [protectedCredential],
       },
       { write: (chunk: string) => (output.push(chunk), true) },
     );
     logger.error(
       {
         providerDetail: protectedCredential,
-        agentPassword,
-        setupSecret,
-        operatorSessionId: sessionId,
-        csrfToken,
         photonDeviceCode,
         chatGptDeviceCode,
         verificationUrl,
       },
-      `owner@example.com ${agentPassword} ${setupSecret}`,
+      "owner@example.com provider failure",
     );
     const logOutput = output.join("");
     for (const privateValue of [
       protectedCredential,
-      agentPassword,
-      setupSecret,
-      sessionId,
-      csrfToken,
       photonDeviceCode,
       chatGptDeviceCode,
       verificationUrl,

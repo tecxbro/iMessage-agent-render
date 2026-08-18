@@ -9,10 +9,6 @@ import {
   type ReadinessComponent,
 } from "../../src/http/readiness.js";
 import {
-  createOperatorAuth,
-  type OperatorAuth,
-} from "../../src/http/operator-auth.js";
-import {
   createDeploymentIdentityController,
   type DeploymentIdentityController,
   type DeploymentIdentityStatus,
@@ -21,20 +17,11 @@ import { startHealthServer, type HealthServer } from "../../src/http/server.js";
 import type { PhotonSetupController } from "../../src/transport/photon-setup.js";
 
 let health: HealthServer | undefined;
-let operatorAuth: OperatorAuth | undefined;
-const SETUP_SECRET = "unit-test-dashboard-setup-secret-material-0001";
 
 afterEach(async () => {
   await health?.close();
-  operatorAuth?.close();
   health = undefined;
-  operatorAuth = undefined;
 });
-
-async function createTestOperatorAuth(): Promise<OperatorAuth> {
-  operatorAuth = await createOperatorAuth({ password: SETUP_SECRET });
-  return operatorAuth;
-}
 
 function deploymentIdentity(
   initialStatus: DeploymentIdentityStatus = {
@@ -56,41 +43,12 @@ function deploymentIdentity(
   };
 }
 
-interface AuthenticatedSession {
-  cookie: string;
-  csrfToken: string;
-}
-
-async function authenticateOperator(base: string): Promise<AuthenticatedSession> {
-  const response = await fetch(`${base}/api/operator/session`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ password: SETUP_SECRET }),
-  });
-  expect(response.status).toBe(201);
-  const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
-  const body = (await response.json()) as { csrfToken: string };
-  expect(cookie).toBeDefined();
-  return { cookie: cookie!, csrfToken: body.csrfToken };
-}
-
-function authenticatedHeaders(
-  session: AuthenticatedSession,
-): NonNullable<RequestInit["headers"]> {
-  return { cookie: session.cookie };
-}
-
-function protectedRequest(
-  base: string,
-  session: AuthenticatedSession,
-): RequestInit {
+function publicMutation(base: string): RequestInit {
   return {
     method: "POST",
     headers: {
-      cookie: session.cookie,
       origin: base,
       "content-type": "application/json",
-      "x-csrf-token": session.csrfToken,
     },
     body: "{}",
   };
@@ -122,7 +80,6 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity({ state: "not_configured" }),
       spectrum,
     });
@@ -135,17 +92,7 @@ describe("health and readiness endpoints", () => {
     expect(root.status).toBe(302);
     expect(root.headers.get("location")).toBe("/agent/dashboard");
 
-    const loginPage = await fetch(`${base}/agent/dashboard`);
-    const loginHtml = await loginPage.text();
-    expect(loginHtml).toContain("Agent password");
-    expect(loginHtml).not.toContain("Photon");
-    expect(loginHtml).not.toContain("ChatGPT");
-    expect(loginHtml).not.toContain("CODEX_AUTH_MISSING");
-
-    const session = await authenticateOperator(base);
-    const deployment = await fetch(`${base}/agent/dashboard`, {
-      headers: authenticatedHeaders(session),
-    });
+    const deployment = await fetch(`${base}/agent/dashboard`);
     expect(deployment.status).toBe(200);
     expect(deployment.headers.get("content-security-policy")).toContain(
       "default-src 'none'",
@@ -194,16 +141,7 @@ describe("health and readiness endpoints", () => {
 
     const ready = await fetch(`${base}/readyz`);
     expect(ready.status).toBe(503);
-    await expect(ready.json()).resolves.toEqual({
-      status: "not_ready",
-      ready: false,
-    });
-
-    const privateReady = await fetch(`${base}/readyz`, {
-      headers: authenticatedHeaders(session),
-    });
-    expect(privateReady.status).toBe(503);
-    await expect(privateReady.json()).resolves.toMatchObject({
+    await expect(ready.json()).resolves.toMatchObject({
       status: "not_ready",
       ready: false,
       components: {
@@ -213,7 +151,7 @@ describe("health and readiness endpoints", () => {
     });
   });
 
-  it("validates and persists owner setup through masked authenticated endpoints", async () => {
+  it("validates and persists dashboard owner setup while returning only a masked number", async () => {
     const readiness = new ReadinessRegistry();
     const spectrum = new SpectrumReadiness();
     let storedPhoneNumber: string | undefined;
@@ -231,23 +169,19 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: identity,
       spectrum,
     });
     const address = health.server.address() as AddressInfo;
     const base = `http://127.0.0.1:${address.port}`;
-    const session = await authenticateOperator(base);
 
-    const initial = await fetch(`${base}/api/setup/owner/status`, {
-      headers: authenticatedHeaders(session),
-    });
+    const initial = await fetch(`${base}/api/setup/owner/status`);
     await expect(initial.json()).resolves.toEqual({
       state: "not_configured",
     });
 
     const extra = await fetch(`${base}/api/setup/owner`, {
-      ...protectedRequest(base, session),
+      ...publicMutation(base),
       body: JSON.stringify({
         phoneNumber: "+14155550123",
         unexpected: true,
@@ -257,7 +191,7 @@ describe("health and readiness endpoints", () => {
     await expect(extra.json()).resolves.toEqual({ error: "INVALID_REQUEST" });
 
     const invalid = await fetch(`${base}/api/setup/owner`, {
-      ...protectedRequest(base, session),
+      ...publicMutation(base),
       body: JSON.stringify({ phoneNumber: "415-555-0123" }),
     });
     expect(invalid.status).toBe(400);
@@ -266,7 +200,7 @@ describe("health and readiness endpoints", () => {
     });
 
     const configured = await fetch(`${base}/api/setup/owner`, {
-      ...protectedRequest(base, session),
+      ...publicMutation(base),
       body: JSON.stringify({ phoneNumber: "+442071838750" }),
     });
     const configuredBody = await configured.text();
@@ -278,9 +212,7 @@ describe("health and readiness endpoints", () => {
     expect(configuredBody).not.toContain("+442071838750");
     expect(storedPhoneNumber).toBe("+442071838750");
 
-    const status = await fetch(`${base}/api/setup/owner/status`, {
-      headers: authenticatedHeaders(session),
-    });
+    const status = await fetch(`${base}/api/setup/owner/status`);
     const statusBody = await status.text();
     expect(JSON.parse(statusBody)).toEqual({
       state: "configured",
@@ -288,9 +220,7 @@ describe("health and readiness endpoints", () => {
     });
     expect(statusBody).not.toContain("+442071838750");
 
-    const dashboard = await fetch(`${base}/agent/dashboard`, {
-      headers: authenticatedHeaders(session),
-    });
+    const dashboard = await fetch(`${base}/agent/dashboard`);
     const html = await dashboard.text();
     expect(html).toContain("••••••8750");
     expect(html).not.toContain("+442071838750");
@@ -335,7 +265,6 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -347,11 +276,8 @@ describe("health and readiness endpoints", () => {
     });
     const address = health.server.address() as AddressInfo;
     const base = `http://127.0.0.1:${address.port}`;
-    const session = await authenticateOperator(base);
 
-    const response = await fetch(`${base}/agent/dashboard`, {
-      headers: authenticatedHeaders(session),
-    });
+    const response = await fetch(`${base}/agent/dashboard`);
     const page = await response.text();
     expect(page).toContain("✓ Photon connected");
     expect(page).toContain("Your number:");
@@ -360,7 +286,7 @@ describe("health and readiness endpoints", () => {
 
     const ready = await fetch(`${base}/readyz`);
     expect(ready.status).toBe(200);
-    await expect(ready.json()).resolves.toEqual({
+    await expect(ready.json()).resolves.toMatchObject({
       status: "ready",
       ready: true,
     });
@@ -398,7 +324,6 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -411,11 +336,8 @@ describe("health and readiness endpoints", () => {
     });
     const address = health.server.address() as AddressInfo;
     const base = `http://127.0.0.1:${address.port}`;
-    const session = await authenticateOperator(base);
 
-    const dashboard = await fetch(`${base}/agent/dashboard`, {
-      headers: authenticatedHeaders(session),
-    });
+    const dashboard = await fetch(`${base}/agent/dashboard`);
     const initialPage = await dashboard.text();
     expect(initialPage).toContain("ChatGPT");
     expect(initialPage).toContain("Not connected");
@@ -423,14 +345,12 @@ describe("health and readiness endpoints", () => {
 
     const start = await fetch(
       `${base}/api/setup/chatgpt/start`,
-      protectedRequest(base, session),
+      publicMutation(base),
     );
     expect(start.status).toBe(202);
     await expect(start.json()).resolves.toEqual(chatGptStatus);
 
-    const devicePage = await fetch(`${base}/agent/dashboard`, {
-      headers: authenticatedHeaders(session),
-    });
+    const devicePage = await fetch(`${base}/agent/dashboard`);
     const deviceHtml = await devicePage.text();
     expect(deviceHtml).toContain("https://auth.openai.com/codex/device");
     expect(deviceHtml).toContain("ABCD-1234");
@@ -467,7 +387,6 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -480,11 +399,8 @@ describe("health and readiness endpoints", () => {
     });
     const address = health.server.address() as AddressInfo;
     const base = `http://127.0.0.1:${address.port}`;
-    const session = await authenticateOperator(base);
 
-    const response = await fetch(`${base}/agent/dashboard`, {
-      headers: authenticatedHeaders(session),
-    });
+    const response = await fetch(`${base}/agent/dashboard`);
     const page = await response.text();
     expect(page).toContain("ChatGPT");
     expect(page).toContain("✓ Connected");
@@ -520,7 +436,6 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -533,11 +448,8 @@ describe("health and readiness endpoints", () => {
     });
     const address = health.server.address() as AddressInfo;
     const base = `http://127.0.0.1:${address.port}`;
-    const session = await authenticateOperator(base);
 
-    const response = await fetch(`${base}/agent/dashboard`, {
-      headers: authenticatedHeaders(session),
-    });
+    const response = await fetch(`${base}/agent/dashboard`);
     const page = await response.text();
     expect(page).toContain("Your iMessage Agent");
     expect(page).toContain("✓ Photon connected");
@@ -549,9 +461,7 @@ describe("health and readiness endpoints", () => {
     expect(page).toContain("Text it to get started.");
     expect(page).not.toContain('role="progressbar"');
 
-    const script = await fetch(`${base}/agent/dashboard.js`, {
-      headers: authenticatedHeaders(session),
-    });
+    const script = await fetch(`${base}/agent/dashboard.js`);
     const javascript = await script.text();
     expect(javascript).toContain('fetch("/readyz"');
     expect(javascript).toContain("dataset.ready");
@@ -589,7 +499,6 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -602,18 +511,15 @@ describe("health and readiness endpoints", () => {
     });
     const address = health.server.address() as AddressInfo;
     const base = `http://127.0.0.1:${address.port}`;
-    const session = await authenticateOperator(base);
 
-    const response = await fetch(`${base}/agent/dashboard`, {
-      headers: authenticatedHeaders(session),
-    });
+    const response = await fetch(`${base}/agent/dashboard`);
     const page = await response.text();
     expect(page).toContain("✓ ChatGPT connected");
     expect(page).toContain("Your agent is ready.");
     expect(page).not.toContain("CHATGPT_APP_SERVER_UNAVAILABLE");
   });
 
-  it("preserves Photon setup start and status behavior after operator authentication", async () => {
+  it("preserves Photon setup start and public status behavior", async () => {
     const readiness = new ReadinessRegistry();
     const spectrum = new SpectrumReadiness();
     let status = {
@@ -635,18 +541,16 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       photonSetup,
     });
     const address = health.server.address() as AddressInfo;
     const base = `http://127.0.0.1:${address.port}`;
-    const session = await authenticateOperator(base);
 
     const start = await fetch(
       `${base}/api/setup/photon/start`,
-      protectedRequest(base, session),
+      publicMutation(base),
     );
     expect(start.status).toBe(202);
     await expect(start.json()).resolves.toMatchObject({
@@ -654,14 +558,10 @@ describe("health and readiness endpoints", () => {
       userCode: "ABCD-EFGH",
     });
 
-    const current = await fetch(`${base}/api/setup/photon/status`, {
-      headers: authenticatedHeaders(session),
-    });
+    const current = await fetch(`${base}/api/setup/photon/status`);
     await expect(current.json()).resolves.toEqual(status);
 
-    const dashboard = await fetch(`${base}/agent/dashboard`, {
-      headers: authenticatedHeaders(session),
-    });
+    const dashboard = await fetch(`${base}/agent/dashboard`);
     const page = await dashboard.text();
     expect(page).toContain("https://app.photon.codes/device");
     expect(page).toContain('data-auth-link="photon"');
@@ -674,7 +574,6 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
     });

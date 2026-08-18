@@ -3,7 +3,6 @@ import { type AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createOperatorAuth } from "../../src/http/operator-auth.js";
 import {
   startProductionServer,
   type ProductionServer,
@@ -17,15 +16,14 @@ afterEach(async () => {
 });
 
 describe("production executable entrypoint", () => {
-  it("enables secure operator-session cookies in production composition", async () => {
+  it("composes the public dashboard without an environment password", async () => {
     const source = await readFile(
       new URL("../../src/server.ts", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain(
-      'secureSessionCookie: runtime.environment.NODE_ENV === "production"',
-    );
+    expect(source).not.toContain("operatorAuth");
+    expect(source).not.toContain("secureSessionCookie");
   });
 
   it("starts the composed agent lifecycle instead of the foundation shell", async () => {
@@ -33,16 +31,10 @@ describe("production executable entrypoint", () => {
     const stage = (name: string) => async (): Promise<void> => {
       stages.push(name);
     };
-    const operatorAuth = await createOperatorAuth({
-      password: "test-dashboard-setup-secret-material-1234567890",
-    });
-    const closeOperatorAuth = vi.spyOn(operatorAuth, "close");
-
     server = await startProductionServer({
       port: 0,
       host: "127.0.0.1",
       installSignalHandlers: false,
-      operatorAuth,
       deploymentPage: {
         authMode: "api_key",
         supermemoryConfigured: false,
@@ -97,11 +89,9 @@ describe("production executable entrypoint", () => {
       `http://127.0.0.1:${address.port}/agent/dashboard`,
     );
     const deploymentPage = await deployment.text();
-    expect(deploymentPage).toContain("Agent password");
-    expect(deploymentPage).not.toContain("Photon");
-    expect(deploymentPage).not.toContain("ChatGPT");
-
-    await server.shutdown("test");
-    expect(closeOperatorAuth).toHaveBeenCalledOnce();
+    expect(deploymentPage).toContain("Your phone number");
+    expect(deploymentPage).toContain("Photon");
+    expect(deploymentPage).toContain("Public setup");
+    expect(deploymentPage).not.toContain("Agent password");
   });
 });

@@ -174,7 +174,6 @@ function renderFinalPage(
 export function renderDeploymentPage(
   snapshot: ServiceReadinessSnapshot,
   options: DeploymentPageOptions,
-  csrfToken: string,
   ownerStatus: DeploymentIdentityStatus = { state: "not_configured" },
   photonStatus: PhotonSetupStatus = { state: "not_connected" },
   chatGptStatus: ChatGptSetupStatus = { state: "not_connected" },
@@ -217,7 +216,7 @@ export function renderDeploymentPage(
           : "",
         options.authMode,
       )
-    : `<p class="eyebrow">Private agent / setup</p>
+    : `<p class="eyebrow">Public setup</p>
     <h1>iMessage Agent</h1>
     <p class="intro">Connect the services below. Message intake stays off until every step is ready.</p>
     <div class="stack">
@@ -275,7 +274,6 @@ export function renderDeploymentPage(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="csrf-token" content="${escapeHtml(csrfToken)}">
   <title>iMessage Agent</title>
   <link rel="preconnect" href="https://framerusercontent.com" crossorigin>
   <style>
@@ -322,8 +320,6 @@ export function renderDeploymentPage(
     .product-name { font-size: 1rem; font-variation-settings: "wght" 550; }
     .topbar-nav { display: flex; align-items: center; gap: clamp(0.75rem, 3vw, 1.75rem); }
     .topbar-link { display: inline-flex; min-block-size: 2.75rem; align-items: center; color: var(--text); font-size: 0.92rem; font-variation-settings: "wght" 600; text-decoration: none; }
-    .logout-button { min-block-size: 2.75rem; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 0.92rem; font-variation-settings: "wght" 600; cursor: pointer; }
-    .logout-button:hover, .logout-button:focus-visible { text-decoration: underline; text-underline-offset: 0.3em; }
     .topbar-link:hover, .topbar-link:focus-visible { text-decoration: underline; text-underline-offset: 0.3em; }
     .topbar-state, .eyebrow, .state { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     .topbar-state, .eyebrow { color: var(--muted); font-size: 0.72rem; font-weight: 650; letter-spacing: 0.2em; text-transform: uppercase; }
@@ -395,9 +391,8 @@ export function renderDeploymentPage(
       <span class="product-name">iMessage Agent</span>
     </div>
     <nav class="topbar-nav" aria-label="Photon">
-      <span class="topbar-state">Private setup</span>
+      <span class="topbar-state">Public setup</span>
       <a class="topbar-link" href="https://photon.codes" target="_blank" rel="noreferrer">Build with Photon</a>
-      <button id="operator-logout" class="logout-button" type="button">Log out</button>
     </nav>
   </header>
   <main id="main-content" class="shell${agentReady ? " ready-shell" : ""}">${content}</main>
@@ -418,7 +413,6 @@ export function renderDeploymentPage(
 export function renderDashboardScript(): string {
   return `(() => {
   const script = document.currentScript;
-  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
   let timer;
   let authWindow;
   const reload = () => window.location.reload();
@@ -454,7 +448,6 @@ export function renderDashboardScript(): string {
     }
   }
   async function start(kind) {
-    if (!csrfToken) return;
     const control = document.getElementById(kind + "-start");
     if (control) control.disabled = true;
     try {
@@ -462,8 +455,7 @@ export function renderDashboardScript(): string {
         method: "POST",
         credentials: "same-origin",
         headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({})
       });
@@ -473,7 +465,6 @@ export function renderDashboardScript(): string {
   }
   async function saveOwner(event) {
     event.preventDefault();
-    if (!csrfToken) return;
     const form = event.currentTarget;
     const input = document.getElementById("owner-phone-number");
     const error = document.getElementById("owner-error");
@@ -489,8 +480,7 @@ export function renderDashboardScript(): string {
         method: "POST",
         credentials: "same-origin",
         headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({ phoneNumber })
       });
@@ -522,10 +512,6 @@ export function renderDashboardScript(): string {
         fetch("/api/setup/chatgpt/status", { cache: "no-store", credentials: "same-origin" }),
         fetch("/readyz", { cache: "no-store", credentials: "same-origin" })
       ]);
-      if (ownerResponse.status === 401 || photonResponse.status === 401 || chatgptResponse.status === 401) {
-        reload();
-        return;
-      }
       const owner = await ownerResponse.json();
       const photon = await photonResponse.json();
       const chatgpt = await chatgptResponse.json();
@@ -566,20 +552,6 @@ export function renderDashboardScript(): string {
     const control = document.getElementById(kind + "-start");
     if (control) control.addEventListener("click", () => void start(kind));
   }
-  const logout = document.getElementById("operator-logout");
-  if (logout) logout.addEventListener("click", async () => {
-    if (!csrfToken) return;
-    logout.disabled = true;
-    try {
-      await fetch("/api/operator/session", {
-        method: "DELETE",
-        credentials: "same-origin",
-        headers: { "X-CSRF-Token": csrfToken }
-      });
-    } finally {
-      reload();
-    }
-  });
   for (const control of document.querySelectorAll("[data-auth-link]")) {
     control.addEventListener("click", openAuthentication);
   }

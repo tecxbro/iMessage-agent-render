@@ -24,25 +24,17 @@ All changes require a service restart. Render-managed values should be changed t
 | `PAIRING_MODE` | No | `off` | Operator policy | Yes | No |
 | `GROUP_MODE` | No | `owner_mentions_only` | Operator policy | Yes | No |
 
-Fresh deployments leave every owner variable unset and save the owner through the authenticated dashboard. Startup first prefers an active encrypted database identity. Only when none exists does it import `OWNER_PHONE_NUMBER`, then the former long Render alias, then a single unambiguous E.164 `AGENT_OWNER_HANDLES` value. Conflicting phone variables are rejected, and multiple handles or a non-phone handle produce a stable migration-required state instead of a silent choice.
+Fresh deployments leave every owner variable unset and save the owner through the public dashboard. The Render Blueprint never asks for a phone number. Startup first prefers an active encrypted database identity. Only when none exists does it import `OWNER_PHONE_NUMBER`, then the former long Render alias, then a single unambiguous E.164 `AGENT_OWNER_HANDLES` value. These inputs exist only to migrate older deployments; conflicting phone variables are rejected, and multiple handles or a non-phone handle produce a stable migration-required state instead of a silent choice.
 
 Imported values are one-time inputs: successful import persists the encrypted identity and later restarts do not overwrite it from the environment. Stored Photon owner metadata is provider setup state, never sender-authorization authority. After the masked dashboard status and an authorized message verify migration, remove old environment values manually if desired.
 
 Keep `PAIRING_MODE=off` unless pairing has been explicitly reviewed for the deployment. `GROUP_MODE=disabled` rejects group use; `owner_mentions_only` requires the owner/group policy enforced by the application.
 
-## Operator dashboard authentication
+## Public dashboard
 
-| Variable | Required | Default | Where to obtain it | Restart required | Sensitive |
-|---|---:|---|---|---:|---:|
-| `AGENT_PASSWORD` | Fresh production deployments | — | Choose 15–128 characters during initial Blueprint creation | Yes | Yes |
+The dashboard has no password environment variable, login route, session cookie, or CSRF credential. Fresh Blueprint deployment prompts for zero user-supplied environment values. The former dashboard credential variables are unsupported and startup rejects them if they are still present, including when set to an empty string. Existing services must delete those two legacy variables in Render before deploying this version; see [Troubleshooting](./TROUBLESHOOTING.md).
 
-Render declares `AGENT_PASSWORD` with `sync: false`, so the initial Blueprint form privately asks the deployer to choose it once. Spaces and Unicode are accepted, and no uppercase, number, or symbol composition rule is imposed. The password is separate from the owner allowlist: authentication permits the operator to save the owner through the CSRF-protected dashboard route, but does not itself authorize an iMessage sender.
-
-Each successful login creates an eight-hour server-side session, with at most eight active sessions retained. Logout revokes the session, and restarting the service invalidates every session.
-
-Production startup rejects missing or out-of-range operator credential material. Validation identifies only the variable and a safe configuration problem; it never includes the submitted or configured value. `AGENT_PASSWORD` must not equal `APP_ENCRYPTION_KEY`. Do not commit the password, put it in a URL, or store it in browser storage.
-
-At process start, the service derives an in-memory verifier with asynchronous scrypt and a fresh random 16-byte salt. Login derives the submitted verifier with the same salt and uses a constant-time buffer comparison. Only opaque server-side session identifiers reach the browser. Existing-deployment compatibility and recovery are documented in [Troubleshooting](./TROUBLESHOOTING.md).
+The dashboard is public. Read-only setup status and detailed readiness are available to any visitor, and a visitor who opens the page can submit owner, Photon, and ChatGPT setup changes. Mutations require a matching `Origin` and reject cross-site fetch metadata, which reduces drive-by cross-site requests but is not user authentication.
 
 ## Codex authentication
 
@@ -133,7 +125,7 @@ Keep `LOG_MESSAGE_CONTENT=false` in production. Enabling raw content logging mat
 Startup fails with an actionable combined error when:
 
 - API-key mode lacks `OPENAI_API_KEY`;
-- production lacks supported operator credential material;
+- either removed dashboard credential key is present, even when empty;
 - owner concurrency exceeds global concurrency;
 - protected paths overlap, resolve to a filesystem root, or contain traversal;
 - the database URL uses a non-PostgreSQL protocol;

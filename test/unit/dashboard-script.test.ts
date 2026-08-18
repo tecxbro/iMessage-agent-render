@@ -3,10 +3,6 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 import { renderDashboardScript } from "../../src/http/deployment-page.js";
-import {
-  renderOperatorLoginPage,
-  renderOperatorLoginScript,
-} from "../../src/http/operator-login-page.js";
 
 interface DashboardHarnessOptions {
   provider?: "photon" | "chatgpt";
@@ -65,11 +61,7 @@ function createDashboardHarness(options: DashboardHarnessOptions = {}) {
   };
   const documentObject = {
     currentScript: { dataset: { polling: "true" } },
-    querySelector(selector: string) {
-      return selector === 'meta[name="csrf-token"]'
-        ? { content: "session-bound-csrf-token" }
-        : null;
-    },
+    querySelector: () => null,
     body: {
       dataset: {
         photonState:
@@ -123,11 +115,12 @@ function createDashboardHarness(options: DashboardHarnessOptions = {}) {
 }
 
 describe("dashboard authentication popup", () => {
-  it("uses same-origin cookies and a session-bound CSRF token", () => {
+  it("uses same-origin setup requests without a password or CSRF credential", () => {
     const script = renderDashboardScript();
 
     expect(script).toContain('credentials: "same-origin"');
-    expect(script).toContain('"X-CSRF-Token": csrfToken');
+    expect(script).not.toContain("X-CSRF-Token");
+    expect(script).not.toContain("csrfToken");
     expect(script).toContain('body: JSON.stringify({})');
     expect(script).toContain('fetch("/api/setup/owner"');
     expect(script).toContain("JSON.stringify({ phoneNumber })");
@@ -135,7 +128,7 @@ describe("dashboard authentication popup", () => {
     expect(script).not.toContain("x-agent-setup");
   });
 
-  it("submits the owner phone with CSRF and clears the browser field immediately", async () => {
+  it("submits the owner phone from the dashboard and clears the browser field immediately", async () => {
     type OwnerForm = {
       addEventListener(
         type: string,
@@ -184,7 +177,7 @@ describe("dashboard authentication popup", () => {
     runInNewContext(renderDashboardScript(), {
       document: {
         currentScript: { dataset: { polling: "false" } },
-        querySelector: () => ({ content: "session-bound-csrf-token" }),
+        querySelector: () => null,
         querySelectorAll: () => [],
         body: { dataset: {} },
         getElementById(id: string) {
@@ -265,99 +258,5 @@ describe("dashboard authentication popup", () => {
     expect(harness.popup.close).not.toHaveBeenCalled();
     expect(harness.reload).not.toHaveBeenCalled();
     expect(harness.scheduled).toHaveLength(1);
-  });
-});
-
-describe("operator login script", () => {
-  it("clears the password immediately and never uses browser persistence", async () => {
-    const script = renderOperatorLoginScript();
-    expect(script).not.toContain("localStorage");
-    expect(script).not.toContain("sessionStorage");
-    expect(script).not.toContain("location.search");
-    expect(script).not.toContain("location.hash");
-
-    let submit:
-      | ((event: { preventDefault(): void }) => Promise<void>)
-      | undefined;
-    let resolveFetch:
-      | ((response: { ok: boolean; status: number }) => void)
-      | undefined;
-    const fetchResult = new Promise<{ ok: boolean; status: number }>(
-      (resolve) => {
-        resolveFetch = resolve;
-      },
-    );
-    const input = {
-      value: "submitted-agent-password",
-      focus: vi.fn(),
-      removeAttribute: vi.fn(),
-      setAttribute: vi.fn(),
-    };
-    const button = {
-      disabled: false,
-      textContent: "Continue",
-    };
-    const error = { textContent: "" };
-    const form = {
-      addEventListener(
-        type: string,
-        listener: (event: { preventDefault(): void }) => Promise<void>,
-      ) {
-        if (type === "submit") submit = listener;
-      },
-      querySelector: () => button,
-      removeAttribute: vi.fn(),
-      setAttribute: vi.fn(),
-    };
-    const fetchImplementation = vi.fn(() => fetchResult);
-
-    runInNewContext(script, {
-      document: {
-        getElementById(id: string) {
-          if (id === "operator-login") return form;
-          if (id === "password") return input;
-          if (id === "login-error") return error;
-          return null;
-        },
-      },
-      fetch: fetchImplementation,
-      window: { location: { replace: vi.fn() } },
-    });
-
-    const preventDefault = vi.fn();
-    const pendingSubmission = submit!({ preventDefault });
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(input.value).toBe("");
-    expect(button.disabled).toBe(true);
-    expect(form.setAttribute).toHaveBeenCalledWith("aria-busy", "true");
-    expect(fetchImplementation).toHaveBeenCalledWith(
-      "/api/operator/session",
-      expect.objectContaining({
-        credentials: "same-origin",
-        body: JSON.stringify({ password: "submitted-agent-password" }),
-      }),
-    );
-    expect(script).not.toContain("setupSecret");
-
-    resolveFetch!({ ok: false, status: 403 });
-    await pendingSubmission;
-    expect(error.textContent).toBe("That password was not accepted.");
-    expect(input.setAttribute).toHaveBeenCalledWith("aria-invalid", "true");
-    expect(button.disabled).toBe(false);
-    expect(form.removeAttribute).toHaveBeenCalledWith("aria-busy");
-    expect(input.focus).toHaveBeenCalledOnce();
-  });
-
-  it("associates login errors with the password input", () => {
-    const page = renderOperatorLoginPage();
-    expect(page).toContain("<h1>Open your agent</h1>");
-    expect(page).toContain("Enter the agent password you chose when deploying.");
-    expect(page).toContain(">Agent password</label>");
-    expect(page).toContain('name="password"');
-    expect(page).toContain('aria-describedby="login-error"');
-    expect(page).not.toContain("environment variables");
-    expect(page).not.toContain("service settings");
-    expect(page).not.toContain("Photon");
-    expect(page).not.toContain("ChatGPT");
   });
 });

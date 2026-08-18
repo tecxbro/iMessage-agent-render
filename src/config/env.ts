@@ -121,37 +121,6 @@ const encryptionKeySchema = requiredText("APP_ENCRYPTION_KEY").refine((value) =>
   return Buffer.from(value, "base64").byteLength === 32;
 }, "APP_ENCRYPTION_KEY must be a 32-byte key encoded as base64 or 64 hexadecimal characters");
 
-function dashboardSetupSecretBytes(value: string): Buffer | undefined {
-  if (/^[a-f0-9]{64}$/iu.test(value)) {
-    return Buffer.from(value, "hex");
-  }
-  if (/^[A-Za-z0-9+/]{43}=$/u.test(value)) {
-    return Buffer.from(value, "base64");
-  }
-  if (/^[A-Za-z0-9_-]{43}$/u.test(value)) {
-    return Buffer.from(value, "base64url");
-  }
-  return undefined;
-}
-
-const dashboardSetupSecretSchema = z
-  .string({ error: "DASHBOARD_SETUP_SECRET must be secret material" })
-  .trim()
-  .refine(
-    (value) => {
-      const bytes = dashboardSetupSecretBytes(value);
-      return bytes !== undefined && new Set(bytes).size >= 16;
-    },
-    "DASHBOARD_SETUP_SECRET must be a high-entropy 32-byte value encoded as base64, base64url, or 64 hexadecimal characters",
-  );
-
-const agentPasswordSchema = z
-  .string({ error: "AGENT_PASSWORD must be a password" })
-  .refine(
-    (value) => [...value].length >= 15 && [...value].length <= 128,
-    "AGENT_PASSWORD must be between 15 and 128 characters",
-  );
-
 const rawEnvironmentSchema = z
   .object({
     // Required infrastructure and process values
@@ -186,8 +155,6 @@ const rawEnvironmentSchema = z
       z.uuid("DEPLOYMENT_ID must be a UUID"),
     ),
     APP_ENCRYPTION_KEY: encryptionKeySchema,
-    AGENT_PASSWORD: optionalText(agentPasswordSchema),
-    DASHBOARD_SETUP_SECRET: optionalText(dashboardSetupSecretSchema),
 
     // Codex authentication and isolated storage
     CODEX_HOME: protectedPathSchema("CODEX_HOME"),
@@ -286,31 +253,7 @@ const rawEnvironmentSchema = z
   })
   .superRefine((environment, context) => {
     // Cross-field safety checks prevent individually valid values from creating
-    // an unsafe combined authentication, concurrency, or storage layout.
-    if (
-      environment.NODE_ENV === "production" &&
-      environment.AGENT_PASSWORD === undefined &&
-      environment.DASHBOARD_SETUP_SECRET === undefined
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["AGENT_PASSWORD"],
-        message:
-          "AGENT_PASSWORD or DASHBOARD_SETUP_SECRET is required in production",
-      });
-    }
-
-    if (
-      environment.AGENT_PASSWORD !== undefined &&
-      environment.AGENT_PASSWORD === environment.APP_ENCRYPTION_KEY
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["AGENT_PASSWORD"],
-        message: "AGENT_PASSWORD must not reuse APP_ENCRYPTION_KEY",
-      });
-    }
-
+    // an unsafe combined provider, concurrency, or storage layout.
     if (
       (environment.SPECTRUM_PROJECT_ID === undefined) !==
       (environment.SPECTRUM_PROJECT_SECRET === undefined)
@@ -395,15 +338,6 @@ const rawEnvironmentSchema = z
   }));
 
 export type Environment = z.infer<typeof rawEnvironmentSchema>;
-
-export function operatorPasswordFromEnvironment(
-  environment: Pick<
-    Environment,
-    "AGENT_PASSWORD" | "DASHBOARD_SETUP_SECRET"
-  >,
-): string | undefined {
-  return environment.AGENT_PASSWORD ?? environment.DASHBOARD_SETUP_SECRET;
-}
 
 export class EnvironmentValidationError extends Error {
   public readonly issues: readonly z.core.$ZodIssue[];
@@ -497,9 +431,23 @@ export function loadEnvironment(source?: NodeJS.ProcessEnv): Environment {
     loadLocalEnvironmentFile();
   }
 
-  const result = rawEnvironmentSchema.safeParse(
-    withRenderDeploymentId(source ?? process.env),
-  );
+  const environmentSource = withRenderDeploymentId(source ?? process.env);
+  const removedCredentialIssues: z.core.$ZodIssue[] = [
+    "AGENT_PASSWORD",
+    "DASHBOARD_SETUP_SECRET",
+  ]
+    .filter((key) => Object.hasOwn(environmentSource, key))
+    .map((key) => ({
+      code: "custom",
+      path: [key],
+      message: `${key} is no longer supported; remove it from the service environment`,
+      input: undefined,
+    }));
+  if (removedCredentialIssues.length > 0) {
+    throw new EnvironmentValidationError(removedCredentialIssues);
+  }
+
+  const result = rawEnvironmentSchema.safeParse(environmentSource);
 
   if (!result.success) {
     throw new EnvironmentValidationError(result.error.issues);

@@ -15,7 +15,6 @@ import {
   startAgentService,
   type RunningAgentService,
 } from "../../src/index.js";
-import { createOperatorAuth } from "../../src/http/operator-auth.js";
 
 interface BlackholePostgres {
   port: number;
@@ -91,9 +90,6 @@ describe("PostgreSQL timeout recovery", () => {
       host: "127.0.0.1",
       installSignalHandlers: false,
       onStartupFailure: startupFailure,
-      operatorAuth: await createOperatorAuth({
-        password: "test-dashboard-setup-secret-material-1234567890",
-      }),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -125,7 +121,7 @@ describe("PostgreSQL timeout recovery", () => {
       ready: boolean;
       status: "ready" | "not_ready";
     };
-    expect(body).toEqual({ status: "not_ready", ready: false });
+    expect(body).toMatchObject({ status: "not_ready", ready: false });
     const internalReadiness = service.readiness.snapshot(
       service.spectrumReadiness.snapshot(),
     );

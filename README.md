@@ -4,7 +4,7 @@ Deploy a private iMessage agent powered by Photon Spectrum, Codex, PostgreSQL, a
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/tecxbro/iMessage-agent-render)
 
-> This provisions a paid Render Web Service, a Render PostgreSQL database, and a persistent disk. The deployed web URL opens an operator login before the private setup dashboard. You talk to the agent through iMessage.
+> This provisions a paid Render Web Service, a Render PostgreSQL database, and a persistent disk. The deployed web URL opens a public setup dashboard. You talk to the agent through iMessage.
 
 ## Before you deploy
 
@@ -12,29 +12,27 @@ You need:
 
 - a Photon account for Spectrum Cloud iMessage setup;
 - the owner's E.164 phone number allowed to message the agent;
-- an agent password of 15–128 characters that you choose during deployment;
 - either a ChatGPT account with Codex device login enabled or an OpenAI API key; and
 - an optional Supermemory API key if you want semantic memory.
 
 Review current Render pricing before deploying. The Blueprint creates paid resources and intentionally keeps the Web Service at one instance because its Codex credentials and workspaces live on an attached disk.
 
-## Deploy in five steps
+## Deploy in four steps
 
 1. Click **Deploy to Render** above.
-2. Choose an agent password when Render asks for `AGENT_PASSWORD`. This is the only value the Blueprint asks you to supply.
-3. Open the deployed agent URL and enter that password.
-4. After login, enter your personal phone number, authenticate Photon, then connect ChatGPT. If you choose API-key mode instead, set `CODEX_AUTH_MODE=api_key` and add `OPENAI_API_KEY` as a Render secret.
-5. Confirm `/readyz` returns HTTP 200, then text the Photon-assigned number shown at completion from the configured owner phone.
+2. Open the deployed agent URL. The Blueprint does not ask for an owner phone, password, or any other user-supplied environment value.
+3. In the dashboard, enter your personal phone number, authenticate Photon, then connect ChatGPT. If you choose API-key mode instead, set `CODEX_AUTH_MODE=api_key` and add `OPENAI_API_KEY` as a Render secret.
+4. Confirm `/readyz` returns HTTP 200, then text the Photon-assigned number shown at completion from the configured owner phone.
 
 Render keeps auto-deploys off for template-created services. Deploy reviewed updates manually so a push to the original template cannot redeploy every user's copy.
 
-## Authenticate to the dashboard
+## Public dashboard and owner setup
 
-Render collects `AGENT_PASSWORD` privately during initial Blueprint creation, stores it as a secret, and injects it into the service. The public application never offers a first-visitor password-creation flow, so an anonymous browser cannot claim a newly deployed agent.
+The setup dashboard is public. Anyone who can reach the service URL can view its setup status, device codes, masked owner status, assigned Photon number, and detailed readiness, and can attempt setup changes. Use the URL only while you accept that exposure; add an external access-control layer before using this template where public setup is unacceptable.
 
-The service verifies the password with scrypt and a constant-time comparison. A successful login creates an eight-hour server-side operator session; the service holds at most eight active sessions. The browser receives an opaque `HttpOnly`, `SameSite=Strict`, `Path=/` cookie that is also `Secure` in production; the password is not stored in the cookie or browser storage. Protected setup changes require a session-bound CSRF token and same-origin request. Logout revokes the session, and a service restart invalidates all dashboard sessions.
+Dashboard mutations still require a same-origin browser request and reject cross-site fetch metadata. That prevents ordinary drive-by cross-site submissions, but it is not authentication: a person who deliberately opens the public dashboard can change setup.
 
-The authenticated dashboard collects the owner's E.164 phone number before Photon setup. That personal number is the only iMessage sender authorized to use the agent and is also registered during Photon owner provisioning. The different Photon-assigned number shown at completion is the destination the owner texts. Replacing the owner number in the dashboard revokes the previous owner identity before the new identity can authorize messages.
+The dashboard collects the owner's E.164 phone number before Photon setup. The phone number is not a Blueprint prompt and is not required in the environment. It is encrypted and fingerprinted in PostgreSQL, becomes the only iMessage sender authorized to use the agent, and is registered during Photon owner provisioning. The different Photon-assigned number shown at completion is the destination the owner texts. Replacing the owner number in the dashboard revokes the previous owner identity before the new identity can authorize messages.
 
 ## Finish Codex authentication
 
@@ -43,10 +41,9 @@ The authenticated dashboard collects the owner's E.164 phone number before Photo
 The default `CODEX_AUTH_MODE` is `chatgpt`.
 
 1. Open the deployed **Web Service** URL in a trusted browser.
-2. Enter the agent password you chose during deployment.
-3. Save the owner phone and finish Photon setup first, then select **Connect ChatGPT**.
-4. Open the displayed device-auth URL, sign in, and enter the one-time code.
-5. Keep the dashboard open while it verifies the login and prepares Codex. The dashboard advances automatically when each stage is ready.
+2. Save the owner phone and finish Photon setup first, then select **Connect ChatGPT**.
+3. Open the displayed device-auth URL, sign in, and enter the one-time code.
+4. Keep the dashboard open while it verifies the login and prepares Codex. The dashboard advances automatically when each stage is ready.
 
 ChatGPT credentials persist under `/var/data/codex`. Treat `auth.json` like a password: never print it, copy it into a ticket, or commit it.
 
@@ -72,9 +69,9 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 - `/healthz` returning 200 means the HTTP process is alive.
 - `/readyz` returning 200 means owner identity, critical storage, PostgreSQL, migration, queue, Codex, and Spectrum checks are ready.
-- `/readyz` returning 503 means setup is incomplete or a dependency is degraded. Its public response is limited to safe aggregate readiness state.
+- `/readyz` returning 503 means setup is incomplete or a dependency is degraded. Its public response includes the detailed component snapshot and remediation actions.
 
-The root URL is an operator entry point, not an iMessage chat or Photon enrollment link. Before authentication it displays only the agent-password form. Provider status, device codes, verification URLs, the assigned number, owner information, detailed readiness, and provider errors remain inside the authenticated dashboard.
+The root URL is a public setup entry point, not an iMessage chat. Provider setup status, device codes, verification URLs, the assigned number, masked owner information, detailed readiness, and bounded provider error codes are public there. Raw owner phone values, provider access tokens, project secrets, Codex credentials, database credentials, and unrestricted provider errors remain server-side.
 
 ## Send the first iMessage
 
@@ -96,7 +93,6 @@ The checked-in [`render.yaml`](./render.yaml) creates:
 - one 1 GB persistent disk mounted at `/var/data`;
 - `/var/data/codex` for Codex credentials and sessions;
 - `/var/data/workspaces` for agent workspaces;
-- one user-chosen agent password collected during initial Blueprint creation;
 - a generated application encryption key;
 - a dynamic `DATABASE_URL` from the attached database;
 - `npm run db:migrate` before each deploy; and
@@ -114,7 +110,7 @@ The most common edits are:
 | Execution behavior | `prompts/execution.system.md` |
 | Approval rules | `prompts/approval-policy.md` |
 | Models and reasoning effort | `.env` model variables |
-| Authorized sender | **Change phone number** in the authenticated dashboard; owner environment values are migration inputs only |
+| Authorized sender | **Change phone number** in the public dashboard; owner environment values are migration inputs only |
 | Semantic memory | `SUPERMEMORY_API_KEY` |
 | Render region, plans, and disk | `render.yaml` |
 | Concurrency and runtime limits | `.env` |
@@ -141,7 +137,7 @@ npm ci
 cp .env.example .env
 ```
 
-Edit `.env`, choose a local `AGENT_PASSWORD` of 15–128 characters, then generate an independent `APP_ENCRYPTION_KEY`:
+Edit `.env`, then generate an `APP_ENCRYPTION_KEY`:
 
 ```bash
 openssl rand -base64 32
@@ -197,7 +193,7 @@ PostgreSQL is the operational source of truth. Supermemory stores only bounded, 
 ## Security and privacy
 
 - Unknown senders are rejected before persistence, queueing, or model work.
-- The setup dashboard requires an eight-hour server-side operator session (at most eight active); protected changes also require a session-bound CSRF token and same-origin request.
+- The setup dashboard is public. Same-origin checks reduce drive-by cross-site mutations but do not authenticate visitors.
 - Authorization is checked again immediately before Codex or another child process starts.
 - Codex children receive an explicit environment allowlist, never the full server environment.
 - Models cannot approve actions or broaden code-owned permission profiles.

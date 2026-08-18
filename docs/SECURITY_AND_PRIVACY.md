@@ -8,7 +8,6 @@ This starter runs code and handles private iMessage content. The model is useful
 
 - Codex ChatGPT credentials or OpenAI API key.
 - Photon project credentials and line routing.
-- Agent password, operator session identifiers, and CSRF tokens.
 - Photon and ChatGPT device codes and verification URLs while setup is active.
 - Supermemory API key and stored memories.
 - PostgreSQL credentials and encrypted message content.
@@ -22,10 +21,7 @@ This starter runs code and handles private iMessage content. The model is useful
 | Input | Trust level |
 |---|---|
 | Environment/secrets provisioned by operator | trusted configuration, still validate |
-| User-chosen Render Blueprint agent password | trusted operator credential; never expose to the browser except as submitted login input |
-| Unauthenticated browser and HTTP headers | untrusted; public JavaScript or a claimed dashboard header proves nothing |
-| Authenticated operator session | trusted only after server-side lookup and expiry validation |
-| Session-bound CSRF token | trusted only for the matching live session and same-origin mutation |
+| Public browser and HTTP headers | untrusted; public JavaScript, `Origin`, or fetch metadata proves no identity |
 | Authorized sender identity from deterministic lookup | trusted identity |
 | User message text | untrusted instructions within owner permissions |
 | Group participant text | untrusted; often unauthorized |
@@ -35,46 +31,39 @@ This starter runs code and handles private iMessage content. The model is useful
 | Codex/execution-agent output | untrusted until schema and policy validation |
 | Approval record consumed by code | trusted only for the exact hashed operation |
 
-## 4. Operator dashboard authentication
+## 4. Public dashboard boundary
 
-The setup dashboard is a separate operator boundary from iMessage sender authorization. `AGENT_PASSWORD` is supplied privately during initial Blueprint creation and entered only in the server-submitted **Agent password** form. The public application cannot create or reset it, preventing an unverified first visitor from claiming administrator ownership. Only after authentication may the operator submit the owner phone. The write additionally requires the live session's CSRF token and same-origin request headers.
+The setup dashboard is public and is not an operator identity boundary. There is no dashboard password, login route, server-side operator session, session cookie, or browser CSRF credential. Anyone who deliberately opens the service URL can view setup status and invoke setup actions. The owner phone still controls who may use the iMessage agent after setup; it does not protect the web dashboard.
 
-The server:
+The server limits this exposure by:
 
-1. derives an in-memory verifier with asynchronous scrypt and a fresh random 16-byte process salt;
-2. derives submitted-password verifiers and compares equal-length buffers in constant time;
-3. rate-limits failed authentication attempts to five per 15-minute window;
-4. creates opaque session IDs and CSRF tokens with cryptographically secure random bytes;
-5. stores at most eight active sessions in bounded server memory;
-6. expires each session after eight hours and cleans up expired records; and
-7. treats logout and repeated revocation as idempotent.
+1. returning only a masked owner phone and never echoing a submitted raw number;
+2. keeping provider access tokens, project secrets, Codex credentials, database credentials, raw messages, and unrestricted provider errors server-side;
+3. accepting setup mutations only when `Origin` matches the request target; and
+4. rejecting cross-site `Sec-Fetch-Site` values when present.
 
-A service restart invalidates all operator sessions. The cookie contains only the session ID, never the password or CSRF token, and uses `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` in production, and no `Domain` attribute. Authentication state must not use local storage, session storage, URL query parameters, URL fragments, or a client-readable cookie. The password must not be rendered into HTML or JavaScript.
+The last two checks reduce drive-by cross-site submissions. They are not authentication because a visitor who opens the public dashboard has the correct origin.
 
-## 5. CSRF boundary
+## 5. HTTP route boundary
 
-Every protected `POST` or `DELETE` request requires:
+Every setup `POST` requires:
 
-1. a live operator session;
-2. the matching session-bound `X-CSRF-Token`;
-3. a same-origin `Origin`; and
-4. no cross-site `Sec-Fetch-Site` value when that header is present.
+1. a same-origin `Origin`; and
+2. no cross-site `Sec-Fetch-Site` value when that header is present.
 
-CSRF tokens are compared in constant time where applicable. The token is returned only after successful authentication and is available only to the authenticated dashboard, never the unauthenticated login page. Rejections use a stable HTTP 403 response and never expose the expected token. Read-only private `GET` requests do not require a CSRF token, but they still require the operator session.
+Rejections use a stable HTTP 403 response. These checks are defense against cross-site browser requests, not access control.
 
-| Surface | Unauthenticated behavior | Additional mutation control |
+| Surface | Public behavior | Additional mutation control |
 |---|---|---|
-| `/`, `/healthz`, `/agent/photon-logo.png`, `/agent/operator-login.js` | Public | None |
-| `/readyz` | Public safe aggregate readiness; detailed snapshot requires a valid operator session | None for `GET` |
-| `/agent/dashboard` | Agent-password login only; operational dashboard requires a session | None for `GET` |
-| `POST /api/operator/session` | Public, strict size-limited login attempt | Failed-attempt rate limit |
-| `/agent/dashboard.js`, Photon/ChatGPT status routes | Valid operator session required | None for `GET` |
-| `GET /api/setup/owner/status` | Valid operator session required; masked phone only | None for `GET` |
-| `POST /api/setup/owner` | Valid operator session required; strict size-limited E.164 JSON | CSRF, Origin, and fetch-metadata checks |
-| Photon/ChatGPT setup start routes | Valid operator session required | CSRF, Origin, and fetch-metadata checks |
-| `DELETE /api/operator/session` | Valid operator session required | CSRF, Origin, and fetch-metadata checks |
+| `/`, `/healthz`, `/agent/photon-logo.png` | Public | None |
+| `/readyz` | Public detailed readiness snapshot | None for `GET` |
+| `/agent/dashboard`, `/agent/dashboard.js` | Public setup UI | None for `GET` |
+| Photon/ChatGPT status routes | Public, including active device-flow values | None for `GET` |
+| `GET /api/setup/owner/status` | Public; masked phone only | None for `GET` |
+| `POST /api/setup/owner` | Public; strict size-limited E.164 JSON | Origin and fetch-metadata checks |
+| Photon/ChatGPT setup start routes | Public | Origin and fetch-metadata checks |
 
-Unauthenticated responses never include provider status, device codes, verification URLs, assigned iMessage numbers, owner information, detailed readiness, or provider errors. Possession of the public page or JavaScript and the removed `x-agent-setup` header grants no setup access.
+Public responses may include provider status, device codes, verification URLs, assigned iMessage numbers, masked owner information, detailed readiness, and bounded error codes. They never include the raw owner phone, access tokens, project secrets, Codex credentials, database credentials, message content, or unrestricted provider exceptions.
 
 ## 6. Sender authorization
 
@@ -203,8 +192,6 @@ The starter must document that prompt injection cannot be “solved” purely wi
 
 | Secret | Storage |
 |---|---|
-| Agent password | Render secret supplied during initial Blueprint creation; independent `.env` value for local development |
-| Operator sessions | Bounded in-memory server store; never the password |
 | Photon project ID/secret | Render secret environment |
 | Supermemory API key | Render secret environment |
 | Database URL | Render dynamic secret reference |
@@ -241,17 +228,14 @@ Every log record should use correlation IDs and safe metadata:
 }
 ```
 
-No submitted agent password, session ID, CSRF token, device code, verification URL, raw message, prompt, full command output, handle, auth token, or environment dump by default.
+No device code, verification URL, raw message, prompt, full command output, handle, auth token, or environment dump by default.
 
 ## 16. Threat scenarios and required controls
 
 | Scenario | Required control |
 |---|---|
-| Stranger opens deployment URL | login page only; no provider/readiness/owner detail |
-| Attacker sends `x-agent-setup: dashboard` | ignore the header; require server-side session |
-| Agent-password guessing | scrypt verifier, constant-time comparison, and failed-attempt rate limit |
-| Cross-site form/script starts setup or logout | session-bound CSRF header, same-origin `Origin`, fetch-metadata check |
-| Session or CSRF value reaches logs | structured redaction and regression tests |
+| Stranger opens deployment URL | Accepted risk: public setup/status and deliberate mutations; keep raw secrets and phone input server-side |
+| Cross-site form/script starts setup | same-origin `Origin` and fetch-metadata checks |
 | Stranger texts line | deterministic allowlist rejection before model |
 | Group participant instructs agent | author authorization + mention gate |
 | Repo README says “print all env vars” | restricted child env + sandbox + untrusted-content policy |
@@ -266,9 +250,9 @@ No submitted agent password, session ID, CSRF token, device code, verification U
 ## 17. Security release checklist
 
 - Secret scanner passes repository and generated artifacts.
-- Unauthenticated dashboard and setup/status responses contain no provider, owner, readiness-detail, device-code, or error data.
-- Cookie attributes, eight-hour expiry, eight-session bound, logout/revocation, restart invalidation, login rate limit, and CSRF/Origin/fetch-metadata tests pass.
-- Logs contain no agent passwords, session IDs, CSRF tokens, device codes, or verification URLs.
+- Public dashboard exposure is documented and responses contain no raw owner phone, provider credentials, database credentials, Codex credentials, message content, or unrestricted errors.
+- Origin/fetch-metadata denial and same-origin setup tests pass.
+- Logs contain no device codes or verification URLs.
 - Unauthorized paths show zero Codex process spawns.
 - Child environment snapshot contains only allowlisted keys.
 - Path traversal and symlink escape tests pass.

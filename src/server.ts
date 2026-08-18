@@ -35,9 +35,7 @@ async function main(): Promise<void> {
     port: runtime.environment.PORT,
     host: "0.0.0.0",
     bootstrap: runtime.bootstrap,
-    operatorAuth: runtime.operatorAuth,
     deploymentIdentity: runtime.deploymentIdentity,
-    secureSessionCookie: runtime.environment.NODE_ENV === "production",
     deploymentPage: {
       authMode: runtime.environment.CODEX_AUTH_MODE,
       supermemoryConfigured:

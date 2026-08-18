@@ -96,7 +96,7 @@
 
 ## ADR-013 — No public admin UI in v1
 
-**Status:** Superseded by ADR-015. The operational dashboard is authenticated; unauthenticated visitors see only the login form and safe public health surfaces.
+**Status:** Superseded by ADR-018. The project now accepts a public setup dashboard as a temporary product tradeoff.
 
 **Decision:** HTTP exposes health/readiness only; operator actions happen through private shell/CLI and iMessage commands.
 
@@ -110,6 +110,8 @@
 
 ## ADR-015 — Authenticate the single-operator setup dashboard on the server
 
+**Status:** Superseded by ADR-018.
+
 **Decision:** protect dashboard state and Photon/ChatGPT setup behind a server-side operator session. Successful credential authentication creates an opaque session and session-bound CSRF token. Sessions expire after eight hours, the server stores at most eight, logout/revocation is idempotent, and a service restart invalidates them. ADR-017 replaces the original generated-credential selection while preserving this session boundary.
 
 State-changing setup requests require the live session, `X-CSRF-Token`, same-origin `Origin`, and non-cross-site fetch metadata. The browser cookie is `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` in production, and has no `Domain`. Public `/healthz` remains liveness; public `/readyz` is aggregate only. Unauthenticated dashboard responses contain no provider status, device/verification codes, assigned number, owner information, readiness detail, or provider errors.
@@ -122,18 +124,30 @@ State-changing setup requests require the live session, `X-CSRF-Token`, same-ori
 
 ## ADR-016 — Store the single owner identity through authenticated onboarding
 
-**Decision:** new Render Blueprints ask only for the agent password and never ask for the owner phone. After operator authentication, the dashboard accepts one E.164 personal phone through a CSRF- and same-origin-protected route. PostgreSQL `channel_identities` is the authorization authority: the phone is encrypted, fingerprinted per deployment, and returned publicly only as a mask. Replacing it activates the new identity and revokes prior owner-phone identities transactionally. Photon resolves this database owner once per setup attempt; its separately assigned line remains the destination shown at completion.
+**Decision:** new Render Blueprints never ask for the owner phone. The dashboard accepts one E.164 personal phone through a same-origin-protected route. PostgreSQL `channel_identities` is the authorization authority: the phone is encrypted, fingerprinted per deployment, and returned publicly only as a mask. Replacing it activates the new identity and revokes prior owner-phone identities transactionally. Photon resolves this database owner once per setup attempt; its separately assigned line remains the destination shown at completion. ADR-018 makes the dashboard public without moving the phone back into fresh-deployment environment configuration.
 
 Existing deployments first prefer an active database owner, then import `OWNER_PHONE_NUMBER`, the former long Render alias, or one unambiguous E.164 `AGENT_OWNER_HANDLES` value. Stored Photon metadata is never imported as authorization. Ambiguous handles require explicit dashboard recovery, and old environment values remain until an operator removes them after verification.
 
-**Why:** sender authorization must survive restart without making provider credentials or a deployment form the authority. The authenticated dashboard is the narrow operator boundary already designed for sensitive setup mutations. Separating the personal owner phone from the assigned agent line also makes the onboarding contract accurate.
+**Why:** sender authorization must survive restart without making provider credentials or a deployment form the authority. Separating the personal owner phone from the assigned agent line also makes the onboarding contract accurate.
 
 **Rejected:** a public owner route, query/header/cookie/path phone inputs, plaintext/settings/provider authorization, silently selecting one legacy handle, overwriting an active database identity from the environment, or starting Spectrum before owner setup.
 
 ## ADR-017 — Collect a deployer-chosen agent password before the public service exists
+
+**Status:** Superseded by ADR-018.
 
 **Decision:** new deployments use a user-chosen `AGENT_PASSWORD` collected privately during initial Blueprint creation. The public application never permits an unverified first visitor to claim administrator ownership or create a replacement password. The service verifies login attempts with asynchronous scrypt, a fresh random 16-byte process salt, and constant-time verifier comparison while preserving ADR-015 sessions, throttling, cookies, CSRF, and same-origin controls.
 
 **Why:** the deployed URL is public as soon as the service starts. A first-visitor creation flow cannot establish that the browser belongs to the Render deployer, while Render's initial secret prompt binds password choice to the authenticated deployment workflow without adding a post-deploy configuration step.
 
 **Rejected:** browser-first administrator claiming, generating and displaying a credential on the public page, reusing the application encryption key, composition rules beyond the 15–128 character length boundary, and exposing provider enrollment data before password authentication.
+
+## ADR-018 — Temporarily restore a public setup dashboard with no dashboard credential environment
+
+**Decision:** remove the dashboard password, login/session routes, cookie and CSRF credential, and both former dashboard credential environment inputs. New Blueprints prompt for zero user-supplied environment values. Startup rejects either obsolete dashboard credential key so it cannot silently become active again. The owner phone remains dashboard-managed and persisted through `channel_identities`; the Blueprint does not ask for it.
+
+Dashboard pages, setup status, active device-flow values, assigned number, masked owner status, bounded provider error codes, and detailed readiness are public. Setup mutations require a matching `Origin` and reject cross-site fetch metadata, but those checks are not authentication. A visitor who deliberately opens the public dashboard can change setup.
+
+**Why:** the user explicitly chose the former public-dashboard product behavior as the smaller temporary implementation and rejected any dashboard password stored in the service environment. There is no deployer-bound identity handoff available inside this application, so this decision documents the exposure instead of presenting first-visitor or same-origin behavior as secure authentication.
+
+**Rejected for this release:** keeping either dashboard credential environment value, moving the owner phone back into the Blueprint, a first-visitor password claim, or claiming that Origin/fetch metadata identifies the operator.

@@ -3,7 +3,6 @@ import { type AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatGptSetupController } from "../../src/agent/codex-app-server-auth.js";
-import { createOperatorAuth } from "../../src/http/operator-auth.js";
 import type {
   DeploymentIdentityController,
   DeploymentIdentityStatus,
@@ -20,12 +19,6 @@ import type {
 } from "../../src/transport/photon-setup.js";
 
 const runningServices: RunningAgentService[] = [];
-const TEST_SETUP_SECRET = "test-dashboard-setup-secret-material-1234567890";
-
-async function createTestOperatorAuth() {
-  return createOperatorAuth({ password: TEST_SETUP_SECRET });
-}
-
 afterEach(async () => {
   await Promise.all(
     runningServices.splice(0).map(async (service) => service.shutdown("test")),
@@ -90,7 +83,6 @@ describe("composed service lifecycle recovery", () => {
       port: 0,
       host: "127.0.0.1",
       bootstrap,
-      operatorAuth: await createTestOperatorAuth(),
       installSignalHandlers: false,
     });
     runningServices.push(service);
@@ -146,7 +138,6 @@ describe("composed service lifecycle recovery", () => {
       host: "127.0.0.1",
       installSignalHandlers: false,
       onStartupFailure: startupFailure,
-      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -178,7 +169,7 @@ describe("composed service lifecycle recovery", () => {
     expect(startupFailure).toHaveBeenCalledWith("SPECTRUM_START_FAILED");
     const readiness = await fetchReadiness(service);
     expect(readiness.status).toBe(503);
-    expect(readiness.body).toEqual({ status: "not_ready", ready: false });
+    expect(readiness.body).toMatchObject({ status: "not_ready", ready: false });
     const internalReadiness = service.readiness.snapshot(
       service.spectrumReadiness.snapshot(),
     );
@@ -207,7 +198,6 @@ describe("composed service lifecycle recovery", () => {
       port: 0,
       host: "127.0.0.1",
       installSignalHandlers: false,
-      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -231,7 +221,7 @@ describe("composed service lifecycle recovery", () => {
     expect(live.status).toBe(200);
     const readiness = await fetchReadiness(service);
     expect(readiness.status).toBe(503);
-    expect(readiness.body).toEqual({ status: "not_ready", ready: false });
+    expect(readiness.body).toMatchObject({ status: "not_ready", ready: false });
     const internalReadiness = service.readiness.snapshot(
       service.spectrumReadiness.snapshot(),
     );
@@ -287,7 +277,6 @@ describe("composed service lifecycle recovery", () => {
       installSignalHandlers: false,
       deploymentIdentity,
       photonSetup,
-      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -392,7 +381,6 @@ describe("composed service lifecycle recovery", () => {
       installSignalHandlers: false,
       photonSetup,
       chatgptSetup,
-      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -486,7 +474,6 @@ describe("composed service lifecycle recovery", () => {
       installSignalHandlers: false,
       photonSetup,
       chatgptSetup,
-      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,

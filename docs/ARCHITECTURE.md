@@ -31,11 +31,11 @@ The remainder of this document describes the composition contract and identifies
 flowchart TB
   U["Authorized iMessage owner"] <--> P["Photon Spectrum Cloud"]
   P <-->|"persistent app.messages gRPC"| T["Spectrum receive loop"]
-  B["Trusted operator browser"]
+  B["Public browser"]
 
   subgraph W["One Render Web Service"]
-    L["Operator login and CSRF boundary"]
-    L --> DSH["Authenticated setup dashboard"]
+    L["Same-origin mutation boundary"]
+    L --> DSH["Public setup dashboard"]
     DSH --> PS["Photon and ChatGPT setup controllers"]
     T --> A["authorize + durable ingest"]
     A --> Q["pg-boss workers"]
@@ -92,9 +92,9 @@ These boundaries are non-interchangeable:
 - Unknown senders must be rejected before any model or child-process call.
 - Model, repository, memory, web, and tool content are untrusted data. A model cannot broaden its permission profile or approve an action.
 
-The HTTP setup surface has its own operator boundary. `AGENT_PASSWORD` is chosen privately by the deployer during initial Blueprint creation; the public application never lets a first visitor create or replace it. At process start the service derives an in-memory verifier with asynchronous scrypt and a fresh random 16-byte salt. Login derives the submitted verifier, compares equal-length buffers in constant time, and creates an opaque server-side session with a session-bound CSRF token. The store permits at most eight active sessions, expires each after eight hours, cleans up stale sessions, and invalidates every session on restart. It is intentionally not a durable identity store.
+The HTTP setup surface is public. It has no password, operator session, or browser authentication state. Anyone who deliberately opens the service URL can view the setup dashboard and invoke setup actions. This is an accepted single-deployment limitation, not an identity boundary.
 
-The browser receives only an opaque session cookie with `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` in production, and no `Domain`. The password is never stored in that cookie, HTML, JavaScript, browser storage, or a URL. Owner status and setup use this operator boundary; writes also require the session-bound CSRF token and same-origin validation. Public status objects and rendered pages contain only the masked owner phone.
+State-changing setup requests require an exact same-origin `Origin` and reject cross-site fetch metadata. This reduces drive-by cross-site submissions but does not authenticate the browser. Public owner status and rendered pages contain only the masked owner phone; submitted raw numbers are never echoed. Provider credentials, database credentials, Codex credentials, and unrestricted errors stay server-side.
 
 `DeploymentIdentityController` can exist before PostgreSQL is connected. After migrations, `OperationalRepository.ensureDeployment()` creates the deployment and primary owner without a channel identity, then the controller binds to the repository. An active database identity wins; only when none exists may one valid legacy environment phone be imported. Stored Photon metadata is never an authorization source. The controller serializes replacements, exposes masked state, and notifies activation only after persistence succeeds.
 
@@ -133,7 +133,7 @@ sequenceDiagram
 The ordered startup stages in `startAgentService()` are:
 
 1. listen on HTTP;
-2. validate configuration, including production operator-password material;
+2. validate configuration, including rejection of removed dashboard credential keys;
 3. prepare the two persistent directories and Codex config;
 4. connect PostgreSQL;
 5. apply or verify migrations;
@@ -145,7 +145,7 @@ The ordered startup stages in `startAgentService()` are:
 
 The integration bootstrap must make `startSpectrum()` resolve after supervision has been launched and connection state can be tracked; it must not block bootstrap completion for the lifetime of the stream. It must also run durable-pipeline reconciliation before accepting normal work.
 
-Missing or expired ChatGPT auth is a setup state, not a crash loop. Liveness remains healthy, readiness stays false, and Spectrum execution is not started. In ChatGPT mode the authenticated operator reconnects through the dashboard device-code flow; `npm run codex:login` and `npm run codex:status` in the private service shell remain recovery tools using the same persistent `CODEX_HOME`. In API-key mode readiness requires `OPENAI_API_KEY`; the key is copied only into the explicit Codex child environment.
+Missing or expired ChatGPT auth is a setup state, not a crash loop. Liveness remains healthy, readiness stays false, and Spectrum execution is not started. In ChatGPT mode the user reconnects through the public dashboard device-code flow; `npm run codex:login` and `npm run codex:status` in the private service shell remain recovery tools using the same persistent `CODEX_HOME`. In API-key mode readiness requires `OPENAI_API_KEY`; the key is copied only into the explicit Codex child environment.
 
 ## 5. Message pipeline
 
@@ -250,32 +250,31 @@ Consequential actions use immutable approval data bound to owner, allowed space,
 The composed health server returns:
 
 ```text
-GET /          -> public operator entry point; never the iMessage conversation
+GET /          -> public setup entry point; never the iMessage conversation
 GET /healthz  -> public 200 {"status":"ok"}
-GET /readyz   -> public safe aggregate state; 200 only when critical components are ready
-GET /readyz   -> public safe aggregate state with 503 otherwise
+GET /readyz   -> public detailed readiness snapshot; 200 only when critical components are ready
+GET /readyz   -> public detailed readiness snapshot with 503 otherwise
 ```
 
-Critical readiness components are configuration, database, migrations, queue, owner identity, Spectrum, Codex auth, Codex capabilities, disk, and workspace. Supermemory may be `disabled` or degraded without making operational readiness depend on semantic storage. Public `/readyz` reports only their aggregate result; it does not include component names, setup actions, owner information, provider states, or provider errors. The authenticated dashboard's same-origin `/readyz` request receives the detailed readiness snapshot.
+Critical readiness components are configuration, database, migrations, queue, owner identity, Spectrum, Codex auth, Codex capabilities, disk, and workspace. Supermemory may be `disabled` or degraded without making operational readiness depend on semantic storage. Public `/readyz` reports the detailed component snapshot, bounded error codes, and remediation actions.
 
-Raw provider errors, credentials, handles, message content, device codes, verification URLs, assigned numbers, detailed readiness, and unrestricted paths never enter unauthenticated responses. Render uses `/healthz` to avoid turning incomplete private enrollment into a restart loop. Operators use `/readyz` as the aggregate acceptance gate and the authenticated dashboard for setup and component detail.
+Device codes, verification URLs, assigned numbers, masked owner state, bounded provider error codes, and detailed readiness are public through the dashboard and setup routes. Raw owner phone values, provider credentials, database credentials, message content, unrestricted errors, and private paths stay server-side. Render uses `/healthz` to avoid turning incomplete enrollment into a restart loop.
 
 The current `src/server.ts` starts this health server first, runs each operational stage, and shuts the composition down on process signals. Its `/healthz` proves only that the HTTP process is alive; `/readyz` becomes `200` only after the owner, PostgreSQL, migrations, queue, Codex auth/capabilities, storage, and Spectrum are ready. A fresh deployment without an owner is deliberately live but not ready, and Spectrum intake remains stopped.
 
-### 8.1 Operator route boundary
+### 8.1 Public route boundary
 
 | Route | Boundary |
 |---|---|
-| `GET /`, `GET /healthz`, `GET /agent/photon-logo.png`, `GET /agent/operator-login.js` | Public; the login script contains no private state |
-| `GET /readyz` | Public aggregate state; detailed snapshot only with a live operator session |
-| `GET /agent/dashboard` | Public login page when unauthenticated; operational dashboard only with a live session |
-| `POST /api/operator/session` | Public strict, size-limited login attempt with failed-attempt rate limiting |
-| `GET /agent/dashboard.js`, Photon status, ChatGPT status | Live operator session |
-| `GET /api/setup/owner/status` | Live operator session; masked owner only |
-| `POST /api/setup/owner` | Live operator session plus CSRF and same-origin checks; exact size-limited E.164 JSON |
-| Photon setup start, ChatGPT setup start, `DELETE /api/operator/session` | Live operator session plus session-bound CSRF token, same-origin `Origin`, and fetch-metadata validation |
+| `GET /`, `GET /healthz`, `GET /agent/photon-logo.png` | Public |
+| `GET /readyz` | Public detailed readiness snapshot |
+| `GET /agent/dashboard`, `GET /agent/dashboard.js` | Public setup UI |
+| Photon status, ChatGPT status | Public setup status, including device-flow values when active |
+| `GET /api/setup/owner/status` | Public; masked owner only |
+| `POST /api/setup/owner` | Same-origin and fetch-metadata checks; exact size-limited E.164 JSON |
+| Photon setup start, ChatGPT setup start | Same-origin and fetch-metadata checks; exact empty JSON object |
 
-The server rejects unexpected JSON fields at route boundaries. The public `x-agent-setup` convention is removed; possession of dashboard JavaScript never proves authorization. Agent-password, session, CSRF, and device-code values are excluded from logs.
+The server rejects unexpected JSON fields at route boundaries. Same-origin checks reduce drive-by requests but do not prove authorization. Device-code values are excluded from logs.
 
 ## 9. Failure and recovery contract
 
@@ -327,7 +326,7 @@ On `SIGTERM` or `SIGINT` the coordinator:
 7. closes PostgreSQL; and
 8. closes the health listener last.
 
-The production composition also closes the operator-authentication service, invalidating its in-memory sessions. Each hook has a timeout. Cleanup continues after a hook fails, and results contain bounded failure codes rather than raw exception text. A critical failure sets a nonzero exit status.
+Each shutdown hook has a timeout. Cleanup continues after a hook fails, and results contain bounded failure codes rather than raw exception text. A critical failure sets a nonzero exit status.
 
 ## 11. Extension points
 
@@ -348,9 +347,8 @@ Bounded product extensions can add attachment normalization, additional slash co
 
 ## 12. Scaling path
 
-The current disk and private-auth design cannot safely run multiple Web Service instances. Before horizontal scaling:
+The current disk-backed design cannot safely run multiple Web Service instances. Before horizontal scaling:
 
-- replace or deliberately distribute the in-memory operator-session store without weakening expiry, revocation, or CSRF binding;
 - move credentials to a supported per-worker/enterprise secret mechanism;
 - move or explicitly shard workspaces onto durable per-worker storage;
 - partition receive and execution ownership by deployment/owner;

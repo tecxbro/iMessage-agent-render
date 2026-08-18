@@ -77,7 +77,7 @@ curl --silent --show-error http://127.0.0.1:10000/readyz
 | `CODEX_HOME` | absolute directory, mode `0700` | | |
 | Workspace root | separate absolute directory, mode `0700` | | |
 | Codex auth | chosen mode reported; no secret printed | | |
-| Operator page | HTTP 200; identifies setup/readiness status and claims readiness only after critical checks pass | | |
+| Public setup page | HTTP 200 without a password; phone setup remains in the dashboard; readiness is claimed only after critical checks pass | | |
 | `/healthz` | HTTP 200 | | |
 | `/readyz` | HTTP 200 only after full composition | | |
 | Authorized first message | one terminal response | | |
@@ -97,12 +97,12 @@ Create the Blueprint in a fresh Render workspace from the exact commit above.
 | Codex path | `CODEX_HOME=/var/data/codex` | | |
 | Workspace path | `AGENT_WORKSPACE_ROOT=/var/data/workspaces` | | |
 | Database wiring | `DATABASE_URL` dynamic reference; no manual URL | | |
-| Required prompts | Photon project ID/secret plus application owner handles; no literal secrets in Blueprint | | |
-| Optional Supermemory | `SUPERMEMORY_API_KEY` appears in the initial Blueprint prompts; blank disables memory | | |
+| User-supplied prompts | none; no owner phone or dashboard credential appears in the Blueprint | | |
+| Generated values | application encryption only; no generated dashboard credential | | |
 | Build | `npm ci --include=dev && npm run build` exits 0 | | |
 | Pre-deploy | `npm run db:migrate` exits 0 | | |
 | Start | `npm start` binds Render `PORT` | | |
-| Operator page | generated URL explains that it is not the iMessage chat link and reports truthful readiness | | |
+| Public setup page | generated URL opens directly, identifies public setup exposure, and reports truthful readiness | | |
 | Liveness | external `/healthz` HTTP 200 | | |
 | Initial readiness | 503 only for expected missing auth/dependency | | |
 

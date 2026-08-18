@@ -467,7 +467,7 @@ The executable production runtime is composed on `main`. Clean-account Render de
 
 | File | Change |
 |---|---|
-| `render.yaml` | Web service, PostgreSQL, persistent disk, dynamic database URL, secret prompts |
+| `render.yaml` | Web service, PostgreSQL, persistent disk, dynamic database URL, generated encryption material |
 | `src/http/readiness.ts` | Full component readiness |
 | `src/index.ts` | Final boot order and graceful shutdown |
 | `README.md` | Zero-to-first-message guide and Deploy to Render button |
@@ -482,7 +482,7 @@ The executable production runtime is composed on `main`. Clean-account Render de
 1. Blueprint provisions one paid web service, one PostgreSQL database, and one persistent disk.
 2. Set `CODEX_HOME` and workspace root under the disk mount.
 3. Use database dynamic references; never ask the user to copy connection strings manually.
-4. Prompt only for Photon credentials, Supermemory key, owner handles, and optional auth/model configuration.
+4. Prompt for no user-supplied environment values. Keep the owner phone, Photon, and ChatGPT setup in the public dashboard and never add a dashboard credential environment value.
 5. Start in live-but-not-ready state until Codex enrollment is complete.
 6. Document `npm run codex:login` through Render Shell and local `codex login`.
 7. Validate disk permissions and credential storage mode at startup.

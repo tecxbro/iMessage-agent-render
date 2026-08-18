@@ -54,7 +54,7 @@ curl --fail --silent --show-error "https://<service-host>/healthz"
 
 **What it means:** One or more critical components are missing, starting, failed, or degraded.
 
-**Where to check:** The authenticated dashboard for redacted component/setup detail, then the corresponding private Render service logs. Public `/readyz` intentionally returns only safe aggregate state.
+**Where to check:** Public `/readyz` or the public dashboard for bounded component/setup detail, then the corresponding private Render service logs.
 
 **Exact safe command:**
 
@@ -62,45 +62,35 @@ curl --fail --silent --show-error "https://<service-host>/healthz"
 curl --silent --show-error "https://<service-host>/readyz"
 ```
 
-**Expected result:** HTTP 200 only when configuration, database, migrations, queue, owner identity, Codex, storage, and Spectrum are ready. HTTP 503 during incomplete setup is truthful and does not expose the failing private component. Before a fresh owner is saved, `/healthz` stays 200 while `/readyz` correctly stays 503.
+**Expected result:** HTTP 200 only when configuration, database, migrations, queue, owner identity, Codex, storage, and Spectrum are ready. HTTP 503 during incomplete setup includes the detailed component snapshot and bounded remediation actions. Before a fresh owner is saved, `/healthz` stays 200 while `/readyz` correctly stays 503.
 
 **Do not:** Use `/healthz` as acceptance, paste raw provider errors into tickets, or weaken readiness checks.
 
-## Dashboard rejects the agent password
+## Obsolete dashboard credential variable blocks startup
 
-**What it means:** The submitted value does not match `AGENT_PASSWORD`, or repeated failures have reached the login-attempt rate limit.
+**What it means:** An existing Render service still has one of the two removed dashboard credential variables. This release has no dashboard password and rejects either legacy key, including an empty value.
 
-**Where to check:** The deployed Web Service's private **Environment** page in Render. Confirm the browser is using the same service whose environment you inspected.
+**Where to check:** The deployed Web Service's private **Environment** page in Render. Do not print or copy the values.
 
-**Expected result:** A valid password creates an eight-hour server-side session and opens the private dashboard. After repeated invalid attempts, stop retrying and wait for the bounded rate-limit window before trying the verified value.
+**Expected result:** Delete both former dashboard credential variables using Render's save-without-deploy option, then deploy this release. The service starts without any dashboard credential in its environment and the public dashboard opens directly.
 
-**Do not:** Paste the password into a URL, command line, log, ticket, screenshot, local/session storage, or client-readable cookie. The old `x-agent-setup: dashboard` header grants no access.
-
-## Dashboard session expired or disappeared
-
-**What it means:** The eight-hour session expired, the operator logged out, it was revoked, or the service restarted. Operator sessions are intentionally in memory, limited to eight active sessions, and do not survive restart.
-
-**Where to check:** Return to the Web Service URL. The unauthenticated page must show only the **Agent password** form and no provider or readiness detail.
-
-**Expected result:** Authenticate again with the current agent password. Logout remains idempotent and revokes the old session.
-
-**Do not:** Copy another browser's cookie, put the password in browser storage, or disable cookie security attributes.
+**Do not:** Re-add either removed credential to `render.yaml`, `.env.example`, the environment schema, or deployment instructions.
 
 ## Setup action returns 403
 
-**What it means:** The request lacks a valid operator session or session-bound CSRF token, has a foreign `Origin`, or reports a cross-site `Sec-Fetch-Site` value.
+**What it means:** The request has a missing or foreign `Origin`, or reports a cross-site `Sec-Fetch-Site` value.
 
-**Where to check:** Confirm the dashboard was opened directly from the deployed service origin and the session has not expired. Refresh the login/dashboard page to obtain current session state.
+**Where to check:** Confirm the dashboard was opened directly from the deployed service origin and refresh it before retrying.
 
-**Expected result:** Authenticated same-origin dashboard requests include cookies and the current CSRF token automatically. Owner writes, Photon/ChatGPT start, and logout remain unavailable to unauthenticated or cross-site requests.
+**Expected result:** Same-origin dashboard requests include the correct browser `Origin` automatically. Cross-site requests remain unavailable, while a visitor who directly opens the public dashboard can submit setup changes.
 
-**Do not:** Disable Origin/fetch-metadata validation, expose the expected token in an error, or restore the public dashboard header.
+**Do not:** Disable Origin/fetch-metadata validation or misrepresent it as visitor authentication.
 
 ## Owner setup is missing or migration is required
 
 **What it means:** No active owner identity exists in PostgreSQL, or legacy `AGENT_OWNER_HANDLES` contains multiple handles or a non-phone identity that cannot be migrated to the single-phone flow safely.
 
-**Where to check:** Authenticate to the dashboard. Check legacy owner environment keys only in the private Render Environment page; do not print their values or use stored Photon metadata as authorization evidence.
+**Where to check:** Open the dashboard. Check legacy owner environment keys only in the private Render Environment page; do not print their values or use stored Photon metadata as authorization evidence.
 
 **Expected result:** Saving one valid E.164 phone creates a masked configured status, keeps the raw phone out of responses and logs, unlocks Photon setup, and survives restart. An already active database identity takes precedence over every legacy environment value.
 
@@ -116,25 +106,11 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 **Do not:** Delete identity history, edit fingerprints manually, or resume intake while multiple active owner identities exist.
 
-## Agent password is lost or exposed
-
-**What it means:** Authorized operators no longer know the current password, or the password may no longer be private.
-
-**Where to check:** Render **Web Service > Environment** using an authorized Render account. There is no public browser recovery link.
-
-**Expected result:** Replace `AGENT_PASSWORD` with a new 15–128 character value, save the environment change, redeploy or restart, and authenticate with the replacement.
-
-**Do not:** Recover the value from logs or source, reuse `APP_ENCRYPTION_KEY`, or send the replacement through an untrusted channel.
-
-## Existing deployment credential migration — one-release compatibility
-
-Existing deployments that do not yet have `AGENT_PASSWORD` may continue authenticating with their old generated `DASHBOARD_SETUP_SECRET` for one compatibility release. `AGENT_PASSWORD` takes precedence as soon as it is configured. New deployments must use the password collected during initial Blueprint creation; removal of the legacy fallback is a separate migration after existing installations have a supported rotation path.
-
 ## Codex authentication is missing
 
 **What it means:** ChatGPT device credentials are absent/expired, or API-key mode lacks a valid secret.
 
-**Where to check:** The authenticated dashboard for Codex auth state and the private service shell.
+**Where to check:** The public dashboard for Codex auth state and the private service shell.
 
 **Exact safe command:**
 
@@ -152,7 +128,7 @@ For ChatGPT mode, enroll with `npm run codex:login`, then rerun the status comma
 
 **What it means:** Authentication succeeded, but a configured model/effort/permission pair could not run.
 
-**Where to check:** The authenticated dashboard for `CODEX_CAPABILITY_FAILED`, model variables, and redacted private startup logs.
+**Where to check:** The public dashboard for `CODEX_CAPABILITY_FAILED`, model variables, and redacted private startup logs.
 
 **Exact safe command:**
 
@@ -168,7 +144,7 @@ npm run typecheck && npm test -- test/unit/capabilities.test.ts
 
 **What it means:** The persistent `app.messages` stream is not connected or exhausted its bounded restart policy.
 
-**Where to check:** The authenticated dashboard or private logs for `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`, plus Photon provider status.
+**Where to check:** The public dashboard or private logs for `SPECTRUM_STREAM_DISCONNECTED` or `SPECTRUM_STREAM_RESTART_EXHAUSTED`, plus Photon provider status.
 
 **Exact safe command:**
 
@@ -200,7 +176,7 @@ npm test -- test/security/authorization-boundaries.test.ts test/unit/transport/s
 
 **What it means:** Inbound persistence succeeded, but planning, execution, synthesis, or outbound delivery is pending, failed, canceled, or rate-limited.
 
-**Where to check:** The authenticated dashboard, safe correlation IDs in private logs, queue/failure counts, and the release smoke record.
+**Where to check:** The public dashboard, safe correlation IDs in private logs, queue/failure counts, and the release smoke record.
 
 **Exact safe command:**
 
@@ -248,7 +224,7 @@ test -d "$CODEX_HOME" && test -d "$AGENT_WORKSPACE_ROOT" && npm test -- test/uni
 
 **What it means:** The optional API key is absent, or bounded recall/write operations are unavailable. Operational PostgreSQL state is unaffected.
 
-**Where to check:** The authenticated dashboard for `supermemory: disabled|degraded` and redacted memory receipt/failure codes in private logs.
+**Where to check:** The public dashboard for `supermemory: disabled|degraded` and redacted memory receipt/failure codes in private logs.
 
 **Exact safe command:**
 
@@ -278,4 +254,4 @@ npm test -- test/chaos/outbound-restart.test.ts
 
 ## Still blocked
 
-Record the exact commit, timestamp, public aggregate readiness, authenticated redacted diagnostic state, safe correlation IDs, commands run, and whether any live provider was exercised. Use [Operations](./OPERATIONS.md) for recovery and escalation rules. Never include agent passwords, session identifiers, CSRF tokens, device codes, secrets, owner handles, raw messages, database URLs, private paths, auth files, or full provider exceptions.
+Record the exact commit, timestamp, public readiness, redacted diagnostic state, safe correlation IDs, commands run, and whether any live provider was exercised. Use [Operations](./OPERATIONS.md) for recovery and escalation rules. Never include device codes, secrets, owner handles, raw messages, database URLs, private paths, auth files, or full provider exceptions.

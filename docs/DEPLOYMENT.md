@@ -14,22 +14,21 @@ Before approving the Blueprint, confirm it creates exactly:
 - one Render PostgreSQL database; and
 - one persistent disk attached to the Web Service.
 
-New Blueprint deployments ask for exactly one user-supplied value: `AGENT_PASSWORD`. Render generates `APP_ENCRYPTION_KEY` and supplies `DATABASE_URL` from the attached database; the owner phone, Photon, and ChatGPT are configured from the deployed dashboard after password authentication.
+New Blueprint deployments ask for zero user-supplied environment values. Render generates `APP_ENCRYPTION_KEY` and supplies `DATABASE_URL` from the attached database; the owner phone, Photon, and ChatGPT are configured from the deployed public dashboard. The owner phone is not a Blueprint prompt.
 
-The build runs `npm ci --include=dev && npm run build`, the pre-deploy phase runs `npm run db:migrate`, and the service starts with `npm start`. The generated `onrender.com` URL is an operator login and setup entry point, not an iMessage chat or Photon enrollment link.
+The build runs `npm ci --include=dev && npm run build`, the pre-deploy phase runs `npm run db:migrate`, and the service starts with `npm start`. The generated `onrender.com` URL is a public setup entry point, not an iMessage chat.
 
 ## 2. Required accounts and credentials
 
 | Requirement | Why it is needed | Where to obtain it |
 |---|---|---|
 | Render account | Hosts the service, database, and disk | [Render](https://render.com/) |
-| Agent password | Authenticates the operator dashboard | Choose 15–128 characters in Render's initial Blueprint form |
 | Photon account | Creates or connects the Spectrum project, iMessage line, and persistent message stream | Photon dashboard |
 | Allowed owner phone | Restricts who can command the agent | Your E.164 phone number |
 | ChatGPT device login or OpenAI API key | Authenticates Codex | ChatGPT account security or OpenAI Platform |
 | Supermemory API key | Optional semantic memory | Supermemory dashboard |
 
-After dashboard authentication, enter the owner's personal phone number in E.164 format, such as `+19495550123`. It becomes the only authorized sender and the phone registered during Photon owner provisioning. Photon separately assigns the iMessage destination displayed at completion.
+In the dashboard, enter the owner's personal phone number in E.164 format, such as `+19495550123`. It becomes the only authorized sender and the phone registered during Photon owner provisioning. Photon separately assigns the iMessage destination displayed at completion.
 
 Never place credentials in source control, screenshots, tickets, database rows, Supermemory, or logs.
 
@@ -39,7 +38,7 @@ The checked-in [`render.yaml`](../render.yaml) declares:
 
 | Resource | Blueprint shape | Purpose |
 |---|---|---|
-| Web Service | Starter, Oregon, one instance | Authenticated setup dashboard, health HTTP, queue workers, Codex runtime, Spectrum loop |
+| Web Service | Starter, Oregon, one instance | Public setup dashboard, health HTTP, queue workers, Codex runtime, Spectrum loop |
 | PostgreSQL | Basic 256 MB, PostgreSQL 18, Oregon | Operational source of truth and pg-boss queue |
 | Persistent disk | 1 GB at `/var/data` | Codex credentials, sessions, and workspaces |
 
@@ -47,11 +46,9 @@ These are paid resources. Check current Render pricing before deployment. The di
 
 `autoDeployTrigger: "off"` is intentional for a public deploy-button repository. Each template user controls updates to their own service.
 
-## 4. Environment values entered during deployment
+## 4. Environment values during deployment
 
-Choose one `AGENT_PASSWORD` of 15–128 characters in Render's initial Blueprint form. Spaces, Unicode, and long passphrases are accepted; there are no artificial uppercase, number, or symbol requirements. Render prompts for this `sync: false` secret only during initial Blueprint creation. Do not reuse the application encryption key.
-
-The Blueprint supplies these values without prompting:
+The Blueprint supplies these values without prompting for any user input:
 
 - `DATABASE_URL` from the attached database;
 - `APP_ENCRYPTION_KEY` as a generated secret;
@@ -59,30 +56,26 @@ The Blueprint supplies these values without prompting:
 - `AGENT_WORKSPACE_ROOT=/var/data/workspaces`; and
 - `CODEX_AUTH_MODE=chatgpt`.
 
-No phone, Photon, ChatGPT, Supermemory, database, or encryption value is requested from the deployer. Existing-deployment compatibility is documented only in [Troubleshooting](./TROUBLESHOOTING.md).
+No phone, dashboard password, Photon, ChatGPT, Supermemory, database, or encryption value is requested from the deployer. The phone stays in the dashboard. Existing-deployment compatibility is documented only in [Troubleshooting](./TROUBLESHOOTING.md).
 
 See [Configuration](./CONFIGURATION.md) for every supported variable.
 
-## 5. Operator dashboard authentication
+## 5. Public setup dashboard
 
 1. Open the deployed Web Service URL in a trusted browser.
-2. Enter the agent password you chose during Blueprint creation. Do not put it in a URL, screenshot, support ticket, or browser storage.
-3. After authentication, save the owner's E.164 phone, complete Photon setup, and then complete ChatGPT setup.
-4. Log out when the trusted setup session is no longer needed.
+2. Save the owner's E.164 phone, complete Photon setup, and then complete ChatGPT setup.
 
-The service derives a verifier with asynchronous scrypt using a fresh random 16-byte process salt and compares submitted verifiers in constant time. Authentication creates an eight-hour session stored on the server, with no more than eight active sessions retained. The browser cookie contains only an opaque session identifier and is `HttpOnly`, `SameSite=Strict`, `Path=/`, and `Secure` in production, with no `Domain` attribute. State-changing setup requests also require a session-bound CSRF token, a same-origin `Origin`, and a non-cross-site fetch context. Logout revokes the session. A service restart invalidates all sessions and requires a new login.
+There is no dashboard password or operator session. Anyone who can reach the public service URL can view setup status, device codes, verification URLs, assigned number, masked owner status, bounded error codes, and detailed readiness, and can deliberately submit setup changes. A matching `Origin` and non-cross-site fetch context block ordinary drive-by cross-site mutations, but they do not authenticate a visitor.
 
-The public page cannot create or replace the password. This intentionally prevents the first anonymous visitor from claiming administrator access.
-
-Owner status and writes remain inside this boundary. The read route returns only a masked phone, and the write route additionally requires the live session's CSRF token and same-origin request headers. Photon setup is unavailable until an owner is stored.
+Owner status returns only a masked phone, and the write route never echoes the submitted raw number. Photon setup is unavailable until an owner is stored. Raw provider credentials, project secrets, Codex credentials, database credentials, and unrestricted provider errors remain server-side.
 
 ## 6. ChatGPT device-login flow
 
 The default mode is `CODEX_AUTH_MODE=chatgpt`.
 
 1. Enable device-code login in the ChatGPT account or workspace if required.
-2. In Render, open the deployed **Web Service** URL and authenticate with the agent password.
-3. Save the owner phone and complete Photon authentication on the private agent dashboard.
+2. In Render, open the deployed **Web Service** URL.
+3. Save the owner phone and complete Photon authentication on the public agent dashboard.
 4. Select **Connect ChatGPT**, open the device-auth popup, sign in, and enter the one-time code.
 5. Keep the dashboard open. It closes the popup when the browser permits, returns focus to setup, and shows Codex preparing.
 6. Confirm the dashboard reaches **Your agent is ready** and public `/readyz` returns HTTP 200.
@@ -102,7 +95,7 @@ API-key mode uses OpenAI Platform billing and does not use a ChatGPT device logi
 1. Add `OPENAI_API_KEY` as a Render secret.
 2. Set `CODEX_AUTH_MODE=api_key`.
 3. Rebuild and deploy the Web Service.
-4. Check the authenticated dashboard for authentication and capability state, and use `/readyz` only for public aggregate readiness.
+4. Check the public dashboard or `/readyz` for authentication and capability state.
 
 Do not run `npm run codex:login` in this mode. The runtime passes `OPENAI_API_KEY` only to the Codex child process through an explicit allowlist; it must not be written to the disk or logged.
 
@@ -119,11 +112,11 @@ Expected results:
 
 - `/healthz` returns HTTP 200 when the HTTP process is alive.
 - `/readyz` returns HTTP 200 only when configuration, storage, PostgreSQL, migrations, queue, owner identity, Codex authentication, Codex capabilities, and Spectrum are ready.
-- `/readyz` returns HTTP 503 with a safe aggregate state when setup is incomplete or a critical dependency is degraded.
+- `/readyz` returns HTTP 503 with a detailed component snapshot and bounded remediation actions when setup is incomplete or a critical dependency is degraded.
 - A fresh deployment before owner setup is expected to return `/healthz` 200 and `/readyz` 503.
 - Supermemory may be `disabled` or `degraded` without blocking the operational pipeline.
 
-Public readiness never includes provider states, owner information, setup actions, private paths, or provider errors. Authenticate to the dashboard for detailed setup state. Do not use `/healthz` as deployment acceptance.
+Public readiness includes component states, bounded error codes, and remediation actions. It never includes raw owner phone values, credentials, private paths, or unrestricted provider errors. Do not use `/healthz` as deployment acceptance.
 
 ## 9. First-message test
 
@@ -148,7 +141,7 @@ Offline unit, integration, and chaos tests do not prove a live Render, Photon, C
 6. Require `/healthz` and `/readyz` to return 200.
 7. Run one authorized non-mutating message and one restart follow-up.
 
-At first startup on this version, an active database owner wins. If none exists, the runtime imports `OWNER_PHONE_NUMBER`, then the former long Render alias, then one unambiguous E.164 `AGENT_OWNER_HANDLES` value. It never imports authorization from stored Photon metadata and never overwrites a database owner on later restarts. Multiple handles or a non-phone handle require the operator to authenticate and save the intended phone in the dashboard. After verifying migration, old owner environment values may be removed manually.
+Before deploying this version, delete both former dashboard credential variables from the existing Render service; startup rejects either obsolete key, even when empty. An active database owner wins. If none exists, the runtime imports `OWNER_PHONE_NUMBER`, then the former long Render alias, then one unambiguous E.164 `AGENT_OWNER_HANDLES` value. It never imports authorization from stored Photon metadata and never overwrites a database owner on later restarts. Multiple handles or a non-phone handle require the user to open the public dashboard and save the intended phone. After verifying migration, old owner environment values may be removed manually.
 
 ## 11. Rollback
 

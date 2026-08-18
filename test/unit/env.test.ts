@@ -7,7 +7,6 @@ import {
   EnvironmentValidationError,
   loadEnvironment,
   modelProfilesFromEnvironment,
-  operatorPasswordFromEnvironment,
 } from "../../src/config/env.js";
 
 function validEnvironment(
@@ -69,126 +68,32 @@ describe("loadEnvironment", () => {
     expect(message).not.toContain("undefined");
   });
 
-  it("accepts a user-chosen agent password in fresh production configuration", () => {
+  it("boots production without any dashboard credential in the environment", () => {
     expect(() =>
       loadEnvironment(validEnvironment({ NODE_ENV: "production" })),
-    ).toThrow(/AGENT_PASSWORD or DASHBOARD_SETUP_SECRET is required/u);
-
-    const password = "quiet river lanterns 🌙";
-    const environment = loadEnvironment(
-      validEnvironment({ NODE_ENV: "production", AGENT_PASSWORD: password }),
-    );
-    expect(environment.AGENT_PASSWORD).toBe(password);
-    expect(operatorPasswordFromEnvironment(environment)).toBe(password);
+    ).not.toThrow();
   });
 
-  it("prefers AGENT_PASSWORD while preserving the legacy fallback", () => {
-    const password = "new agent passphrase";
-    const legacySecret = "B0jrphAPOY7pg92AN0c9MN4yecczLMdwnx4OkA1KFUk=";
-    const both = loadEnvironment(
-      validEnvironment({
-        NODE_ENV: "production",
-        AGENT_PASSWORD: password,
-        DASHBOARD_SETUP_SECRET: legacySecret,
-      }),
-    );
-    expect(operatorPasswordFromEnvironment(both)).toBe(password);
+  it.each(["AGENT_PASSWORD", "DASHBOARD_SETUP_SECRET"])(
+    "rejects the removed %s variable even when it is empty",
+    (key) => {
+      for (const value of ["", "legacy-secret-must-not-be-used"]) {
+        let error: unknown;
+        try {
+          loadEnvironment(validEnvironment({ [key]: value }));
+        } catch (caught) {
+          error = caught;
+        }
 
-    const legacyOnly = loadEnvironment(
-      validEnvironment({
-        NODE_ENV: "production",
-        DASHBOARD_SETUP_SECRET: legacySecret,
-      }),
-    );
-    expect(operatorPasswordFromEnvironment(legacyOnly)).toBe(legacySecret);
-  });
-
-  it("allows local configuration to omit operator credential material", () => {
-    const environment = loadEnvironment(validEnvironment());
-    expect(environment.AGENT_PASSWORD).toBeUndefined();
-    expect(environment.DASHBOARD_SETUP_SECRET).toBeUndefined();
-    expect(operatorPasswordFromEnvironment(environment)).toBeUndefined();
-  });
-
-  it("accepts spaces, Unicode, and long passphrases without composition rules", () => {
-    for (const password of [
-      "fifteen letters!",
-      "  paper boats drift under violet skies  ",
-      "🔐".repeat(128),
-    ]) {
-      expect(
-        loadEnvironment(
-          validEnvironment({ NODE_ENV: "production", AGENT_PASSWORD: password }),
-        ).AGENT_PASSWORD,
-      ).toBe(password);
-    }
-  });
-
-  it("rejects out-of-range passwords without echoing submitted material", () => {
-    for (const password of ["short phrase!!", "x".repeat(129)]) {
-      let error: unknown;
-      try {
-        loadEnvironment(
-          validEnvironment({ NODE_ENV: "production", AGENT_PASSWORD: password }),
-        );
-      } catch (caught) {
-        error = caught;
+        expect(error).toBeInstanceOf(EnvironmentValidationError);
+        expect((error as Error).message).toContain(key);
+        expect((error as Error).message).toContain("no longer supported");
+        if (value !== "") {
+          expect((error as Error).message).not.toContain(value);
+        }
       }
-      expect(error).toBeInstanceOf(EnvironmentValidationError);
-      expect((error as Error).message).toContain("AGENT_PASSWORD");
-      expect((error as Error).message).not.toContain(password);
-    }
-  });
-
-  it("never permits the agent password to reuse the encryption key", () => {
-    const encryptionKey = "00".repeat(32);
-    expect(() =>
-      loadEnvironment(
-        validEnvironment({
-          NODE_ENV: "production",
-          APP_ENCRYPTION_KEY: encryptionKey,
-          AGENT_PASSWORD: encryptionKey,
-        }),
-      ),
-    ).toThrow(/must not reuse APP_ENCRYPTION_KEY/u);
-  });
-
-  it.each([
-    ["base64", "B0jrphAPOY7pg92AN0c9MN4yecczLMdwnx4OkA1KFUk="],
-    ["base64url", "B0jrphAPOY7pg92AN0c9MN4yecczLMdwnx4OkA1KFUk"],
-    [
-      "hexadecimal",
-      "0748eba6100f398ee983dd8037473d30de3279c7332cc7709f1e0e900d4a1549",
-    ],
-  ])("accepts a diverse 32-byte %s setup secret", (_encoding, setupSecret) => {
-    expect(
-      loadEnvironment(
-        validEnvironment({
-          NODE_ENV: "production",
-          DASHBOARD_SETUP_SECRET: setupSecret,
-        }),
-      ).DASHBOARD_SETUP_SECRET,
-    ).toBe(setupSecret);
-  });
-
-  it("rejects weak dashboard setup secrets without echoing submitted material", () => {
-    const submittedSecret = "weak-dashboard-secret";
-    let error: unknown;
-    try {
-      loadEnvironment(
-        validEnvironment({
-          NODE_ENV: "production",
-          DASHBOARD_SETUP_SECRET: submittedSecret,
-        }),
-      );
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toBeInstanceOf(EnvironmentValidationError);
-    expect((error as Error).message).toContain("DASHBOARD_SETUP_SECRET");
-    expect((error as Error).message).not.toContain(submittedSecret);
-  });
+    },
+  );
 
   it.each([
     ["database protocol", { DATABASE_URL: "https://database.example.com" }],
@@ -201,11 +106,6 @@ describe("loadEnvironment", () => {
       },
     ],
     ["encryption key", { APP_ENCRYPTION_KEY: "too-short" }],
-    ["dashboard setup secret", { DASHBOARD_SETUP_SECRET: "too-short" }],
-    [
-      "low-diversity setup secret",
-      { DASHBOARD_SETUP_SECRET: "00".repeat(32) },
-    ],
     ["filesystem root", { CODEX_HOME: "/" }],
     ["path traversal", { AGENT_WORKSPACE_ROOT: "../outside" }],
     [

@@ -6,7 +6,6 @@ import {
 import type { ChatGptSetupController } from "./agent/codex-app-server-auth.js";
 import { startHealthServer, type HealthServer } from "./http/server.js";
 import type { DeploymentPageOptions } from "./http/deployment-page.js";
-import type { OperatorAuth } from "./http/operator-auth.js";
 import type {
   DeploymentIdentityController,
   DeploymentIdentityStatus,
@@ -61,9 +60,7 @@ export interface StartAgentServiceOptions {
   port: number;
   host?: string;
   bootstrap: AgentServiceBootstrap;
-  operatorAuth: OperatorAuth;
   deploymentIdentity?: DeploymentIdentityController;
-  secureSessionCookie?: boolean;
   deploymentPage?: Omit<DeploymentPageOptions, "runtimeMode">;
   photonSetup?: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
@@ -108,13 +105,9 @@ export async function startAgentService(
     ...(options.host === undefined ? {} : { host: options.host }),
     readiness,
     spectrum: spectrumReadiness,
-    operatorAuth: options.operatorAuth,
     ...(options.deploymentIdentity === undefined
       ? {}
       : { deploymentIdentity: options.deploymentIdentity }),
-    ...(options.secureSessionCookie === undefined
-      ? {}
-      : { secureSessionCookie: options.secureSessionCookie }),
     deploymentPage: {
       ...(options.deploymentPage ?? {
         authMode: "chatgpt",
@@ -128,13 +121,6 @@ export async function startAgentService(
     ...(options.chatgptSetup === undefined
       ? {}
       : { chatgptSetup: options.chatgptSetup }),
-  });
-
-  shutdown.register({
-    name: "operator-auth",
-    priority: 55,
-    timeoutMs: 1_000,
-    stop: async () => options.operatorAuth.close(),
   });
 
   shutdown.register({

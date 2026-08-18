@@ -7,7 +7,7 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import type { Database } from "../db/client.js";
 import {
@@ -44,9 +44,29 @@ export interface AuthorizationDirectory {
     deploymentId: string,
     identityId: string,
   ): Promise<AuthorizationIdentity | undefined>;
+  /**
+   * Optional for backward compatibility with existing directory adapters.
+   * Queued authorization uses BatchedAuthorizationDirectory, where this
+   * method is required, to reload every captured identity in one query.
+   */
+  findByIds?(
+    deploymentId: string,
+    ownerId: string,
+    identityIds: readonly string[],
+  ): Promise<readonly AuthorizationIdentity[]>;
 }
 
-export class DatabaseAuthorizationDirectory implements AuthorizationDirectory {
+export interface BatchedAuthorizationDirectory extends AuthorizationDirectory {
+  findByIds(
+    deploymentId: string,
+    ownerId: string,
+    identityIds: readonly string[],
+  ): Promise<readonly AuthorizationIdentity[]>;
+}
+
+export class DatabaseAuthorizationDirectory
+  implements BatchedAuthorizationDirectory
+{
   public constructor(private readonly database: Database) {}
 
   public async findByFingerprint(
@@ -74,6 +94,51 @@ export class DatabaseAuthorizationDirectory implements AuthorizationDirectory {
     );
   }
 
+  public async findByIds(
+    deploymentId: string,
+    ownerId: string,
+    identityIds: readonly string[],
+  ): Promise<readonly AuthorizationIdentity[]> {
+    const requestedIds = [...new Set(identityIds)];
+    if (requestedIds.length === 0) {
+      return [];
+    }
+    const rows = await this.database
+      .select({
+        deploymentId: channelIdentities.deploymentId,
+        ownerId: channelIdentities.ownerId,
+        identityId: channelIdentities.id,
+        role: channelIdentities.role,
+        deploymentStatus: deployments.status,
+        ownerStatus: owners.status,
+        revokedAt: channelIdentities.revokedAt,
+      })
+      .from(channelIdentities)
+      .innerJoin(
+        owners,
+        and(
+          eq(channelIdentities.ownerId, owners.id),
+          eq(channelIdentities.deploymentId, owners.deploymentId),
+        ),
+      )
+      .innerJoin(
+        deployments,
+        eq(channelIdentities.deploymentId, deployments.id),
+      )
+      .where(
+        and(
+          eq(channelIdentities.deploymentId, deploymentId),
+          eq(channelIdentities.ownerId, ownerId),
+          inArray(channelIdentities.id, requestedIds),
+        ),
+      );
+    const byId = new Map(rows.map((row) => [row.identityId, row]));
+    return requestedIds.flatMap((identityId) => {
+      const row = byId.get(identityId);
+      return row === undefined ? [] : [row];
+    });
+  }
+
   private async find(
     condition: ReturnType<typeof and>,
   ): Promise<AuthorizationIdentity | undefined> {
@@ -88,7 +153,13 @@ export class DatabaseAuthorizationDirectory implements AuthorizationDirectory {
         revokedAt: channelIdentities.revokedAt,
       })
       .from(channelIdentities)
-      .innerJoin(owners, eq(channelIdentities.ownerId, owners.id))
+      .innerJoin(
+        owners,
+        and(
+          eq(channelIdentities.ownerId, owners.id),
+          eq(channelIdentities.deploymentId, owners.deploymentId),
+        ),
+      )
       .innerJoin(
         deployments,
         eq(channelIdentities.deploymentId, deployments.id),

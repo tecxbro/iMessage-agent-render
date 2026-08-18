@@ -149,6 +149,13 @@ const accountUpdatedSchema = z
   })
   .passthrough();
 
+const wireReasoningEffortSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9_-]*$/iu);
+
 const codexModelOptionSchema = z
   .object({
     id: z.string().trim().min(1).max(128),
@@ -158,14 +165,14 @@ const codexModelOptionSchema = z
       .array(
         z
           .object({
-            reasoningEffort: reasoningEffortSchema,
+            reasoningEffort: wireReasoningEffortSchema,
             description: z.string().max(2_000),
           })
           .passthrough(),
       )
       .min(1)
       .max(32),
-    defaultReasoningEffort: reasoningEffortSchema,
+    defaultReasoningEffort: wireReasoningEffortSchema,
     isDefault: z.boolean(),
   })
   .passthrough()
@@ -183,6 +190,47 @@ const modelListSchema = z
     nextCursor: z.string().trim().min(1).max(2_048).nullable(),
   })
   .passthrough();
+
+type WireCodexModelOption = z.infer<typeof codexModelOptionSchema>;
+
+function normalizeCodexModelOption(
+  model: WireCodexModelOption,
+): CodexModelOption | undefined {
+  const supportedReasoningEfforts: Array<
+    CodexModelOption["supportedReasoningEfforts"][number]
+  > = [];
+  const seenEfforts = new Set<string>();
+  for (const effort of model.supportedReasoningEfforts) {
+    const parsed = reasoningEffortSchema.safeParse(effort.reasoningEffort);
+    if (!parsed.success || seenEfforts.has(parsed.data)) {
+      continue;
+    }
+    seenEfforts.add(parsed.data);
+    supportedReasoningEfforts.push({
+      reasoningEffort: parsed.data,
+      description: effort.description,
+    });
+  }
+
+  const defaultReasoningEffort = reasoningEffortSchema.safeParse(
+    model.defaultReasoningEffort,
+  );
+  if (
+    !defaultReasoningEffort.success ||
+    !seenEfforts.has(defaultReasoningEffort.data)
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: model.id,
+    model: model.model,
+    displayName: model.displayName,
+    supportedReasoningEfforts,
+    defaultReasoningEffort: defaultReasoningEffort.data,
+    isDefault: model.isDefault,
+  };
+}
 
 export const CHATGPT_SETUP_ERROR_CODES = [
   "CHATGPT_SETUP_UNAVAILABLE",
@@ -491,6 +539,7 @@ export class CodexAppServerAuth implements ChatGptSetupController {
     models: [],
     refreshedAt: null,
   };
+  #accountState: "unknown" | "connected" | "not_connected" = "unknown";
   #loginId: string | undefined;
   readonly #earlyCompletions = new Map<string, LoginCompleted>();
   #closing = false;
@@ -545,11 +594,16 @@ export class CodexAppServerAuth implements ChatGptSetupController {
   public async initialize(): Promise<ChatGptSetupStatus> {
     try {
       await this.#ensureConnection();
-      const capabilities = await this.refreshCapabilities();
+      await this.refreshCapabilities();
       this.#status =
-        capabilities.state === "available"
+        this.#accountState === "connected"
           ? { state: "connected" }
-          : { state: "not_connected" };
+          : this.#accountState === "not_connected"
+            ? { state: "not_connected" }
+            : {
+                state: "failed",
+                code: "CHATGPT_APP_SERVER_UNAVAILABLE",
+              };
     } catch {
       this.#status = {
         state: "failed",
@@ -721,11 +775,12 @@ export class CodexAppServerAuth implements ChatGptSetupController {
         return;
       }
       if (updated.data.authMode === null) {
+        this.#accountState = "not_connected";
         this.#status = { state: "not_connected" };
       }
-      const capabilities = await this.refreshCapabilities();
+      await this.refreshCapabilities();
       if (
-        capabilities.state === "available" &&
+        this.#accountState === "connected" &&
         this.#status.state !== "starting" &&
         this.#status.state !== "awaiting_authorization"
       ) {
@@ -775,8 +830,8 @@ export class CodexAppServerAuth implements ChatGptSetupController {
       return;
     }
     try {
-      const capabilities = await this.refreshCapabilities();
-      if (capabilities.state !== "available") {
+      await this.refreshCapabilities();
+      if (this.#accountState !== "connected") {
         this.#loginId = undefined;
         this.#status = { state: "failed", code: "CHATGPT_LOGIN_FAILED" };
         return;
@@ -802,12 +857,45 @@ export class CodexAppServerAuth implements ChatGptSetupController {
       ...this.#capabilitiesSnapshot,
       state: "refreshing",
     });
+    const connection = await this.#ensureConnection().catch(() => undefined);
+    if (connection === undefined) {
+      this.#accountState = "unknown";
+      return await this.#replaceCapabilities({
+        state: "unavailable",
+        planType: null,
+        models: [],
+        refreshedAt: null,
+      });
+    }
+
+    let account: z.infer<typeof accountReadSchema>;
     try {
-      const connection = await this.#ensureConnection();
-      const account = accountReadSchema.parse(
+      account = accountReadSchema.parse(
         await connection.request("account/read", { refreshToken: false }),
       );
-      const models: CodexModelOption[] = [];
+    } catch {
+      this.#accountState = "unknown";
+      return await this.#replaceCapabilities({
+        state: "unavailable",
+        planType: null,
+        models: [],
+        refreshedAt: null,
+      });
+    }
+
+    if (account.account?.type !== "chatgpt") {
+      this.#accountState = "not_connected";
+      return await this.#replaceCapabilities({
+        state: "unavailable",
+        planType: null,
+        models: [],
+        refreshedAt: new Date(),
+      });
+    }
+    this.#accountState = "connected";
+
+    try {
+      const models: WireCodexModelOption[] = [];
       const seenCursors = new Set<string>();
       let cursor: string | null = null;
       do {
@@ -828,20 +916,17 @@ export class CodexAppServerAuth implements ChatGptSetupController {
         }
       } while (cursor !== null);
 
-      if (account.account?.type !== "chatgpt") {
-        return await this.#replaceCapabilities({
-          state: "unavailable",
-          planType: null,
-          models: [],
-          refreshedAt: new Date(),
-        });
-      }
       const uniqueModels = new Map<string, CodexModelOption>();
+      const seenModelIds = new Set<string>();
       for (const model of models) {
-        if (uniqueModels.has(model.id)) {
+        if (seenModelIds.has(model.id)) {
           throw new CodexAppServerProtocolError();
         }
-        uniqueModels.set(model.id, model);
+        seenModelIds.add(model.id);
+        const normalized = normalizeCodexModelOption(model);
+        if (normalized !== undefined) {
+          uniqueModels.set(model.id, normalized);
+        }
       }
       return await this.#replaceCapabilities({
         state: "available",

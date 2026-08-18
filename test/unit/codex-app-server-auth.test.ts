@@ -152,7 +152,7 @@ describe("Codex App Server ChatGPT authentication", () => {
     await expect(auth.initialize()).resolves.toEqual({
       state: "not_connected",
     });
-    expect(connection.requests.slice(0, 3)).toEqual([
+    expect(connection.requests).toEqual([
       {
         method: "initialize",
         params: {
@@ -164,10 +164,6 @@ describe("Codex App Server ChatGPT authentication", () => {
         },
       },
       { method: "account/read", params: { refreshToken: false } },
-      {
-        method: "model/list",
-        params: { limit: 100, includeHidden: false },
-      },
     ]);
     expect(connection.notifications).toEqual([
       { method: "initialized", params: {} },
@@ -220,6 +216,124 @@ describe("Codex App Server ChatGPT authentication", () => {
         (request) => request.method === "account/login/start",
       ),
     ).toHaveLength(0);
+    await auth.close();
+  });
+
+  it("filters unsupported reasoning efforts without rejecting the account catalog", async () => {
+    const codexHome = await temporaryCodexHome();
+    const connection = new FakeConnection(codexHome);
+    connection.connected = true;
+    connection.modelPages = {
+      first: {
+        data: [
+          {
+            id: "gpt-5.6-sol",
+            model: "gpt-5.6-sol",
+            displayName: "GPT-5.6 Sol",
+            supportedReasoningEfforts: [
+              { reasoningEffort: "high", description: "High" },
+              { reasoningEffort: "ultra", description: "Ultra" },
+            ],
+            defaultReasoningEffort: "high",
+            isDefault: true,
+          },
+          {
+            id: "gpt-5.6-luna",
+            model: "gpt-5.6-luna",
+            displayName: "GPT-5.6 Luna",
+            supportedReasoningEfforts: [
+              { reasoningEffort: "medium", description: "Medium" },
+            ],
+            defaultReasoningEffort: "medium",
+            isDefault: false,
+          },
+          {
+            id: "gpt-5.6-terra",
+            model: "gpt-5.6-terra",
+            displayName: "GPT-5.6 Terra",
+            supportedReasoningEfforts: [
+              { reasoningEffort: "ultra", description: "Ultra" },
+            ],
+            defaultReasoningEffort: "ultra",
+            isDefault: false,
+          },
+        ],
+        nextCursor: null,
+      },
+    };
+    const auth = new CodexAppServerAuth({
+      codexHome,
+      parentEnvironment: { PATH: process.env["PATH"] },
+      connectionFactory: async () => connection,
+    });
+
+    await expect(auth.initialize()).resolves.toEqual({ state: "connected" });
+    expect(auth.capabilities()).toMatchObject({
+      state: "available",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          supportedReasoningEfforts: [
+            { reasoningEffort: "high", description: "High" },
+          ],
+        },
+        {
+          id: "gpt-5.6-luna",
+          supportedReasoningEfforts: [
+            { reasoningEffort: "medium", description: "Medium" },
+          ],
+        },
+      ],
+    });
+    await auth.close();
+  });
+
+  it("does not report a successful login as failed when catalog refresh fails", async () => {
+    const codexHome = await temporaryCodexHome();
+    const connection = new FakeConnection(codexHome);
+    const auth = new CodexAppServerAuth({
+      codexHome,
+      parentEnvironment: { PATH: process.env["PATH"] },
+      connectionFactory: async () => connection,
+    });
+
+    await auth.initialize();
+    await auth.start();
+    await writeFile(join(codexHome, "auth.json"), "fixture", { mode: 0o600 });
+    connection.connected = true;
+    connection.modelPages = {
+      first: { data: "not-an-array", nextCursor: null },
+    };
+    connection.emit("account/login/completed", {
+      loginId: connection.loginId,
+      success: true,
+      error: null,
+      onboardingEntrypoint: null,
+    });
+
+    await vi.waitFor(() => expect(auth.status()).toEqual({ state: "connected" }));
+    expect(auth.capabilities().state).toBe("unavailable");
+    await auth.close();
+  });
+
+  it("keeps an authenticated ChatGPT account connected when its catalog is malformed", async () => {
+    const codexHome = await temporaryCodexHome();
+    const connection = new FakeConnection(codexHome);
+    connection.connected = true;
+    connection.modelPages = {
+      first: { data: "not-an-array", nextCursor: null },
+    };
+    const auth = new CodexAppServerAuth({
+      codexHome,
+      parentEnvironment: { PATH: process.env["PATH"] },
+      connectionFactory: async () => connection,
+    });
+
+    await expect(auth.initialize()).resolves.toEqual({ state: "connected" });
+    expect(auth.capabilities()).toMatchObject({
+      state: "unavailable",
+      models: [],
+    });
     await auth.close();
   });
 

@@ -22,8 +22,8 @@ import type {
 const runningServices: RunningAgentService[] = [];
 const TEST_SETUP_SECRET = "test-dashboard-setup-secret-material-1234567890";
 
-function createTestOperatorAuth() {
-  return createOperatorAuth({ setupSecret: TEST_SETUP_SECRET });
+async function createTestOperatorAuth() {
+  return createOperatorAuth({ password: TEST_SETUP_SECRET });
 }
 
 afterEach(async () => {
@@ -90,7 +90,7 @@ describe("composed service lifecycle recovery", () => {
       port: 0,
       host: "127.0.0.1",
       bootstrap,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       installSignalHandlers: false,
     });
     runningServices.push(service);
@@ -146,7 +146,7 @@ describe("composed service lifecycle recovery", () => {
       host: "127.0.0.1",
       installSignalHandlers: false,
       onStartupFailure: startupFailure,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -207,7 +207,7 @@ describe("composed service lifecycle recovery", () => {
       port: 0,
       host: "127.0.0.1",
       installSignalHandlers: false,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -287,7 +287,7 @@ describe("composed service lifecycle recovery", () => {
       installSignalHandlers: false,
       deploymentIdentity,
       photonSetup,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -392,7 +392,7 @@ describe("composed service lifecycle recovery", () => {
       installSignalHandlers: false,
       photonSetup,
       chatgptSetup,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,
@@ -486,7 +486,7 @@ describe("composed service lifecycle recovery", () => {
       installSignalHandlers: false,
       photonSetup,
       chatgptSetup,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       bootstrap: {
         prepareConfiguration: async () => undefined,
         prepareStorage: async () => undefined,

@@ -14,7 +14,7 @@ Before approving the Blueprint, confirm it creates exactly:
 - one Render PostgreSQL database; and
 - one persistent disk attached to the Web Service.
 
-New Blueprint deployments ask for zero user-supplied environment values. Render generates `APP_ENCRYPTION_KEY` and `DASHBOARD_SETUP_SECRET` and supplies `DATABASE_URL` from the attached database; the owner phone, Photon, and ChatGPT are configured from the deployed dashboard after operator login.
+New Blueprint deployments ask for exactly one user-supplied value: `AGENT_PASSWORD`. Render generates `APP_ENCRYPTION_KEY` and supplies `DATABASE_URL` from the attached database; the owner phone, Photon, and ChatGPT are configured from the deployed dashboard after password authentication.
 
 The build runs `npm ci --include=dev && npm run build`, the pre-deploy phase runs `npm run db:migrate`, and the service starts with `npm start`. The generated `onrender.com` URL is an operator login and setup entry point, not an iMessage chat or Photon enrollment link.
 
@@ -23,7 +23,7 @@ The build runs `npm ci --include=dev && npm run build`, the pre-deploy phase run
 | Requirement | Why it is needed | Where to obtain it |
 |---|---|---|
 | Render account | Hosts the service, database, and disk | [Render](https://render.com/) |
-| Deployment setup code | Authenticates the operator dashboard | Render Web Service **Environment** page (`DASHBOARD_SETUP_SECRET`) |
+| Agent password | Authenticates the operator dashboard | Choose 15–128 characters in Render's initial Blueprint form |
 | Photon account | Creates or connects the Spectrum project, iMessage line, and persistent message stream | Photon dashboard |
 | Allowed owner phone | Restricts who can command the agent | Your E.164 phone number |
 | ChatGPT device login or OpenAI API key | Authenticates Codex | ChatGPT account security or OpenAI Platform |
@@ -49,33 +49,30 @@ These are paid resources. Check current Render pricing before deployment. The di
 
 ## 4. Environment values entered during deployment
 
-None. The Blueprint contains no `sync: false` values, so a new deployment has no operator-supplied environment form.
+Choose one `AGENT_PASSWORD` of 15–128 characters in Render's initial Blueprint form. Spaces, Unicode, and long passphrases are accepted; there are no artificial uppercase, number, or symbol requirements. Render prompts for this `sync: false` secret only during initial Blueprint creation. Do not reuse the application encryption key.
 
 The Blueprint supplies these values without prompting:
 
 - `DATABASE_URL` from the attached database;
 - `APP_ENCRYPTION_KEY` as a generated secret;
-- `DASHBOARD_SETUP_SECRET` as a generated secret;
 - `CODEX_HOME=/var/data/codex`;
 - `AGENT_WORKSPACE_ROOT=/var/data/workspaces`; and
 - `CODEX_AUTH_MODE=chatgpt`.
 
-`DASHBOARD_SETUP_SECRET` uses `generateValue: true`, not `sync: false`. When the variable does not already exist, Render creates a random base64-encoded 256-bit value. The value lives only in the Web Service's private environment; open **Web Service > Environment** to reveal or copy the deployment setup code. Blueprint sync preserves an existing generated value instead of rotating it.
-
-For an existing service, add or rotate secrets under **Web Service > Environment**, then rebuild and deploy. Legacy owner values are not deleted automatically; remove them manually only after the dashboard shows the migrated masked owner and an authorized message succeeds.
+No phone, Photon, ChatGPT, Supermemory, database, or encryption value is requested from the deployer. Existing-deployment compatibility is documented only in [Troubleshooting](./TROUBLESHOOTING.md).
 
 See [Configuration](./CONFIGURATION.md) for every supported variable.
 
 ## 5. Operator dashboard authentication
 
 1. Open the deployed Web Service URL in a trusted browser.
-2. Enter `DASHBOARD_SETUP_SECRET` in the **Deployment setup code** field. Do not put it in a URL, screenshot, support ticket, or browser storage.
+2. Enter the agent password you chose during Blueprint creation. Do not put it in a URL, screenshot, support ticket, or browser storage.
 3. After authentication, save the owner's E.164 phone, complete Photon setup, and then complete ChatGPT setup.
 4. Log out when the trusted setup session is no longer needed.
 
-Authentication creates an eight-hour session stored on the server, with no more than eight active sessions retained. The browser cookie contains only an opaque session identifier and is `HttpOnly`, `SameSite=Strict`, `Path=/`, and `Secure` in production, with no `Domain` attribute. State-changing setup requests also require a session-bound CSRF token, a same-origin `Origin`, and a non-cross-site fetch context. Logout revokes the session. A service restart invalidates all sessions and requires a new login.
+The service derives a verifier with asynchronous scrypt using a fresh random 16-byte process salt and compares submitted verifiers in constant time. Authentication creates an eight-hour session stored on the server, with no more than eight active sessions retained. The browser cookie contains only an opaque session identifier and is `HttpOnly`, `SameSite=Strict`, `Path=/`, and `Secure` in production, with no `Domain` attribute. State-changing setup requests also require a session-bound CSRF token, a same-origin `Origin`, and a non-cross-site fetch context. Logout revokes the session. A service restart invalidates all sessions and requires a new login.
 
-To rotate an exposed or shared setup code, open **Web Service > Environment**, regenerate or replace `DASHBOARD_SETUP_SECRET`, save the change, and redeploy or restart the service so it reads the replacement. Then sign in with the new value. If the code is lost, use the same Render Environment recovery path; there is no public reset or recovery link. Render does not rotate a generated value merely because the Blueprint is synchronized.
+The public page cannot create or replace the password. This intentionally prevents the first anonymous visitor from claiming administrator access.
 
 Owner status and writes remain inside this boundary. The read route returns only a masked phone, and the write route additionally requires the live session's CSRF token and same-origin request headers. Photon setup is unavailable until an owner is stored.
 
@@ -84,7 +81,7 @@ Owner status and writes remain inside this boundary. The read route returns only
 The default mode is `CODEX_AUTH_MODE=chatgpt`.
 
 1. Enable device-code login in the ChatGPT account or workspace if required.
-2. In Render, open the deployed **Web Service** URL and authenticate with the deployment setup code.
+2. In Render, open the deployed **Web Service** URL and authenticate with the agent password.
 3. Save the owner phone and complete Photon authentication on the private agent dashboard.
 4. Select **Connect ChatGPT**, open the device-auth popup, sign in, and enter the one-time code.
 5. Keep the dashboard open. It closes the popup when the browser permits, returns focus to setup, and shows Codex preparing.

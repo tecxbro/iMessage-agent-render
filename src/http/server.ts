@@ -263,16 +263,27 @@ export function createHealthApplication(
     response.status(200).send(Buffer.from(PHOTON_LOGO_BASE64, "base64"));
   });
 
-  application.post("/api/operator/session", (request, response) => {
+  application.post("/api/operator/session", async (request, response) => {
     response.set("cache-control", "no-store");
     if (
-      !isExactObject(request.body, ["setupSecret"]) ||
-      typeof request.body["setupSecret"] !== "string"
+      !isExactObject(request.body, ["password"]) ||
+      typeof request.body["password"] !== "string"
     ) {
       sendInvalidRequest(response);
       return;
     }
-    if (!options.operatorAuth.authenticateSetupSecret(request.body["setupSecret"])) {
+    let password = request.body["password"];
+    request.body["password"] = "";
+    let authenticated = false;
+    try {
+      authenticated = await options.operatorAuth.authenticatePassword(password);
+    } catch {
+      response.status(503).json({ error: "OPERATOR_AUTH_UNAVAILABLE" });
+      return;
+    } finally {
+      password = "";
+    }
+    if (!authenticated) {
       const wasLimited = loginAttempts.isLimited();
       loginAttempts.recordFailure();
       // Continue returning a stable throttled response for failures without
@@ -280,7 +291,7 @@ export function createHealthApplication(
       if (wasLimited || loginAttempts.isLimited()) {
         response.status(429).json({ error: "RATE_LIMITED" });
       } else {
-        response.status(403).json({ error: "INVALID_SETUP_SECRET" });
+        response.status(403).json({ error: "INVALID_PASSWORD" });
       }
       return;
     }

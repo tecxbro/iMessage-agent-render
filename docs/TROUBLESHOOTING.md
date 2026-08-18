@@ -66,25 +66,25 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 **Do not:** Use `/healthz` as acceptance, paste raw provider errors into tickets, or weaken readiness checks.
 
-## Dashboard rejects the deployment setup code
+## Dashboard rejects the agent password
 
-**What it means:** The submitted value does not match `DASHBOARD_SETUP_SECRET`, or repeated failures have reached the login-attempt rate limit.
+**What it means:** The submitted value does not match `AGENT_PASSWORD`, or repeated failures have reached the login-attempt rate limit.
 
 **Where to check:** The deployed Web Service's private **Environment** page in Render. Confirm the browser is using the same service whose environment you inspected.
 
-**Expected result:** A valid code creates an eight-hour server-side session and opens the private dashboard. After repeated invalid attempts, stop retrying and wait for the bounded rate-limit window before trying the verified value.
+**Expected result:** A valid password creates an eight-hour server-side session and opens the private dashboard. After repeated invalid attempts, stop retrying and wait for the bounded rate-limit window before trying the verified value.
 
-**Do not:** Paste the code into a URL, command line, log, ticket, screenshot, local/session storage, or client-readable cookie. The old `x-agent-setup: dashboard` header grants no access.
+**Do not:** Paste the password into a URL, command line, log, ticket, screenshot, local/session storage, or client-readable cookie. The old `x-agent-setup: dashboard` header grants no access.
 
 ## Dashboard session expired or disappeared
 
 **What it means:** The eight-hour session expired, the operator logged out, it was revoked, or the service restarted. Operator sessions are intentionally in memory, limited to eight active sessions, and do not survive restart.
 
-**Where to check:** Return to the Web Service URL. The unauthenticated page must show only the **Deployment setup code** form and no provider or readiness detail.
+**Where to check:** Return to the Web Service URL. The unauthenticated page must show only the **Agent password** form and no provider or readiness detail.
 
-**Expected result:** Authenticate again with the current Render-managed setup code. Logout remains idempotent and revokes the old session.
+**Expected result:** Authenticate again with the current agent password. Logout remains idempotent and revokes the old session.
 
-**Do not:** Copy another browser's cookie, put the setup secret in browser storage, or disable cookie security attributes.
+**Do not:** Copy another browser's cookie, put the password in browser storage, or disable cookie security attributes.
 
 ## Setup action returns 403
 
@@ -116,15 +116,19 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 **Do not:** Delete identity history, edit fingerprints manually, or resume intake while multiple active owner identities exist.
 
-## Dashboard setup code is lost or exposed
+## Agent password is lost or exposed
 
-**What it means:** Authorized operators can no longer retrieve the current code, or the code may no longer be private.
+**What it means:** Authorized operators no longer know the current password, or the password may no longer be private.
 
 **Where to check:** Render **Web Service > Environment** using an authorized Render account. There is no public browser recovery link.
 
-**Expected result:** Regenerate or replace `DASHBOARD_SETUP_SECRET`, save the environment change, redeploy or restart, and authenticate with the replacement. Blueprint sync alone preserves the old generated value and is not rotation.
+**Expected result:** Replace `AGENT_PASSWORD` with a new 15–128 character value, save the environment change, redeploy or restart, and authenticate with the replacement.
 
 **Do not:** Recover the value from logs or source, reuse `APP_ENCRYPTION_KEY`, or send the replacement through an untrusted channel.
+
+## Existing deployment credential migration — one-release compatibility
+
+Existing deployments that do not yet have `AGENT_PASSWORD` may continue authenticating with their old generated `DASHBOARD_SETUP_SECRET` for one compatibility release. `AGENT_PASSWORD` takes precedence as soon as it is configured. New deployments must use the password collected during initial Blueprint creation; removal of the legacy fallback is a separate migration after existing installations have a supported rotation path.
 
 ## Codex authentication is missing
 
@@ -274,4 +278,4 @@ npm test -- test/chaos/outbound-restart.test.ts
 
 ## Still blocked
 
-Record the exact commit, timestamp, public aggregate readiness, authenticated redacted diagnostic state, safe correlation IDs, commands run, and whether any live provider was exercised. Use [Operations](./OPERATIONS.md) for recovery and escalation rules. Never include setup codes, session identifiers, CSRF tokens, device codes, secrets, owner handles, raw messages, database URLs, private paths, auth files, or full provider exceptions.
+Record the exact commit, timestamp, public aggregate readiness, authenticated redacted diagnostic state, safe correlation IDs, commands run, and whether any live provider was exercised. Use [Operations](./OPERATIONS.md) for recovery and escalation rules. Never include agent passwords, session identifiers, CSRF tokens, device codes, secrets, owner handles, raw messages, database URLs, private paths, auth files, or full provider exceptions.

@@ -3,6 +3,7 @@ import { type AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { operatorPasswordFromEnvironment } from "../../src/config/env.js";
 import type { ChatGptSetupController } from "../../src/agent/codex-app-server-auth.js";
 import {
   createOperatorAuth,
@@ -44,7 +45,8 @@ interface SessionCredentials {
 
 interface TestServerOptions {
   secureSessionCookie?: boolean;
-  operatorAuthOptions?: Omit<OperatorAuthOptions, "setupSecret">;
+  operatorPassword?: string;
+  operatorAuthOptions?: Omit<OperatorAuthOptions, "password">;
   deploymentIdentity?: DeploymentIdentityController;
   photonSetup?: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
@@ -54,8 +56,8 @@ async function startTestServer(options: TestServerOptions = {}): Promise<string>
   const readiness = new ReadinessRegistry();
   readiness.mark("disk", "ok");
   readiness.mark("codexAuth", "missing", "CODEX_AUTH_MISSING");
-  operatorAuth = createOperatorAuth({
-    setupSecret: SETUP_SECRET,
+  operatorAuth = await createOperatorAuth({
+    password: options.operatorPassword ?? SETUP_SECRET,
     ...options.operatorAuthOptions,
   });
   health = await startHealthServer({
@@ -101,12 +103,12 @@ function configuredDeploymentIdentity(
 
 async function login(
   base: string,
-  setupSecret = SETUP_SECRET,
+  password = SETUP_SECRET,
 ): Promise<{ response: Response; credentials?: SessionCredentials }> {
   const response = await fetch(`${base}/api/operator/session`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ setupSecret }),
+    body: JSON.stringify({ password }),
   });
   if (!response.ok) {
     return { response };
@@ -215,7 +217,7 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     const dashboard = await fetch(`${base}/agent/dashboard`);
     const html = await dashboard.text();
     expect(dashboard.status).toBe(200);
-    expect(html).toContain("Deployment setup code");
+    expect(html).toContain("Agent password");
     for (const privateValue of [
       "Photon",
       "ChatGPT",
@@ -236,7 +238,7 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     });
     const oldHeaderDashboardHtml = await oldHeaderDashboard.text();
     expect(oldHeaderDashboard.status).toBe(200);
-    expect(oldHeaderDashboardHtml).toContain("Deployment setup code");
+    expect(oldHeaderDashboardHtml).toContain("Agent password");
     expect(oldHeaderDashboardHtml).not.toContain(PHOTON_DEVICE_CODE);
 
     const responses = await Promise.all([
@@ -328,13 +330,20 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     }
   });
 
-  it("strictly parses login JSON, rejects invalid secrets, and rate-limits failures", async () => {
+  it("strictly parses login JSON, rejects invalid passwords, and rate-limits failures", async () => {
     const base = await startTestServer();
+
+    const legacyField = await fetch(`${base}/api/operator/session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ setupSecret: SETUP_SECRET }),
+    });
+    expect(legacyField.status).toBe(400);
 
     const extraField = await fetch(`${base}/api/operator/session`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ setupSecret: SETUP_SECRET, unexpected: true }),
+      body: JSON.stringify({ password: SETUP_SECRET, unexpected: true }),
     });
     expect(extraField.status).toBe(400);
 
@@ -348,7 +357,7 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     const oversized = await fetch(`${base}/api/operator/session`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ setupSecret: "x".repeat(3_000) }),
+      body: JSON.stringify({ password: "x".repeat(3_000) }),
     });
     expect(oversized.status).toBe(413);
 
@@ -359,6 +368,9 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     expect(responses.slice(0, 4).map(({ status }) => status)).toEqual([
       403, 403, 403, 403,
     ]);
+    await expect(responses[0]!.clone().json()).resolves.toEqual({
+      error: "INVALID_PASSWORD",
+    });
     expect(responses[4]!.status).toBe(429);
     for (const response of responses) {
       expect(await response.text()).not.toContain(SETUP_SECRET);
@@ -383,6 +395,33 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     expect(setCookie).toMatch(/; SameSite=Strict/u);
     expect(setCookie).not.toMatch(/; Domain=/iu);
     expect(await response.text()).not.toContain(SETUP_SECRET);
+  });
+
+  it("authenticates with the legacy credential only when AGENT_PASSWORD is absent", async () => {
+    const legacyCredential =
+      "B0jrphAPOY7pg92AN0c9MN4yecczLMdwnx4OkA1KFUk=";
+    const resolved = operatorPasswordFromEnvironment({
+      DASHBOARD_SETUP_SECRET: legacyCredential,
+    });
+    expect(resolved).toBe(legacyCredential);
+    const base = await startTestServer({ operatorPassword: resolved! });
+
+    expect((await login(base, legacyCredential)).response.status).toBe(201);
+  });
+
+  it("uses AGENT_PASSWORD when both credential values are configured", async () => {
+    const agentPassword = "chosen agent password";
+    const legacyCredential =
+      "B0jrphAPOY7pg92AN0c9MN4yecczLMdwnx4OkA1KFUk=";
+    const resolved = operatorPasswordFromEnvironment({
+      AGENT_PASSWORD: agentPassword,
+      DASHBOARD_SETUP_SECRET: legacyCredential,
+    });
+    expect(resolved).toBe(agentPassword);
+    const base = await startTestServer({ operatorPassword: resolved! });
+
+    expect((await login(base, legacyCredential)).response.status).toBe(403);
+    expect((await login(base, agentPassword)).response.status).toBe(201);
   });
 
   it("rejects missing or invalid CSRF tokens, foreign origins, and cross-site fetches", async () => {
@@ -599,9 +638,9 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     }
   });
 
-  it("bounds active server sessions and makes close and revocation idempotent", () => {
-    const auth = createOperatorAuth({
-      setupSecret: SETUP_SECRET,
+  it("bounds active server sessions and makes close and revocation idempotent", async () => {
+    const auth = await createOperatorAuth({
+      password: SETUP_SECRET,
       maximumActiveSessions: 2,
     });
     const first = auth.createSession();
@@ -617,6 +656,25 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     auth.close();
     auth.close();
     expect(auth.readSession(third.id)).toBeUndefined();
+  });
+
+  it("derives password verifiers asynchronously with a fresh 16-byte salt", async () => {
+    const randomBytes = vi.fn((size: number) =>
+      Uint8Array.from({ length: size }, (_value, index) => index + 1),
+    );
+    const auth = await createOperatorAuth({
+      password: SETUP_SECRET,
+      randomBytes,
+    });
+
+    expect(randomBytes).toHaveBeenNthCalledWith(1, 16);
+    const valid = auth.authenticatePassword(SETUP_SECRET);
+    expect(valid).toBeInstanceOf(Promise);
+    await expect(valid).resolves.toBe(true);
+    await expect(auth.authenticatePassword("incorrect password")).resolves.toBe(
+      false,
+    );
+    auth.close();
   });
 
   it("removes the legacy dashboard header from production HTTP source", async () => {

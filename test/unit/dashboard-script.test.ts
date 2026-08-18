@@ -269,7 +269,7 @@ describe("dashboard authentication popup", () => {
 });
 
 describe("operator login script", () => {
-  it("clears the setup code immediately and never uses browser persistence", async () => {
+  it("clears the password immediately and never uses browser persistence", async () => {
     const script = renderOperatorLoginScript();
     expect(script).not.toContain("localStorage");
     expect(script).not.toContain("sessionStorage");
@@ -288,7 +288,7 @@ describe("operator login script", () => {
       },
     );
     const input = {
-      value: "submitted-dashboard-setup-secret",
+      value: "submitted-agent-password",
       focus: vi.fn(),
       removeAttribute: vi.fn(),
       setAttribute: vi.fn(),
@@ -315,7 +315,7 @@ describe("operator login script", () => {
       document: {
         getElementById(id: string) {
           if (id === "operator-login") return form;
-          if (id === "setup-secret") return input;
+          if (id === "password") return input;
           if (id === "login-error") return error;
           return null;
         },
@@ -332,21 +332,31 @@ describe("operator login script", () => {
     expect(form.setAttribute).toHaveBeenCalledWith("aria-busy", "true");
     expect(fetchImplementation).toHaveBeenCalledWith(
       "/api/operator/session",
-      expect.objectContaining({ credentials: "same-origin" }),
+      expect.objectContaining({
+        credentials: "same-origin",
+        body: JSON.stringify({ password: "submitted-agent-password" }),
+      }),
     );
+    expect(script).not.toContain("setupSecret");
 
     resolveFetch!({ ok: false, status: 403 });
     await pendingSubmission;
-    expect(error.textContent).toBe("That setup code was not accepted.");
+    expect(error.textContent).toBe("That password was not accepted.");
     expect(input.setAttribute).toHaveBeenCalledWith("aria-invalid", "true");
     expect(button.disabled).toBe(false);
     expect(form.removeAttribute).toHaveBeenCalledWith("aria-busy");
     expect(input.focus).toHaveBeenCalledOnce();
   });
 
-  it("associates login errors with the setup-code input", () => {
+  it("associates login errors with the password input", () => {
     const page = renderOperatorLoginPage();
+    expect(page).toContain("<h1>Open your agent</h1>");
+    expect(page).toContain("Enter the agent password you chose when deploying.");
+    expect(page).toContain(">Agent password</label>");
+    expect(page).toContain('name="password"');
     expect(page).toContain('aria-describedby="login-error"');
+    expect(page).not.toContain("environment variables");
+    expect(page).not.toContain("service settings");
     expect(page).not.toContain("Photon");
     expect(page).not.toContain("ChatGPT");
   });

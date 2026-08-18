@@ -21,6 +21,12 @@ const STALE_USER_PHRASES = [
   "after the composed entrypoint exists",
   "integration owner must wire",
 ];
+const FORBIDDEN_PUBLIC_ONBOARDING_PHRASES = [
+  "Deployment setup code",
+  "Web Service > Environment",
+  "reveal DASHBOARD_SETUP_SECRET",
+  "private code from your service environment",
+];
 
 function walkFiles(directory) {
   const files = [];
@@ -214,6 +220,23 @@ function stalePhraseFailures() {
   return failures;
 }
 
+function publicOnboardingFailures() {
+  const files = [
+    join(REPOSITORY_ROOT, "README.md"),
+    join(REPOSITORY_ROOT, "docs", "DEPLOYMENT.md"),
+  ];
+  const failures = [];
+  for (const file of files) {
+    const source = readFileSync(file, "utf8").toLowerCase();
+    for (const phrase of FORBIDDEN_PUBLIC_ONBOARDING_PHRASES) {
+      if (source.includes(phrase.toLowerCase())) {
+        failures.push(`${relative(REPOSITORY_ROOT, file)} contains forbidden public-onboarding phrase: ${phrase}`);
+      }
+    }
+  }
+  return failures;
+}
+
 function llmsEntrypointFailures() {
   const source = readFileSync(join(REPOSITORY_ROOT, "docs/llms.txt"), "utf8");
   const required = [
@@ -243,6 +266,7 @@ export function runDocumentationChecks() {
     ...deployButtonFailures(),
     ...environmentExampleFailures(publicVariables),
     ...stalePhraseFailures(),
+    ...publicOnboardingFailures(),
     ...llmsEntrypointFailures(),
   ];
   if (failures.length > 0) {

@@ -31,8 +31,8 @@ afterEach(async () => {
   operatorAuth = undefined;
 });
 
-function createTestOperatorAuth(): OperatorAuth {
-  operatorAuth = createOperatorAuth({ setupSecret: SETUP_SECRET });
+async function createTestOperatorAuth(): Promise<OperatorAuth> {
+  operatorAuth = await createOperatorAuth({ password: SETUP_SECRET });
   return operatorAuth;
 }
 
@@ -65,7 +65,7 @@ async function authenticateOperator(base: string): Promise<AuthenticatedSession>
   const response = await fetch(`${base}/api/operator/session`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ setupSecret: SETUP_SECRET }),
+    body: JSON.stringify({ password: SETUP_SECRET }),
   });
   expect(response.status).toBe(201);
   const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
@@ -122,7 +122,7 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity({ state: "not_configured" }),
       spectrum,
     });
@@ -137,7 +137,7 @@ describe("health and readiness endpoints", () => {
 
     const loginPage = await fetch(`${base}/agent/dashboard`);
     const loginHtml = await loginPage.text();
-    expect(loginHtml).toContain("Deployment setup code");
+    expect(loginHtml).toContain("Agent password");
     expect(loginHtml).not.toContain("Photon");
     expect(loginHtml).not.toContain("ChatGPT");
     expect(loginHtml).not.toContain("CODEX_AUTH_MISSING");
@@ -231,7 +231,7 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: identity,
       spectrum,
     });
@@ -335,7 +335,7 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -398,7 +398,7 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -467,7 +467,7 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -520,7 +520,7 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -589,7 +589,7 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
@@ -635,7 +635,7 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
       photonSetup,
@@ -674,7 +674,7 @@ describe("health and readiness endpoints", () => {
       port: 0,
       host: "127.0.0.1",
       readiness,
-      operatorAuth: createTestOperatorAuth(),
+      operatorAuth: await createTestOperatorAuth(),
       deploymentIdentity: deploymentIdentity(),
       spectrum,
     });

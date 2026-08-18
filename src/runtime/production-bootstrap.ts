@@ -29,6 +29,7 @@ import {
 import {
   loadEnvironment,
   modelProfilesFromEnvironment,
+  operatorPasswordFromEnvironment,
   type Environment,
 } from "../config/env.js";
 import { loadPromptBundle } from "../config/prompt-bundle.js";
@@ -135,12 +136,12 @@ function required<Value>(value: Value | undefined, stage: string): Value {
 export async function createProductionRuntime(): Promise<ProductionRuntime> {
   // Configuration and protected values
   const environment = loadEnvironment();
-  if (environment.DASHBOARD_SETUP_SECRET === undefined) {
+  const operatorPassword = operatorPasswordFromEnvironment(environment);
+  if (operatorPassword === undefined) {
     throw new Error(
-      "DASHBOARD_SETUP_SECRET is required to start operator authentication.",
+      "An operator password is required to start operator authentication.",
     );
   }
-  const dashboardSetupSecret = environment.DASHBOARD_SETUP_SECRET;
   const cipher = createDataCipher(environment.APP_ENCRYPTION_KEY);
   const photonCredentialsStore = new PhotonCredentialsStore({
     directory: resolve(dirname(environment.CODEX_HOME), "photon"),
@@ -163,7 +164,10 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   const protectedValues: string[] = [
     environment.DATABASE_URL,
     environment.APP_ENCRYPTION_KEY,
-    dashboardSetupSecret,
+    operatorPassword,
+    ...(environment.DASHBOARD_SETUP_SECRET === undefined
+      ? []
+      : [environment.DASHBOARD_SETUP_SECRET]),
     ...(environment.OWNER_PHONE_NUMBER === undefined
       ? []
       : [environment.OWNER_PHONE_NUMBER]),
@@ -197,7 +201,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       protectedValues.push(value);
     }
   };
-  const operatorAuth = createOperatorAuth({ setupSecret: dashboardSetupSecret });
+  const operatorAuth = await createOperatorAuth({ password: operatorPassword });
   const inFlightChains = new InFlightChainRegistry();
   const interruptSupersededChains = (chainIds: readonly string[]): void => {
     const abortedWorkCount = inFlightChains.cancel(chainIds);

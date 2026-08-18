@@ -1,6 +1,7 @@
 import {
   createHash,
   randomBytes as createRandomBytes,
+  scrypt,
   timingSafeEqual,
 } from "node:crypto";
 
@@ -12,7 +13,7 @@ export interface OperatorSession {
 }
 
 export interface OperatorAuth {
-  authenticateSetupSecret(secret: string): boolean;
+  authenticatePassword(password: string): Promise<boolean>;
   createSession(): OperatorSession;
   readSession(sessionId: string): OperatorSession | undefined;
   revokeSession(sessionId: string): void;
@@ -20,20 +21,18 @@ export interface OperatorAuth {
 }
 
 export interface OperatorAuthOptions {
-  setupSecret: string;
+  password: string;
   sessionTtlMs?: number;
   maximumActiveSessions?: number;
-  failedAttemptLimit?: number;
-  failedAttemptWindowMs?: number;
   now?: () => number;
   randomBytes?: (size: number) => Uint8Array;
 }
 
 const DEFAULT_SESSION_TTL_MS = 8 * 60 * 60 * 1_000;
 const DEFAULT_MAXIMUM_ACTIVE_SESSIONS = 8;
-const DEFAULT_FAILED_ATTEMPT_LIMIT = 5;
-const DEFAULT_FAILED_ATTEMPT_WINDOW_MS = 15 * 60 * 1_000;
 const RANDOM_VALUE_BYTES = 32;
+const PASSWORD_SALT_BYTES = 16;
+const PASSWORD_VERIFIER_BYTES = 64;
 
 function positiveInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
@@ -42,12 +41,27 @@ function positiveInteger(value: number, label: string): number {
   return value;
 }
 
-function secretDigest(value: string): Buffer {
+function textDigest(value: string): Buffer {
   return createHash("sha256").update(value, "utf8").digest();
 }
 
 function constantTimeTextEqual(left: string, rightDigest: Buffer): boolean {
-  return timingSafeEqual(secretDigest(left), rightDigest);
+  return timingSafeEqual(textDigest(left), rightDigest);
+}
+
+function derivePasswordVerifier(
+  password: Buffer,
+  salt: Buffer,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, PASSWORD_VERIFIER_BYTES, (error, derivedKey) => {
+      if (error !== null) {
+        reject(error);
+        return;
+      }
+      resolve(derivedKey);
+    });
+  });
 }
 
 function cloneSession(session: OperatorSession): OperatorSession {
@@ -55,28 +69,23 @@ function cloneSession(session: OperatorSession): OperatorSession {
 }
 
 class InMemoryOperatorAuth implements OperatorAuth {
-  readonly #setupSecretDigest: Buffer;
+  readonly #passwordSalt: Buffer;
+  readonly #passwordVerifier: Buffer;
   readonly #sessionTtlMs: number;
   readonly #maximumActiveSessions: number;
-  readonly #failedAttemptLimit: number;
-  readonly #failedAttemptWindowMs: number;
   readonly #now: () => number;
   readonly #randomBytes: (size: number) => Uint8Array;
   readonly #sessions = new Map<string, OperatorSession>();
   readonly #cleanupTimer: NodeJS.Timeout;
-  #failedAttemptTimes: number[] = [];
   #closed = false;
 
-  public constructor(options: OperatorAuthOptions) {
-    if (
-      typeof options.setupSecret !== "string" ||
-      Buffer.byteLength(options.setupSecret.trim(), "utf8") < 32
-    ) {
-      throw new Error(
-        "DASHBOARD_SETUP_SECRET must contain at least 32 bytes of secret material.",
-      );
-    }
-    this.#setupSecretDigest = secretDigest(options.setupSecret);
+  public constructor(
+    options: Omit<OperatorAuthOptions, "password">,
+    passwordSalt: Buffer,
+    passwordVerifier: Buffer,
+  ) {
+    this.#passwordSalt = passwordSalt;
+    this.#passwordVerifier = passwordVerifier;
     this.#sessionTtlMs = positiveInteger(
       options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
       "sessionTtlMs",
@@ -84,14 +93,6 @@ class InMemoryOperatorAuth implements OperatorAuth {
     this.#maximumActiveSessions = positiveInteger(
       options.maximumActiveSessions ?? DEFAULT_MAXIMUM_ACTIVE_SESSIONS,
       "maximumActiveSessions",
-    );
-    this.#failedAttemptLimit = positiveInteger(
-      options.failedAttemptLimit ?? DEFAULT_FAILED_ATTEMPT_LIMIT,
-      "failedAttemptLimit",
-    );
-    this.#failedAttemptWindowMs = positiveInteger(
-      options.failedAttemptWindowMs ?? DEFAULT_FAILED_ATTEMPT_WINDOW_MS,
-      "failedAttemptWindowMs",
     );
     this.#now = options.now ?? Date.now;
     this.#randomBytes = options.randomBytes ?? createRandomBytes;
@@ -104,27 +105,23 @@ class InMemoryOperatorAuth implements OperatorAuth {
     this.#cleanupTimer.unref();
   }
 
-  public authenticateSetupSecret(secret: string): boolean {
-    if (this.#closed || typeof secret !== "string") {
+  public async authenticatePassword(password: string): Promise<boolean> {
+    if (this.#closed || typeof password !== "string") {
       return false;
     }
-    const now = this.#now();
-    this.#removeExpiredFailures(now);
-    const authenticated = constantTimeTextEqual(
-      secret,
-      this.#setupSecretDigest,
-    );
-    if (authenticated) {
-      // A correct high-entropy secret is not a failed attempt. Let it clear the
-      // failure window so anonymous failures cannot lock out the operator.
-      this.#failedAttemptTimes = [];
-      return true;
+    const submittedPassword = Buffer.from(password, "utf8");
+    password = "";
+    let submittedVerifier: Buffer | undefined;
+    try {
+      submittedVerifier = await derivePasswordVerifier(
+        submittedPassword,
+        this.#passwordSalt,
+      );
+      return timingSafeEqual(submittedVerifier, this.#passwordVerifier);
+    } finally {
+      submittedPassword.fill(0);
+      submittedVerifier?.fill(0);
     }
-
-    if (this.#failedAttemptTimes.length < this.#failedAttemptLimit) {
-      this.#failedAttemptTimes.push(now);
-    }
-    return false;
   }
 
   public createSession(): OperatorSession {
@@ -184,7 +181,8 @@ class InMemoryOperatorAuth implements OperatorAuth {
     this.#closed = true;
     clearInterval(this.#cleanupTimer);
     this.#sessions.clear();
-    this.#failedAttemptTimes = [];
+    this.#passwordSalt.fill(0);
+    this.#passwordVerifier.fill(0);
   }
 
   #removeExpiredSessions(now: number): void {
@@ -194,24 +192,36 @@ class InMemoryOperatorAuth implements OperatorAuth {
       }
     }
   }
-
-  #removeExpiredFailures(now: number): void {
-    const cutoff = now - this.#failedAttemptWindowMs;
-    this.#failedAttemptTimes = this.#failedAttemptTimes.filter(
-      (attemptedAt) => attemptedAt > cutoff,
-    );
-  }
 }
 
-export function createOperatorAuth(
+export async function createOperatorAuth(
   options: OperatorAuthOptions,
-): OperatorAuth {
-  return new InMemoryOperatorAuth(options);
+): Promise<OperatorAuth> {
+  if (
+    typeof options.password !== "string" ||
+    [...options.password].length < 15 ||
+    [...options.password].length > 128
+  ) {
+    throw new Error("Operator password must contain 15 to 128 characters.");
+  }
+  const randomBytes = options.randomBytes ?? createRandomBytes;
+  const passwordSalt = Buffer.from(randomBytes(PASSWORD_SALT_BYTES));
+  const configuredPassword = Buffer.from(options.password, "utf8");
+  let passwordVerifier: Buffer;
+  try {
+    passwordVerifier = await derivePasswordVerifier(
+      configuredPassword,
+      passwordSalt,
+    );
+  } finally {
+    configuredPassword.fill(0);
+  }
+  return new InMemoryOperatorAuth(options, passwordSalt, passwordVerifier);
 }
 
 export function constantTimeCsrfTokenEqual(
   submittedToken: string,
   expectedToken: string,
 ): boolean {
-  return constantTimeTextEqual(submittedToken, secretDigest(expectedToken));
+  return constantTimeTextEqual(submittedToken, textDigest(expectedToken));
 }

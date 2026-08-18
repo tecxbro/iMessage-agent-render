@@ -5,7 +5,7 @@ export function renderOperatorLoginPage(): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Deployment setup</title>
+  <title>Open your agent</title>
   <style>
     :root { color-scheme: light; --bg: #fbfbfa; --surface: #fff; --text: #111110; --muted: #70706d; --line: #e7e7e4; --danger: #9b3028; }
     * { box-sizing: border-box; }
@@ -24,11 +24,11 @@ export function renderOperatorLoginPage(): string {
 </head>
 <body>
   <main>
-    <h1>Deployment setup</h1>
-    <p>Enter the private code from your service environment.</p>
+    <h1>Open your agent</h1>
+    <p>Enter the agent password you chose when deploying.</p>
     <form id="operator-login" autocomplete="off">
-      <label for="setup-secret">Deployment setup code</label>
-      <input id="setup-secret" name="setupSecret" type="password" required autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="login-error">
+      <label for="password">Agent password</label>
+      <input id="password" name="password" type="password" required autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="login-error">
       <button type="submit">Continue</button>
       <p id="login-error" role="alert" aria-live="polite"></p>
     </form>
@@ -41,13 +41,13 @@ export function renderOperatorLoginPage(): string {
 export function renderOperatorLoginScript(): string {
   return `(() => {
   const form = document.getElementById("operator-login");
-  const input = document.getElementById("setup-secret");
+  const input = document.getElementById("password");
   const button = form && form.querySelector('button[type="submit"]');
   const error = document.getElementById("login-error");
   if (!form || !input || !button || !error) return;
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    let setupSecret = input.value;
+    let password = input.value;
     input.value = "";
     button.disabled = true;
     button.textContent = "Checking…";
@@ -59,7 +59,7 @@ export function renderOperatorLoginScript(): string {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ setupSecret })
+        body: JSON.stringify({ password })
       });
       if (response.ok) {
         window.location.replace("/agent/dashboard");
@@ -67,13 +67,13 @@ export function renderOperatorLoginScript(): string {
       }
       error.textContent = response.status === 429
         ? "Too many attempts. Wait before trying again."
-        : "That setup code was not accepted.";
+        : "That password was not accepted.";
       input.setAttribute("aria-invalid", "true");
     } catch {
-      error.textContent = "Setup could not be reached. Try again.";
+      error.textContent = "Your agent could not be reached. Try again.";
       input.setAttribute("aria-invalid", "true");
     } finally {
-      setupSecret = "";
+      password = "";
       button.disabled = false;
       button.textContent = "Continue";
       form.removeAttribute("aria-busy");

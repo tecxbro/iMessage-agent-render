@@ -92,9 +92,9 @@ These boundaries are non-interchangeable:
 - Unknown senders must be rejected before any model or child-process call.
 - Model, repository, memory, web, and tool content are untrusted data. A model cannot broaden its permission profile or approve an action.
 
-The HTTP setup surface has its own operator boundary. `DASHBOARD_SETUP_SECRET` is a private production configuration value generated in the Render Web Service environment. A successful constant-time secret check creates an opaque, server-side session and a session-bound CSRF token. The store permits at most eight active sessions, expires each after eight hours, cleans up stale sessions, and invalidates every session on restart. It is intentionally not a durable identity store.
+The HTTP setup surface has its own operator boundary. `AGENT_PASSWORD` is chosen privately by the deployer during initial Blueprint creation; the public application never lets a first visitor create or replace it. At process start the service derives an in-memory verifier with asynchronous scrypt and a fresh random 16-byte salt. Login derives the submitted verifier, compares equal-length buffers in constant time, and creates an opaque server-side session with a session-bound CSRF token. The store permits at most eight active sessions, expires each after eight hours, cleans up stale sessions, and invalidates every session on restart. It is intentionally not a durable identity store.
 
-The browser receives only an opaque session cookie with `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` in production, and no `Domain`. The setup secret is never stored in that cookie, HTML, JavaScript, browser storage, or a URL. Owner status and setup use this operator boundary; writes also require the session-bound CSRF token and same-origin validation. Public status objects and rendered pages contain only the masked owner phone.
+The browser receives only an opaque session cookie with `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` in production, and no `Domain`. The password is never stored in that cookie, HTML, JavaScript, browser storage, or a URL. Owner status and setup use this operator boundary; writes also require the session-bound CSRF token and same-origin validation. Public status objects and rendered pages contain only the masked owner phone.
 
 `DeploymentIdentityController` can exist before PostgreSQL is connected. After migrations, `OperationalRepository.ensureDeployment()` creates the deployment and primary owner without a channel identity, then the controller binds to the repository. An active database identity wins; only when none exists may one valid legacy environment phone be imported. Stored Photon metadata is never an authorization source. The controller serializes replacements, exposes masked state, and notifies activation only after persistence succeeds.
 
@@ -133,7 +133,7 @@ sequenceDiagram
 The ordered startup stages in `startAgentService()` are:
 
 1. listen on HTTP;
-2. validate configuration, including production dashboard-secret material;
+2. validate configuration, including production operator-password material;
 3. prepare the two persistent directories and Codex config;
 4. connect PostgreSQL;
 5. apply or verify migrations;
@@ -275,7 +275,7 @@ The current `src/server.ts` starts this health server first, runs each operation
 | `POST /api/setup/owner` | Live operator session plus CSRF and same-origin checks; exact size-limited E.164 JSON |
 | Photon setup start, ChatGPT setup start, `DELETE /api/operator/session` | Live operator session plus session-bound CSRF token, same-origin `Origin`, and fetch-metadata validation |
 
-The server rejects unexpected JSON fields at route boundaries. The public `x-agent-setup` convention is removed; possession of dashboard JavaScript never proves authorization. Setup-secret, session, CSRF, and device-code values are excluded from logs.
+The server rejects unexpected JSON fields at route boundaries. The public `x-agent-setup` convention is removed; possession of dashboard JavaScript never proves authorization. Agent-password, session, CSRF, and device-code values are excluded from logs.
 
 ## 9. Failure and recovery contract
 

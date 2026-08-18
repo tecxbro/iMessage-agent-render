@@ -12,7 +12,7 @@ You need:
 
 - a Photon account for Spectrum Cloud iMessage setup;
 - the owner's E.164 phone number allowed to message the agent;
-- access to the Render service Environment page to retrieve its generated deployment setup code;
+- an agent password of 15–128 characters that you choose during deployment;
 - either a ChatGPT account with Codex device login enabled or an OpenAI API key; and
 - an optional Supermemory API key if you want semantic memory.
 
@@ -21,8 +21,8 @@ Review current Render pricing before deploying. The Blueprint creates paid resou
 ## Deploy in five steps
 
 1. Click **Deploy to Render** above.
-2. Approve the Blueprint. New deployments ask for zero user-supplied environment values; Render creates the Web Service, PostgreSQL database, persistent disk, application encryption key, and dashboard setup secret.
-3. Open **Web Service > Environment**, reveal `DASHBOARD_SETUP_SECRET`, and use it as the **Deployment setup code** at the Web Service URL.
+2. Choose an agent password when Render asks for `AGENT_PASSWORD`. This is the only value the Blueprint asks you to supply.
+3. Open the deployed agent URL and enter that password.
 4. After login, enter your personal phone number, authenticate Photon, then connect ChatGPT. If you choose API-key mode instead, set `CODEX_AUTH_MODE=api_key` and add `OPENAI_API_KEY` as a Render secret.
 5. Confirm `/readyz` returns HTTP 200, then text the Photon-assigned number shown at completion from the configured owner phone.
 
@@ -30,9 +30,9 @@ Render keeps auto-deploys off for template-created services. Deploy reviewed upd
 
 ## Authenticate to the dashboard
 
-Render generates `DASHBOARD_SETUP_SECRET` inside the private Web Service environment. It is not a Blueprint prompt and is never stored in this repository. People who have access to the Render service can find it under **Web Service > Environment** and enter it only in the deployed page's **Deployment setup code** field.
+Render collects `AGENT_PASSWORD` privately during initial Blueprint creation, stores it as a secret, and injects it into the service. The public application never offers a first-visitor password-creation flow, so an anonymous browser cannot claim a newly deployed agent.
 
-A successful login creates an eight-hour server-side operator session; the service holds at most eight active sessions. The browser receives an `HttpOnly`, `SameSite=Strict`, `Path=/` cookie that is also `Secure` in production; the setup secret itself is not stored in the cookie or browser storage. Protected setup changes require a session-bound CSRF token and same-origin request. Logout revokes the session, and a service restart invalidates all dashboard sessions.
+The service verifies the password with scrypt and a constant-time comparison. A successful login creates an eight-hour server-side operator session; the service holds at most eight active sessions. The browser receives an opaque `HttpOnly`, `SameSite=Strict`, `Path=/` cookie that is also `Secure` in production; the password is not stored in the cookie or browser storage. Protected setup changes require a session-bound CSRF token and same-origin request. Logout revokes the session, and a service restart invalidates all dashboard sessions.
 
 The authenticated dashboard collects the owner's E.164 phone number before Photon setup. That personal number is the only iMessage sender authorized to use the agent and is also registered during Photon owner provisioning. The different Photon-assigned number shown at completion is the destination the owner texts. Replacing the owner number in the dashboard revokes the previous owner identity before the new identity can authorize messages.
 
@@ -43,7 +43,7 @@ The authenticated dashboard collects the owner's E.164 phone number before Photo
 The default `CODEX_AUTH_MODE` is `chatgpt`.
 
 1. Open the deployed **Web Service** URL in a trusted browser.
-2. Enter the Render-generated deployment setup code.
+2. Enter the agent password you chose during deployment.
 3. Save the owner phone and finish Photon setup first, then select **Connect ChatGPT**.
 4. Open the displayed device-auth URL, sign in, and enter the one-time code.
 5. Keep the dashboard open while it verifies the login and prepares Codex. The dashboard advances automatically when each stage is ready.
@@ -74,7 +74,7 @@ curl --silent --show-error "https://<service-host>/readyz"
 - `/readyz` returning 200 means owner identity, critical storage, PostgreSQL, migration, queue, Codex, and Spectrum checks are ready.
 - `/readyz` returning 503 means setup is incomplete or a dependency is degraded. Its public response is limited to safe aggregate readiness state.
 
-The root URL is an operator entry point, not an iMessage chat or Photon enrollment link. Before authentication it displays only the deployment setup-code form. Provider status, device codes, verification URLs, the assigned number, owner information, detailed readiness, and provider errors remain inside the authenticated dashboard.
+The root URL is an operator entry point, not an iMessage chat or Photon enrollment link. Before authentication it displays only the agent-password form. Provider status, device codes, verification URLs, the assigned number, owner information, detailed readiness, and provider errors remain inside the authenticated dashboard.
 
 ## Send the first iMessage
 
@@ -96,8 +96,8 @@ The checked-in [`render.yaml`](./render.yaml) creates:
 - one 1 GB persistent disk mounted at `/var/data`;
 - `/var/data/codex` for Codex credentials and sessions;
 - `/var/data/workspaces` for agent workspaces;
+- one user-chosen agent password collected during initial Blueprint creation;
 - a generated application encryption key;
-- a generated dashboard setup secret available only through the private Web Service environment;
 - a dynamic `DATABASE_URL` from the attached database;
 - `npm run db:migrate` before each deploy; and
 - `/healthz` as Render's liveness check.
@@ -141,7 +141,7 @@ npm ci
 cp .env.example .env
 ```
 
-Edit `.env`, then run this command separately for `APP_ENCRYPTION_KEY` and `DASHBOARD_SETUP_SECRET` so they use independent values:
+Edit `.env`, choose a local `AGENT_PASSWORD` of 15–128 characters, then generate an independent `APP_ENCRYPTION_KEY`:
 
 ```bash
 openssl rand -base64 32

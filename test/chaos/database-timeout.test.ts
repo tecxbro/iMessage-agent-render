@@ -91,8 +91,8 @@ describe("PostgreSQL timeout recovery", () => {
       host: "127.0.0.1",
       installSignalHandlers: false,
       onStartupFailure: startupFailure,
-      operatorAuth: createOperatorAuth({
-        setupSecret: "test-dashboard-setup-secret-material-1234567890",
+      operatorAuth: await createOperatorAuth({
+        password: "test-dashboard-setup-secret-material-1234567890",
       }),
       bootstrap: {
         prepareConfiguration: async () => undefined,

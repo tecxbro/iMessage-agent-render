@@ -33,8 +33,8 @@ describe("production executable entrypoint", () => {
     const stage = (name: string) => async (): Promise<void> => {
       stages.push(name);
     };
-    const operatorAuth = createOperatorAuth({
-      setupSecret: "test-dashboard-setup-secret-material-1234567890",
+    const operatorAuth = await createOperatorAuth({
+      password: "test-dashboard-setup-secret-material-1234567890",
     });
     const closeOperatorAuth = vi.spyOn(operatorAuth, "close");
 
@@ -97,7 +97,7 @@ describe("production executable entrypoint", () => {
       `http://127.0.0.1:${address.port}/agent/dashboard`,
     );
     const deploymentPage = await deployment.text();
-    expect(deploymentPage).toContain("Deployment setup code");
+    expect(deploymentPage).toContain("Agent password");
     expect(deploymentPage).not.toContain("Photon");
     expect(deploymentPage).not.toContain("ChatGPT");
 

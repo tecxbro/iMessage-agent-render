@@ -60,6 +60,7 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
       "spectrum-private-secret",
       "memory-private-secret",
       "encryption-private-secret",
+      "agent-password-private-secret",
       "dashboard-setup-private-secret",
     ];
     const child = buildCodexChildEnvironment({
@@ -70,7 +71,8 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
         SPECTRUM_PROJECT_SECRET: protectedValues[1],
         SUPERMEMORY_API_KEY: protectedValues[2],
         APP_ENCRYPTION_KEY: protectedValues[3],
-        DASHBOARD_SETUP_SECRET: protectedValues[4],
+        AGENT_PASSWORD: protectedValues[4],
+        DASHBOARD_SETUP_SECRET: protectedValues[5],
         AWS_SECRET_ACCESS_KEY: "cloud-private-secret",
       },
       codexHome,
@@ -189,6 +191,7 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
 
   it("redacts owner handles, operator credentials, and provider codes from real logger output", () => {
     const protectedCredential = "provider-credential-with-unknown-format";
+    const agentPassword = "agent-password-that-must-not-be-logged";
     const setupSecret = "dashboard-setup-secret-that-must-not-be-logged";
     const sessionId = "operator-session-id-that-must-not-be-logged";
     const csrfToken = "session-csrf-token-that-must-not-be-logged";
@@ -216,13 +219,14 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
     const logger = createLogger(
       {
         base: null,
-        protectedValues: [protectedCredential, setupSecret],
+        protectedValues: [protectedCredential, agentPassword, setupSecret],
       },
       { write: (chunk: string) => (output.push(chunk), true) },
     );
     logger.error(
       {
         providerDetail: protectedCredential,
+        agentPassword,
         setupSecret,
         operatorSessionId: sessionId,
         csrfToken,
@@ -230,11 +234,12 @@ describe("permission, environment, secret, redaction, and abuse boundaries", () 
         chatGptDeviceCode,
         verificationUrl,
       },
-      `owner@example.com ${setupSecret}`,
+      `owner@example.com ${agentPassword} ${setupSecret}`,
     );
     const logOutput = output.join("");
     for (const privateValue of [
       protectedCredential,
+      agentPassword,
       setupSecret,
       sessionId,
       csrfToken,

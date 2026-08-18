@@ -145,6 +145,13 @@ const dashboardSetupSecretSchema = z
     "DASHBOARD_SETUP_SECRET must be a high-entropy 32-byte value encoded as base64, base64url, or 64 hexadecimal characters",
   );
 
+const agentPasswordSchema = z
+  .string({ error: "AGENT_PASSWORD must be a password" })
+  .refine(
+    (value) => [...value].length >= 15 && [...value].length <= 128,
+    "AGENT_PASSWORD must be between 15 and 128 characters",
+  );
+
 const rawEnvironmentSchema = z
   .object({
     // Required infrastructure and process values
@@ -179,6 +186,7 @@ const rawEnvironmentSchema = z
       z.uuid("DEPLOYMENT_ID must be a UUID"),
     ),
     APP_ENCRYPTION_KEY: encryptionKeySchema,
+    AGENT_PASSWORD: optionalText(agentPasswordSchema),
     DASHBOARD_SETUP_SECRET: optionalText(dashboardSetupSecretSchema),
 
     // Codex authentication and isolated storage
@@ -281,12 +289,25 @@ const rawEnvironmentSchema = z
     // an unsafe combined authentication, concurrency, or storage layout.
     if (
       environment.NODE_ENV === "production" &&
+      environment.AGENT_PASSWORD === undefined &&
       environment.DASHBOARD_SETUP_SECRET === undefined
     ) {
       context.addIssue({
         code: "custom",
-        path: ["DASHBOARD_SETUP_SECRET"],
-        message: "DASHBOARD_SETUP_SECRET is required in production",
+        path: ["AGENT_PASSWORD"],
+        message:
+          "AGENT_PASSWORD or DASHBOARD_SETUP_SECRET is required in production",
+      });
+    }
+
+    if (
+      environment.AGENT_PASSWORD !== undefined &&
+      environment.AGENT_PASSWORD === environment.APP_ENCRYPTION_KEY
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["AGENT_PASSWORD"],
+        message: "AGENT_PASSWORD must not reuse APP_ENCRYPTION_KEY",
       });
     }
 
@@ -374,6 +395,15 @@ const rawEnvironmentSchema = z
   }));
 
 export type Environment = z.infer<typeof rawEnvironmentSchema>;
+
+export function operatorPasswordFromEnvironment(
+  environment: Pick<
+    Environment,
+    "AGENT_PASSWORD" | "DASHBOARD_SETUP_SECRET"
+  >,
+): string | undefined {
+  return environment.AGENT_PASSWORD ?? environment.DASHBOARD_SETUP_SECRET;
+}
 
 export class EnvironmentValidationError extends Error {
   public readonly issues: readonly z.core.$ZodIssue[];

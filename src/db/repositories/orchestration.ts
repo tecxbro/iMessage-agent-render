@@ -90,6 +90,13 @@ export class OrchestrationRepository {
     return this.taskExecution.claimTask(payload);
   }
 
+  public denyTaskCodexStart(input: {
+    payload: TaskExecutePayload;
+    errorCode: string;
+  }): Promise<TaskTerminalOutcome> {
+    return this.taskExecution.denyTaskCodexStart(input);
+  }
+
   public completeTask(input: {
     payload: TaskExecutePayload;
     result: ExecutionResult;
@@ -117,6 +124,15 @@ export class OrchestrationRepository {
     limit = 100,
   ): Promise<TaskExecutePayload[]> {
     return this.recovery.findRunnableTaskPayloads(limit);
+  }
+
+  public denyChainCodexStart(input: {
+    chainId: string;
+    expectedChainVersion: number;
+    expectedState: "queued" | "executing";
+    errorCode: string;
+  }): Promise<boolean> {
+    return this.recovery.denyChainCodexStart(input);
   }
 
   public requeueStaleRunningTasks(

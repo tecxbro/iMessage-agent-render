@@ -19,7 +19,7 @@ Expected composed-service states:
 
 - `/healthz` is HTTP 200 whenever the Node process can serve diagnostics.
 - `/readyz` is HTTP 200 only when every critical component is `ok`.
-- `/readyz` is HTTP 503 during shutdown, missing owner setup, missing/expired Codex auth, database failure, migration/queue failure, invalid disk/workspace storage, or Spectrum disconnect.
+- `/readyz` is HTTP 503 during shutdown, missing owner setup, a Photon installation not validated for the current owner revision, missing/expired Codex auth, capability loss, database failure, migration/queue failure, invalid disk/workspace storage, or Spectrum disconnect.
 - Supermemory may be `disabled` or `degraded` without blocking the operational pipeline.
 
 The public readiness response includes detailed component state, bounded error codes, and remediation actions. The public dashboard also exposes setup status, active device codes and verification URLs, the assigned number, and masked owner state. Treat a raw owner phone, provider credential, database credential, message, unrestricted provider error, or private path in these responses as a security incident.
@@ -30,7 +30,7 @@ The dashboard has no login and is public to anyone who can reach the service URL
 
 The owner card shows either the setup form or only the masked active phone. The saved personal phone is the only authorized iMessage sender; the separately assigned Photon number is the destination shown at completion. The phone is entered in the dashboard and is not a fresh-deployment environment value.
 
-To replace the owner, open **Change phone number**. U.S. owners can enter a normal 10-digit number without `+1`; international owners select **Not in the U.S.?** and choose their country. Save the new value, then verify one message from the new owner plus rejection of the previous owner. The server stores normalized E.164, and the replacement transaction activates the new encrypted identity and revokes all prior owner-phone identities while leaving collaborator identities unchanged. Never place a phone in a URL, log, or support ticket.
+To replace the owner, open **Change phone number**. U.S. owners can enter a normal 10-digit number without `+1`; international owners select **Not in the U.S.?** and choose their country. Save the new value, then reconnect Photon for that owner revision and verify one message from the new owner plus rejection of the previous owner. The replacement transaction increments the owner revision, activates the new encrypted identity, revokes prior owner-phone identities, and invalidates the old Photon binding while leaving collaborator identities unchanged. Never place a phone in a URL, log, or support ticket.
 
 ## Deploy procedure
 
@@ -63,7 +63,7 @@ Render sends `SIGTERM` using its platform-managed shutdown delay for this disk-b
 5. PostgreSQL connections.
 6. HTTP listener.
 
-After restart, require reconciliation of undrained inbound messages, queued planning chains, and resumable outbound batches before readiness returns to 200. Verify no stale chain sends and no outbound cursor moves backward.
+After restart, require reconciliation of undrained inbound messages, queued planning chains, missing approval request/action jobs, resumable outbound batches, and unpublished memory curation candidates before readiness returns to 200. Queue workers are created once per process; only Spectrum intake is restarted by activation recovery. Verify no stale chain sends, no action executes twice, and no outbound cursor moves backward.
 
 ## Incident playbooks
 
@@ -78,7 +78,7 @@ npm run codex:login
 npm run codex:status
 ```
 
-Complete device login, verify `$CODEX_HOME/auth.json` remains mode `0600`, then restart and rerun capability probes.
+Complete device login, verify `$CODEX_HOME/auth.json` remains mode `0600`, then refresh model settings. One refresh must produce one catalog persistence and only the required effective-pair probe. Capability recovery should start exactly one Spectrum run.
 
 API-key mode: replace `OPENAI_API_KEY` in Render, restart, and rerun capability probes. Do not change `CODEX_AUTH_MODE` as a fallback unless that is an explicit operator decision.
 
@@ -86,7 +86,17 @@ API-key mode: replace `OPENAI_API_KEY` in Render, restart, and rerun capability 
 
 Symptoms: `/healthz` 200; public `/readyz` 503; Spectrum intake remains stopped; the public dashboard asks for an owner phone.
 
-For a fresh deployment, save the personal owner phone in the dashboard and continue to Photon. U.S. entry defaults to national format; international entry requires a selected country, and the server normalizes both to E.164. For an existing deployment, first verify whether `OWNER_PHONE_NUMBER`, the former long Render alias, or `AGENT_OWNER_HANDLES` is present. The runtime imports only one unambiguous E.164 value and never imports from Photon credentials. If multiple handles or an email-only handle caused migration-required state, open the dashboard and save the intended phone explicitly. Verify the masked status and an authorized message before manually removing old environment values.
+For a fresh deployment, save the personal owner phone in the dashboard and continue to Photon. U.S. entry defaults to national format; international entry requires a selected country, and the server normalizes both to E.164. For an existing deployment, first verify whether `OWNER_PHONE_NUMBER`, the former long Render alias, or `AGENT_OWNER_HANDLES` is present. The runtime imports only one unambiguous E.164 value and never imports owner identity from Photon credentials. A legacy Photon credential file may be imported into the durable installation record, but Spectrum remains blocked until the provider validates it for the current owner revision. If multiple handles or an email-only handle caused migration-required state, open the dashboard and save the intended phone explicitly. Verify the masked status, current-revision Photon connection, and an authorized message before manually removing old environment values.
+
+### Photon installation incomplete or stale
+
+Symptoms: `/healthz` 200; `/readyz` 503; the dashboard reports Photon setup required, reconnecting, or an owner-revision mismatch; Spectrum intake is stopped.
+
+1. Confirm the current masked owner is correct before starting setup.
+2. Resume the dashboard device flow; do not create a second installation while an operation is active.
+3. Wait for provider validation and owner registration to commit to PostgreSQL.
+4. Confirm the connected installation revision equals the current owner revision.
+5. Verify activation starts exactly one Spectrum run. If the owner changes again, repeat setup for the new revision.
 
 ### Spectrum disconnect
 
@@ -94,7 +104,7 @@ Symptoms: public `/readyz` 503; the public dashboard or private logs report `SPE
 
 1. Check Photon provider status and the Web Service's Spectrum credentials without printing them.
 2. Allow the bounded supervised reconnect policy to run.
-3. If exhausted, restart after provider recovery.
+3. If exhausted, the activation coordinator clears active ownership and schedules bounded recovery. Restart only after recovery remains exhausted or operator intervention is required.
 4. Verify reconciliation and route rehydration from persisted space GUID/route phone.
 5. Confirm one authorized DM and check for duplicate outbound parts.
 
@@ -113,13 +123,23 @@ Symptoms: `/healthz` 200; public `/readyz` 503; public readiness or private logs
 
 Symptoms: the public dashboard or private logs report memory recall unavailable/degraded; core readiness can remain healthy.
 
-This is the required operating policy. The dedicated memory-provider outage exercise has not been recorded as protected release evidence. Incidental fake-provider coverage in a broad offline suite is not accepted as outage validation.
+This is the required operating policy. Automated integration coverage verifies that each application retry uses a fresh abort signal and chaos coverage verifies durable candidate recovery after queue publication failure. A protected live-provider outage exercise is still separate release evidence.
 
 1. Do not stop operational messaging solely for memory unavailability.
 2. Verify planning used an empty memory context rather than stale cross-owner data.
 3. Leave projection jobs retryable; inspect redacted receipt/failure codes.
 4. After recovery, verify a bounded recall and one temporary add/search/delete smoke item in a test owner container.
 5. Never replay raw messages into Supermemory.
+
+### Approval or action job missing
+
+Symptoms: a task remains `needs_approval`, an approved action remains pending, or no request/execution job is visible after a queue outage.
+
+1. Do not create a replacement approval or manually edit the encrypted payload.
+2. Restore PostgreSQL and pg-boss, then restart or invoke normal reconciliation.
+3. Verify one `approval.request` job exists for each unresolved task and one `approval.execute` job exists for each pending action execution.
+4. Confirm the responder is the owner in the allowed space; collaborator approvals must remain rejected.
+5. Verify the stored idempotency key and terminal action state before considering any manual provider-side recovery.
 
 ### Persistent disk missing or invalid
 

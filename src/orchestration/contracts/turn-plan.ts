@@ -6,6 +6,7 @@ import type {
 import type { StatusHistoryEntry } from "../../messaging/status-policy.js";
 import type { TurnPlanPayload } from "../../queue/payloads.js";
 import type { ExecutionCapability } from "./capabilities.js";
+import type { QueuedAuthorizationReference } from "../../security/queued-authorization.js";
 
 export interface ActiveAgentContext {
   name: string;
@@ -19,6 +20,7 @@ export interface TurnPlanContext {
   spaceId: string;
   chainId: string;
   chainVersion: number;
+  authorizationReference?: QueuedAuthorizationReference;
   currentUserMessage: string;
   combinedTurnText: string;
   conversationHistory: readonly string[];

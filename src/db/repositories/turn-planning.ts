@@ -15,6 +15,7 @@ import type {
   TurnPlanRepositoryContract,
 } from "../../orchestration/contracts/turn-plan.js";
 import type { TurnPlanPayload } from "../../queue/payloads.js";
+import { CodexStartDeniedError } from "../../security/queued-authorization.js";
 import type { Database } from "../client.js";
 import {
   agentThreads,
@@ -165,12 +166,26 @@ export class TurnPlanningRepository
       deploymentId: envelope.deploymentId,
       ownerId,
       spaceId: envelope.spaceId,
+      chainId: envelope.chainId,
     };
+    const authorizationReference =
+      await this.options.authorizationReferences?.load(envelope.chainId);
+    if (
+      this.options.authorizationReferences !== undefined &&
+      (authorizationReference === undefined ||
+        authorizationReference.deploymentId !== envelope.deploymentId ||
+        authorizationReference.ownerId !== ownerId)
+    ) {
+      throw new CodexStartDeniedError("CODEX_START_AUTHORIZATION_INVALID");
+    }
 
     return {
       ...identity,
       chainId: envelope.chainId,
       chainVersion: envelope.chainVersion,
+      ...(authorizationReference === undefined
+        ? {}
+        : { authorizationReference }),
       currentUserMessage: newest.text,
       combinedTurnText,
       conversationHistory,
@@ -193,7 +208,7 @@ export class TurnPlanningRepository
   public commitFinal(
     input: PlanFinalCommitInput,
   ): Promise<{ outboundBatchId: string }> {
-    return commitFinalResponse(this.database, input, this.codec);
+    return commitFinalResponse(this.database, input, this.options, this.codec);
   }
 
   public async commitDelegation(
@@ -331,28 +346,43 @@ export class TurnPlanningRepository
 
   public async commitSilent(input: TurnPlanCommitBase): Promise<void> {
     const decision = interactionDecisionSchema.parse(input.decision);
-    const updated = await this.database
-      .update(chains)
-      .set({
-        state: "complete",
-        promptVersion: input.promptVersion,
-        decisionJson: this.codec.decisionForStorage(decision),
-        completedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(chains.id, input.payload.chainId),
-          eq(chains.version, input.payload.expectedChainVersion),
-          eq(chains.state, input.payload.expectedState),
-          isNull(chains.canceledAt),
-        ),
-      )
-      .returning({ id: chains.id });
-    if (updated.length !== 1) {
-      throw new Error(
-        "Silent completion rejected because the chain is stale, canceled, or no longer queued.",
-      );
-    }
+    await this.database.transaction(async (transaction) => {
+      const [chain] = await transaction
+        .update(chains)
+        .set({
+          state: "complete",
+          promptVersion: input.promptVersion,
+          decisionJson: this.codec.decisionForStorage(decision),
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(chains.id, input.payload.chainId),
+            eq(chains.version, input.payload.expectedChainVersion),
+            eq(chains.state, input.payload.expectedState),
+            isNull(chains.canceledAt),
+          ),
+        )
+        .returning({ id: chains.id, spaceId: chains.spaceId });
+      if (chain === undefined) {
+        throw new Error(
+          "Silent completion rejected because the chain is stale, canceled, or no longer queued.",
+        );
+      }
+      if (this.options.memoryCuration !== undefined) {
+        await this.options.memoryCuration.recordCandidatesInTransaction(
+          transaction,
+          {
+            chainId: input.payload.chainId,
+            ownerId: await ownerIdForChain(transaction, input.payload.chainId),
+            spaceId: chain.spaceId,
+            sourceStage: "direct",
+            sourceTaskId: null,
+            candidates: decision.memoryCandidates,
+          },
+        );
+      }
+    });
   }
 }

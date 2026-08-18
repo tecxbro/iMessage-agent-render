@@ -4,6 +4,7 @@ export interface OrchestrationIdentity {
   deploymentId: string;
   ownerId: string;
   spaceId: string;
+  chainId?: string;
 }
 
 export interface ExecutionCapability {

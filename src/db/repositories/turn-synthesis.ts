@@ -12,6 +12,7 @@ import type {
   TurnSynthesisRepositoryContract,
 } from "../../orchestration/contracts/turn-synthesis.js";
 import type { TurnSynthesizePayload } from "../../queue/payloads.js";
+import { CodexStartDeniedError } from "../../security/queued-authorization.js";
 import type { Database } from "../client.js";
 import {
   agentThreads,
@@ -98,6 +99,16 @@ export class TurnSynthesisRepository
     if (ownerId === undefined) {
       throw new Error("Synthesis could not resolve an authorized owner.");
     }
+    const authorizationReference =
+      await this.options.authorizationReferences?.load(chain.chainId);
+    if (
+      this.options.authorizationReferences !== undefined &&
+      (authorizationReference === undefined ||
+        authorizationReference.deploymentId !== chain.deploymentId ||
+        authorizationReference.ownerId !== ownerId)
+    ) {
+      throw new CodexStartDeniedError("CODEX_START_AUTHORIZATION_INVALID");
+    }
     const terminalResults: ExecutionResult[] = await Promise.all(
       tasks.map(async (task) => {
         const ciphertext = z
@@ -131,6 +142,9 @@ export class TurnSynthesisRepository
       spaceId: chain.spaceId,
       chainId: chain.chainId,
       chainVersion: chain.chainVersion,
+      ...(authorizationReference === undefined
+        ? {}
+        : { authorizationReference }),
       userRequest,
       conversationHistory: [],
       terminalResults,
@@ -152,6 +166,6 @@ export class TurnSynthesisRepository
   public commitFinal(
     input: SynthesisFinalCommitInput,
   ): Promise<{ outboundBatchId: string }> {
-    return commitFinalResponse(this.database, input, this.codec);
+    return commitFinalResponse(this.database, input, this.options, this.codec);
   }
 }

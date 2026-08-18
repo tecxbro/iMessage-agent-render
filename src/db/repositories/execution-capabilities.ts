@@ -14,6 +14,28 @@ export class PostgresExecutionCapabilityRepository
 {
   public constructor(private readonly database: Database) {}
 
+  /** Idempotent production seed for the deployment's reviewed personal root. */
+  public async seedPersonalWorkspaceBinding(
+    deploymentId: string,
+  ): Promise<void> {
+    await this.database
+      .insert(executionCapabilityBindings)
+      .values({
+        deploymentId,
+        workspaceBinding: "personal",
+        relativeWorkspacePath: ".",
+        allowedPermissionProfiles: [
+          "read",
+          "workspace-write",
+          "network-read",
+          "approval-required",
+        ],
+        enabled: true,
+        revision: 1,
+      })
+      .onConflictDoNothing();
+  }
+
   public async listForActor(
     deploymentId: string,
     ownerId: string,

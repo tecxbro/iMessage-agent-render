@@ -230,6 +230,18 @@ describeDatabase("durable approval action execution", () => {
     await expect(
       approvalsService.respond(owner, spaceId, first!.id, "approved"),
     ).resolves.toBe(true);
+    await expect(
+      approvalRepository.findApprovedActionRecoveries(
+        new Date("2026-08-18T12:00:02Z"),
+      ),
+    ).resolves.toEqual([
+      {
+        approvalId: first!.id,
+        ownerId,
+        spaceId,
+        executionTaskId: taskId,
+      },
+    ]);
     const consumed = await approvalsService.consume(
       first!.id,
       ownerId,
@@ -240,6 +252,11 @@ describeDatabase("durable approval action execution", () => {
       recipient: "release@example.com",
       body: "durable exact body",
     });
+    await expect(
+      approvalRepository.findApprovedActionRecoveries(
+        new Date("2026-08-18T12:00:02Z"),
+      ),
+    ).resolves.toEqual([]);
     await expect(
       approvalsService.consume(first!.id, ownerId, spaceId, taskId),
     ).resolves.toBeUndefined();
@@ -309,5 +326,44 @@ describeDatabase("durable approval action execution", () => {
       service.consume(request!.id, ownerId, spaceId, taskId),
     ).resolves.toBeUndefined();
     expect(await client.database.select().from(actionExecutions)).toHaveLength(0);
+  });
+
+  it("discovers expired approval scopes for the production sweep", async () => {
+    const repository = new ApprovalRepository(client.database, {
+      encryptExecutionResult: encryptFixture,
+    });
+    await client.database.insert(approvals).values({
+      id: "53000000-0000-4000-8000-000000000008",
+      chainId,
+      executionTaskId: taskId,
+      ownerId,
+      spaceId,
+      actionType: "external.send",
+      normalizedPayloadCiphertext: "encrypted-action",
+      actionHash: "a".repeat(64),
+      humanSummary: "Send the prepared release.",
+      status: "pending",
+      expiresAt: new Date("2026-08-18T11:59:59Z"),
+    });
+
+    await expect(
+      repository.findExpiredApprovalScopes(
+        new Date("2026-08-18T12:00:00Z"),
+      ),
+    ).resolves.toEqual([{ ownerId, spaceId }]);
+
+    const service = new ApprovalService(
+      repository,
+      createApprovalPayloadCipher("57".repeat(32)),
+      () => new Date("2026-08-18T12:00:00Z"),
+    );
+    await expect(service.expireWithProgression(ownerId, spaceId)).resolves.toMatchObject({
+      expiredCount: 1,
+    });
+    await expect(
+      repository.findExpiredApprovalScopes(
+        new Date("2026-08-18T12:00:00Z"),
+      ),
+    ).resolves.toEqual([]);
   });
 });

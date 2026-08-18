@@ -392,3 +392,6 @@ export class PhotonInstallationService {
     };
   }
 }
+
+/** Production-facing name retained alongside the shorter domain name. */
+export { PhotonInstallationService as DurablePhotonInstallationService };

@@ -67,6 +67,33 @@ export class OrchestrationRecoveryRepository {
       }));
   }
 
+  public async denyChainCodexStart(input: {
+    chainId: string;
+    expectedChainVersion: number;
+    expectedState: "queued" | "executing";
+    errorCode: string;
+  }): Promise<boolean> {
+    const now = new Date();
+    const failed = await this.database
+      .update(chains)
+      .set({
+        state: "failed",
+        terminalErrorCode: input.errorCode,
+        completedAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(chains.id, input.chainId),
+          eq(chains.version, input.expectedChainVersion),
+          eq(chains.state, input.expectedState),
+          isNull(chains.canceledAt),
+        ),
+      )
+      .returning({ id: chains.id });
+    return failed.length === 1;
+  }
+
   public async requeueStaleRunningTasks(
     staleBefore: Date,
     limit = 100,

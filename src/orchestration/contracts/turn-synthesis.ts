@@ -4,6 +4,7 @@ import type {
   InteractionDecision,
 } from "../../agent/schemas.js";
 import type { TurnSynthesizePayload } from "../../queue/payloads.js";
+import type { QueuedAuthorizationReference } from "../../security/queued-authorization.js";
 
 export interface TurnSynthesisContext {
   deploymentId: string;
@@ -11,6 +12,7 @@ export interface TurnSynthesisContext {
   spaceId: string;
   chainId: string;
   chainVersion: number;
+  authorizationReference?: QueuedAuthorizationReference;
   userRequest: string;
   conversationHistory: readonly string[];
   priorStatusMessage?: string;

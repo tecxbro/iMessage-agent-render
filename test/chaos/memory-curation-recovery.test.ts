@@ -25,6 +25,8 @@ import {
   createMemoryCurateHandler,
   MemoryCurationRetryError,
 } from "../../src/queue/handlers/memory-curate.js";
+import { PgBossMemoryQueuePublisher } from "../../src/queue/extensions/memory-queues.js";
+import { QUEUE_NAMES } from "../../src/queue/names.js";
 
 const deploymentId = "5c100000-0000-4000-8000-000000000001";
 const ownerId = "5c100000-0000-4000-8000-000000000002";
@@ -161,6 +163,44 @@ class RecoverableReceipts implements MemoryReceiptStore {
 }
 
 describe("memory curation interruption recovery", () => {
+  it("reconciles a durable candidate after queue publication fails", async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("simulated queue publication failure"))
+      .mockResolvedValueOnce("memory-job-id");
+    const publisher = new PgBossMemoryQueuePublisher({
+      send,
+      findJobs: vi.fn(async () => []),
+    } as never);
+    const findReconciliationWork = vi.fn(async () => ({
+      completedWithoutRuns: [],
+      pendingRuns: [job],
+      retryableFailedRuns: [],
+      deferredRuns: [],
+      staleRunningRuns: [],
+    }));
+
+    await expect(
+      publisher.reconcile({ findReconciliationWork } as never, {
+        providerEnabled: true,
+      }),
+    ).rejects.toThrow("simulated queue publication failure");
+    await expect(
+      publisher.reconcile({ findReconciliationWork } as never, {
+        providerEnabled: true,
+      }),
+    ).resolves.toMatchObject({ enqueued: 1 });
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenLastCalledWith(
+      QUEUE_NAMES.memoryCurate,
+      job,
+      expect.objectContaining({
+        singletonKey: `chain:${chainId}:memory-curate`,
+      }),
+    );
+  });
+
   it("recovers after provider success but before receipt checkpoint without a second external write", async () => {
     const provider = new RecoverableProvider();
     const receipts = new RecoverableReceipts();

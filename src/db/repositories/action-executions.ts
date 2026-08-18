@@ -147,6 +147,16 @@ export class ActionExecutionRepository {
     });
   }
 
+  public async findPendingActionExecutionIds(limit = 100): Promise<string[]> {
+    const rows = await this.database
+      .select({ id: actionExecutions.id })
+      .from(actionExecutions)
+      .where(eq(actionExecutions.status, "pending"))
+      .orderBy(asc(actionExecutions.updatedAt), asc(actionExecutions.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  }
+
   public async completeActionExecution(
     actionExecutionId: string,
     result: ActionExecutorResult,

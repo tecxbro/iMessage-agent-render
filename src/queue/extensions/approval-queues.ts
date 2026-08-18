@@ -1,28 +1,23 @@
-import { z } from "zod";
+import { QUEUE_NAMES } from "../names.js";
+import {
+  approvalExecutePayloadSchema,
+  approvalRequestPayloadSchema,
+  type ApprovalExecutePayload,
+  type ApprovalRequestPayload,
+} from "../payloads.js";
 
 export const APPROVAL_QUEUE_NAMES = {
-  request: "approval.request",
-  execute: "approval.execute",
+  request: QUEUE_NAMES.approvalRequest,
+  execute: QUEUE_NAMES.approvalExecute,
 } as const;
 
-export const approvalRequestPayloadSchema = z
-  .object({
-    executionTaskId: z.uuid(),
-  })
-  .strict();
-
-export const approvalExecutePayloadSchema = z
-  .object({
-    actionExecutionId: z.uuid(),
-  })
-  .strict();
-
-export type ApprovalRequestPayload = z.infer<
-  typeof approvalRequestPayloadSchema
->;
-export type ApprovalExecutePayload = z.infer<
-  typeof approvalExecutePayloadSchema
->;
+/** Compatibility facade; approval queues now live in the central contract. */
+export {
+  approvalExecutePayloadSchema,
+  approvalRequestPayloadSchema,
+  type ApprovalExecutePayload,
+  type ApprovalRequestPayload,
+};
 
 export interface ApprovalQueuePublisher {
   enqueueApprovalRequest(payload: ApprovalRequestPayload): Promise<void>;

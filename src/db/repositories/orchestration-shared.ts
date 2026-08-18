@@ -4,12 +4,18 @@ import { asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import type { ExecutionCapabilitySource } from "../../orchestration/contracts/capabilities.js";
+import type { PermissionProfileName } from "../../security/permissions.js";
+import type {
+  QueuedAuthorizationReference,
+  QueuedAuthorizationReferenceStore,
+} from "../../security/queued-authorization.js";
 import type { TaskTerminalOutcome } from "../../orchestration/contracts/task-execution.js";
 import type {
   PlanFinalCommitInput,
   TurnPlanContext,
 } from "../../orchestration/contracts/turn-plan.js";
 import type { SynthesisFinalCommitInput } from "../../orchestration/contracts/turn-synthesis.js";
+import type { MemoryCurationRepository } from "./memory-curation.js";
 import type { Database, DatabaseTransaction } from "../client.js";
 import {
   carriedMessages,
@@ -47,6 +53,24 @@ export interface OrchestrationRepositoryOptions {
   decrypt(ciphertext: string): Promise<string> | string;
   encrypt(plaintext: string): Promise<string> | string;
   capabilities: ExecutionCapabilitySource;
+  authorizationReferences?: QueuedAuthorizationReferenceStore;
+  authorizeCapability?(input: {
+    identity: {
+      deploymentId: string;
+      ownerId: string;
+      spaceId: string;
+    };
+    authorizationReference: QueuedAuthorizationReference;
+    workspaceBinding: string;
+    permissionProfile: PermissionProfileName;
+  }): Promise<{
+    resolvedWorkspacePath: string;
+    allowedPermissionProfiles: readonly PermissionProfileName[];
+  }>;
+  memoryCuration?: Pick<
+    MemoryCurationRepository,
+    "recordCandidatesInTransaction"
+  >;
   priorStatusMessages?(
     spaceId: string,
   ): Promise<TurnPlanContext["priorStatusMessages"]>;
@@ -191,6 +215,7 @@ export async function releaseDependents(
 export async function commitFinalResponse(
   database: Database,
   input: PlanFinalCommitInput | SynthesisFinalCommitInput,
+  options: OrchestrationRepositoryOptions,
   codec: OrchestrationCodec,
 ): Promise<{ outboundBatchId: string }> {
   const decision = codec.parseDecision(input.decision);
@@ -199,7 +224,7 @@ export async function commitFinalResponse(
   }
 
   return database.transaction((transaction) =>
-    commitFinalResponseTransaction(transaction, input, decision, codec),
+    commitFinalResponseTransaction(transaction, input, decision, options, codec),
   );
 }
 
@@ -207,6 +232,7 @@ async function commitFinalResponseTransaction(
   transaction: DatabaseTransaction,
   input: PlanFinalCommitInput | SynthesisFinalCommitInput,
   decision: ReturnType<OrchestrationCodec["parseDecision"]>,
+  options: OrchestrationRepositoryOptions,
   codec: OrchestrationCodec,
 ): Promise<{ outboundBatchId: string }> {
   await transaction.execute(
@@ -264,6 +290,17 @@ async function commitFinalResponseTransaction(
       state: "pending" as const,
     })),
   );
+  if (options.memoryCuration !== undefined) {
+    await options.memoryCuration.recordCandidatesInTransaction(transaction, {
+      chainId: chain.id,
+      ownerId: await ownerIdForChain(transaction, chain.id),
+      spaceId: chain.spaceId,
+      sourceStage:
+        input.payload.expectedState === "queued" ? "direct" : "synthesis",
+      sourceTaskId: null,
+      candidates: decision.memoryCandidates,
+    });
+  }
   await transaction
     .update(chains)
     .set({

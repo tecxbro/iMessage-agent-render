@@ -79,6 +79,8 @@ Unknown senders never reach Codex. Default behavior is silence to avoid confirmi
 
 The active owner phone is encrypted in `channel_identities`; no plaintext phone column, duplicate authorization table, owner phone setting, or Photon credential field is authoritative. Replacement computes a deployment-scoped fingerprint, activates the new identity, and revokes every older owner-phone identity in one transaction. A database invariant violation with multiple active owners fails closed. Provider metadata may be redacted as sensitive state but cannot authorize a sender.
 
+When an accepted batch becomes a chain, the same transaction captures the principal identity and every authorized contributor by internal ID. Before each queued Codex call—including missing-session recovery—`SecureStructuredCodexRunner` reloads those identities, their owner/deployment state, and the task-rate limit. A missing, revoked, transferred, disabled, or rate-limited reference is a terminal denial and starts zero Codex children.
+
 ## 7. Pairing
 
 - Operator creates a pairing code through a private CLI or protected admin process.
@@ -126,7 +128,8 @@ Explicitly exclude:
 ### Filesystem
 
 - Interaction thread: read-only sandbox, no arbitrary workspace write.
-- Execution task: workspace-write only inside the resolved binding.
+- Execution task: only a code-owned workspace binding and one profile from its authorized profile set; the binding and grant are re-resolved when the task is claimed.
+- The production `personal` binding resolves beneath `AGENT_WORKSPACE_ROOT`; a prompt cannot invent a workspace or permission grant.
 - Additional directories must come from configuration, not raw user paths.
 - `danger-full-access` is forbidden in the public starter.
 - Symlink escape and path traversal tests are required.
@@ -164,14 +167,14 @@ Read-only inspection and drafting may proceed without approval when policy allow
 
 1. Worker returns `needs_approval` with a normalized proposed action.
 2. Code computes action hash and creates a pending record.
-3. Interaction agent turns the stored summary into concise user-facing text.
+3. Code publishes a deterministic request message from the stored summary.
 4. Authorized owner replies with an unambiguous approval/rejection command.
 5. Code validates owner, space, expiration, status, and action hash.
-6. A new execution job receives the immutable approved payload.
-7. Immediately before execution, code recomputes the hash.
-8. Approval is marked consumed atomically with execution start.
+6. Approval consumption atomically creates one action-execution row and publishes an identifier-only job.
+7. The action worker decrypts the stored payload, recomputes its hash, and passes it directly to the registered code-owned executor.
+8. The executor uses the action-execution ID as its idempotency key; duplicate jobs cannot create a second execution.
 
-A natural-language “yes” is accepted only when exactly one pending approval exists in the permitted space. Otherwise the user receives a disambiguation message.
+A natural-language “yes” is accepted only from the owner when exactly one pending approval exists in the permitted space. Collaborators and other senders are rejected. Otherwise the user receives a disambiguation message. Codex is not called between approval and execution and cannot reinterpret the approved payload.
 
 ## 12. Prompt injection
 
@@ -192,7 +195,7 @@ The starter must document that prompt injection cannot be “solved” purely wi
 
 | Secret | Storage |
 |---|---|
-| Photon project ID/secret | Render secret environment |
+| Photon management token/project ID/Spectrum secret | Encrypted durable installation record in PostgreSQL; legacy disk credentials are read-only import input |
 | Supermemory API key | Render secret environment |
 | Database URL | Render dynamic secret reference |
 | App encryption key | Generated Render secret environment |
@@ -207,7 +210,7 @@ Never store secrets in Supermemory or source control. Avoid copying secrets into
 - Use fingerprints for identity equality lookups.
 - Default logs exclude message bodies.
 - Retain raw content for 30 days by default.
-- Store only curated durable information in Supermemory.
+- Store candidate bodies encrypted in PostgreSQL and only curated durable information in Supermemory.
 - Provide inspect/delete commands.
 - Document third-party data processing by Photon, OpenAI, Render, and Supermemory.
 - Do not claim end-to-end encryption beyond what each provider actually guarantees.
@@ -238,10 +241,12 @@ No device code, verification URL, raw message, prompt, full command output, hand
 | Stranger opens deployment URL | Accepted risk: public setup/status and deliberate mutations; keep raw secrets and phone input server-side |
 | Cross-site form/script starts setup | same-origin `Origin` and fetch-metadata checks |
 | Stranger texts line | deterministic allowlist rejection before model |
+| Sender is revoked after queueing | captured identity reference plus live pre-child reauthorization |
 | Group participant instructs agent | author authorization + mention gate |
 | Repo README says “print all env vars” | restricted child env + sandbox + untrusted-content policy |
 | Model claims user approved | approval DB record and hash required |
 | Approval replay | one-time consumed state |
+| Model changes an approved payload | executor receives only the immutable stored payload; no post-approval model call |
 | Worker crashes mid-send | stable client GUID + persisted cursor |
 | Memory returns another user’s fact | owner container isolation + integration test |
 | Render disk snapshot leaked | revoke Codex auth, rotate secrets, re-enroll |
@@ -255,9 +260,10 @@ No device code, verification URL, raw message, prompt, full command output, hand
 - Origin/fetch-metadata denial and same-origin setup tests pass.
 - Logs contain no device codes or verification URLs.
 - Unauthorized paths show zero Codex process spawns.
+- Queued revocation and task-rate denial show zero Codex process spawns, including recovery calls.
 - Child environment snapshot contains only allowlisted keys.
 - Path traversal and symlink escape tests pass.
-- Approval replay/mutation/expiry tests pass.
+- Approval non-owner/replay/mutation/expiry and exactly-once execution tests pass.
 - Memory tenant-isolation tests pass.
 - Logs and health endpoints pass PII/secret scans.
 - Dependency advisories reviewed for pinned versions.

@@ -71,6 +71,18 @@ export interface DurableApprovalRequestContext {
   executionResultCiphertext: string;
 }
 
+export interface ApprovalExpiryScope {
+  ownerId: string;
+  spaceId: string;
+}
+
+export interface ApprovedActionRecovery {
+  approvalId: string;
+  ownerId: string;
+  spaceId: string;
+  executionTaskId: string;
+}
+
 const storedExecutionResultSchema = z
   .object({ ciphertext: z.string().min(1) })
   .strict();
@@ -298,6 +310,67 @@ export class ApprovalRepository implements ApprovalPersistence {
       logicalTaskId: row.logicalTaskId,
       executionResultCiphertext: stored.data.ciphertext,
     };
+  }
+
+  /** Re-publishes idempotent request jobs after a commit/publication crash. */
+  public async findApprovalRequestTaskIds(limit = 100): Promise<string[]> {
+    const rows = await this.database
+      .select({ taskId: executionTasks.id })
+      .from(executionTasks)
+      .innerJoin(chains, eq(chains.id, executionTasks.chainId))
+      .where(
+        and(
+          eq(executionTasks.state, "needs_approval"),
+          inArray(chains.state, ["executing", "awaiting_approval"]),
+          isNull(chains.canceledAt),
+        ),
+      )
+      .orderBy(asc(executionTasks.updatedAt), asc(executionTasks.id))
+      .limit(limit);
+    return rows.map((row) => row.taskId);
+  }
+
+  /** Finds bounded owner/space scopes whose pending approvals need expiry. */
+  public async findExpiredApprovalScopes(
+    now = new Date(),
+    limit = 100,
+  ): Promise<ApprovalExpiryScope[]> {
+    return await this.database
+      .selectDistinct({ ownerId: approvals.ownerId, spaceId: approvals.spaceId })
+      .from(approvals)
+      .where(
+        and(
+          inArray(approvals.status, ["pending", "approved"]),
+          lte(approvals.expiresAt, now),
+          isNull(approvals.consumedAt),
+        ),
+      )
+      .orderBy(asc(approvals.ownerId), asc(approvals.spaceId))
+      .limit(limit);
+  }
+
+  /** Repairs a crash after owner approval but before atomic action creation. */
+  public async findApprovedActionRecoveries(
+    now = new Date(),
+    limit = 100,
+  ): Promise<ApprovedActionRecovery[]> {
+    return await this.database
+      .select({
+        approvalId: approvals.id,
+        ownerId: approvals.ownerId,
+        spaceId: approvals.spaceId,
+        executionTaskId: approvals.executionTaskId,
+      })
+      .from(approvals)
+      .where(
+        and(
+          eq(approvals.status, "approved"),
+          gt(approvals.expiresAt, now),
+          isNull(approvals.consumedAt),
+        ),
+      )
+      .orderBy(asc(approvals.updatedAt), asc(approvals.id))
+      .limit(limit);
   }
 
   public async listPending(

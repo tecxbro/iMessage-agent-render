@@ -15,6 +15,7 @@ import type {
 } from "../../orchestration/contracts/task-execution.js";
 import type { TaskExecutePayload } from "../../queue/payloads.js";
 import { permissionProfileNameSchema } from "../../security/permissions.js";
+import { CodexStartDeniedError } from "../../security/queued-authorization.js";
 import type { Database } from "../client.js";
 import {
   agentThreads,
@@ -139,17 +140,43 @@ export class TaskExecutionRepository
         ),
         dependsOn: dependencies.map((dependency) => dependency.logicalId),
       });
-      const currentCapabilities = await this.options.capabilities({
+      const identity = {
         deploymentId: row.deploymentId,
         ownerId: row.ownerId,
         spaceId: row.spaceId,
-      });
+        chainId: payload.chainId,
+      };
+      const authorizationReference =
+        await this.options.authorizationReferences?.load(payload.chainId);
+      if (
+        this.options.authorizationReferences !== undefined &&
+        (authorizationReference === undefined ||
+          authorizationReference.deploymentId !== row.deploymentId ||
+          authorizationReference.ownerId !== row.ownerId)
+      ) {
+        throw new CodexStartDeniedError("CODEX_START_AUTHORIZATION_INVALID");
+      }
+      const authorized =
+        authorizationReference !== undefined &&
+        this.options.authorizeCapability !== undefined
+          ? await this.options.authorizeCapability({
+              identity,
+              authorizationReference,
+              workspaceBinding: row.workspaceBinding,
+              permissionProfile: task.permissionProfile,
+            })
+          : undefined;
+      const currentCapabilities =
+        authorized === undefined
+          ? await this.options.capabilities(identity)
+          : [];
       const currentCapability = currentCapabilities.find(
         (candidate) => candidate.workspaceBinding === row.workspaceBinding,
       );
       if (
-        currentCapability === undefined ||
-        !currentCapability.permissionProfiles.includes(task.permissionProfile)
+        authorized === undefined &&
+        (currentCapability === undefined ||
+          !currentCapability.permissionProfiles.includes(task.permissionProfile))
       ) {
         throw new Error(
           "The queued task no longer has a code-authorized workspace permission. Cancel it and create a newly authorized task.",
@@ -157,14 +184,21 @@ export class TaskExecutionRepository
       }
 
       return {
+        chainId: payload.chainId,
         ownerId: row.ownerId,
+        ...(authorizationReference === undefined
+          ? {}
+          : { authorizationReference }),
         task,
         modelSelection: modelSelectionSchema.parse({
           modelId: row.modelId,
           reasoningEffort: row.reasoningEffort,
         }),
-        maximumPermissionProfile: task.permissionProfile,
-        workspaceRoot: this.options.workspaceRoot,
+        authorizedPermissionProfiles:
+          authorized?.allowedPermissionProfiles ?? [task.permissionProfile],
+        resolvedWorkspacePath:
+          authorized?.resolvedWorkspacePath ??
+          `${this.options.workspaceRoot}/${row.workspaceBinding}`,
         relevantContext:
           row.agentSummary === null
             ? []
@@ -173,6 +207,72 @@ export class TaskExecutionRepository
           ? {}
           : { recoverySummary: await this.options.decrypt(row.agentSummary) }),
       };
+    });
+  }
+
+  public async denyTaskCodexStart(input: {
+    payload: TaskExecutePayload;
+    errorCode: string;
+  }): Promise<TaskTerminalOutcome> {
+    return await this.database.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`select id from ${executionTasks} where ${executionTasks.id} = ${input.payload.taskId} for update`,
+      );
+      const [row] = await transaction
+        .select({
+          logicalId: executionTasks.name,
+          state: executionTasks.state,
+          chainState: chains.state,
+          chainVersion: chains.version,
+          canceledAt: chains.canceledAt,
+        })
+        .from(executionTasks)
+        .innerJoin(chains, eq(chains.id, executionTasks.chainId))
+        .where(
+          and(
+            eq(executionTasks.id, input.payload.taskId),
+            eq(executionTasks.chainId, input.payload.chainId),
+          ),
+        )
+        .limit(1);
+      if (
+        row === undefined ||
+        row.state !== "queued" ||
+        row.chainState !== "executing" ||
+        row.chainVersion !== input.payload.expectedChainVersion ||
+        row.canceledAt !== null
+      ) {
+        return { accepted: false, readyTasks: [], shouldSynthesize: false };
+      }
+      const result = executionResultSchema.parse({
+        taskId: row.logicalId,
+        status: "failed",
+        userSafeSummary:
+          "This task was denied because its queued authorization is no longer valid.",
+        artifacts: [],
+        proposedActions: [],
+        memoryCandidates: [],
+        error: {
+          code: input.errorCode,
+          retryable: false,
+          safeMessage:
+            "The queued authorization or capability grant is no longer valid.",
+        },
+      });
+      await transaction
+        .update(executionTasks)
+        .set({
+          state: "failed",
+          resultJson: await this.codec.resultForStorage(result),
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(executionTasks.id, input.payload.taskId));
+      return await releaseDependents(
+        transaction,
+        input.payload.chainId,
+        this.codec,
+      );
     });
   }
 
@@ -190,12 +290,18 @@ export class TaskExecutionRepository
           logicalId: executionTasks.name,
           state: executionTasks.state,
           agentThreadId: executionTasks.agentThreadId,
+          ownerId: agentThreads.ownerId,
+          spaceId: chains.spaceId,
           chainState: chains.state,
           chainVersion: chains.version,
           canceledAt: chains.canceledAt,
         })
         .from(executionTasks)
         .innerJoin(chains, eq(chains.id, executionTasks.chainId))
+        .innerJoin(
+          agentThreads,
+          eq(agentThreads.id, executionTasks.agentThreadId),
+        )
         .where(eq(executionTasks.id, input.payload.taskId))
         .limit(1);
       if (
@@ -210,6 +316,20 @@ export class TaskExecutionRepository
       if (result.taskId !== row.logicalId) {
         throw new Error(
           "The execution result logical task ID does not match the claimed database task.",
+        );
+      }
+
+      if (this.options.memoryCuration !== undefined) {
+        await this.options.memoryCuration.recordCandidatesInTransaction(
+          transaction,
+          {
+            chainId: input.payload.chainId,
+            ownerId: row.ownerId,
+            spaceId: row.spaceId,
+            sourceStage: "task",
+            sourceTaskId: input.payload.taskId,
+            candidates: result.memoryCandidates,
+          },
         );
       }
 

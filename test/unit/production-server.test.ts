@@ -90,8 +90,13 @@ describe("production executable entrypoint", () => {
     );
     const deploymentPage = await deployment.text();
     expect(deploymentPage).toContain("Your phone number");
+    expect(deploymentPage).toContain("U.S. number — we’ll add +1.");
+    expect(deploymentPage).toContain("Not in the U.S.?");
+    expect(deploymentPage).toContain("United Kingdom (+44)");
+    expect(deploymentPage).toContain("Canada (+1)");
+    expect(deploymentPage).toContain('placeholder="(415) 555-0123"');
     expect(deploymentPage).toContain("Photon");
-    expect(deploymentPage).toContain("Public setup");
+    expect(deploymentPage).not.toContain("Public setup");
     expect(deploymentPage).not.toContain("Agent password");
   });
 });

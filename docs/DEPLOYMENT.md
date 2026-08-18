@@ -24,11 +24,11 @@ The build runs `npm ci --include=dev && npm run build`, the pre-deploy phase run
 |---|---|---|
 | Render account | Hosts the service, database, and disk | [Render](https://render.com/) |
 | Photon account | Creates or connects the Spectrum project, iMessage line, and persistent message stream | Photon dashboard |
-| Allowed owner phone | Restricts who can command the agent | Your E.164 phone number |
+| Allowed owner phone | Restricts who can command the agent | Your personal phone number |
 | ChatGPT device login or OpenAI API key | Authenticates Codex | ChatGPT account security or OpenAI Platform |
 | Supermemory API key | Optional semantic memory | Supermemory dashboard |
 
-In the dashboard, enter the owner's personal phone number in E.164 format, such as `+19495550123`. It becomes the only authorized sender and the phone registered during Photon owner provisioning. Photon separately assigns the iMessage destination displayed at completion.
+In the dashboard, U.S. owners enter a normal 10-digit phone number; `+1` is added automatically, though pasting a complete `+1` number also works. International owners select **Not in the U.S.?**, choose their country, and enter either a national or complete international number. The server validates the selected country and stores only normalized E.164. The result becomes the only authorized sender and the phone registered during Photon owner provisioning. Photon separately assigns the iMessage destination displayed at completion.
 
 Never place credentials in source control, screenshots, tickets, database rows, Supermemory, or logs.
 
@@ -63,7 +63,7 @@ See [Configuration](./CONFIGURATION.md) for every supported variable.
 ## 5. Public setup dashboard
 
 1. Open the deployed Web Service URL in a trusted browser.
-2. Save the owner's E.164 phone, complete Photon setup, and then complete ChatGPT setup.
+2. Save the owner's phone, complete Photon setup, and then complete ChatGPT setup.
 
 There is no dashboard password or operator session. Anyone who can reach the public service URL can view setup status, device codes, verification URLs, assigned number, masked owner status, bounded error codes, and detailed readiness, and can deliberately submit setup changes. A matching `Origin` and non-cross-site fetch context block ordinary drive-by cross-site mutations, but they do not authenticate a visitor.
 

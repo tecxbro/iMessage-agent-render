@@ -11,6 +11,7 @@ import {
   OwnerPhoneNumberValidationError,
   type DeploymentIdentityController,
 } from "../runtime/deployment-identity.js";
+import { normalizeDashboardOwnerPhoneNumber } from "../runtime/phone-number.js";
 import type { PhotonSetupController } from "../transport/photon-setup.js";
 import {
   renderDashboardScript,
@@ -188,13 +189,28 @@ export function createHealthApplication(
 
   application.post("/api/setup/owner", sameOrigin, async (request, response) => {
     response.set("cache-control", "no-store");
-    if (!isExactObject(request.body, ["phoneNumber"])) {
+    const legacyRequest = isExactObject(request.body, ["phoneNumber"]);
+    const dashboardRequest = isExactObject(request.body, [
+      "countryCode",
+      "phoneNumber",
+    ]);
+    if (!legacyRequest && !dashboardRequest) {
       sendInvalidRequest(response);
       return;
     }
-    if (typeof request.body["phoneNumber"] !== "string") {
+    const submittedPhoneNumber = request.body["phoneNumber"];
+    const submittedCountryCode = request.body["countryCode"];
+    if (typeof submittedPhoneNumber !== "string") {
       response.status(400).json({ error: "OWNER_PHONE_NUMBER_INVALID" });
       return;
+    }
+    let dashboardCountryCode: string | undefined;
+    if (dashboardRequest) {
+      if (typeof submittedCountryCode !== "string") {
+        response.status(400).json({ error: "OWNER_PHONE_NUMBER_INVALID" });
+        return;
+      }
+      dashboardCountryCode = submittedCountryCode;
     }
     if (options.deploymentIdentity === undefined) {
       response.status(503).json({
@@ -203,8 +219,14 @@ export function createHealthApplication(
       return;
     }
     try {
+      const phoneNumber = dashboardCountryCode !== undefined
+        ? normalizeDashboardOwnerPhoneNumber({
+            countryCode: dashboardCountryCode,
+            phoneNumber: submittedPhoneNumber,
+          })
+        : submittedPhoneNumber;
       const status = await options.deploymentIdentity.configureOwner(
-        request.body["phoneNumber"],
+        phoneNumber,
       );
       if (status.state === "configured") {
         response.status(200).json({

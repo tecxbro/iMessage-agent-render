@@ -1,9 +1,12 @@
-import { z } from "zod";
+import {
+  OwnerPhoneNumberValidationError,
+  ownerPhoneNumberSchema,
+} from "./phone-number.js";
 
-export const ownerPhoneNumberSchema = z
-  .string()
-  .trim()
-  .regex(/^\+[1-9]\d{7,14}$/u);
+export {
+  OwnerPhoneNumberValidationError,
+  ownerPhoneNumberSchema,
+} from "./phone-number.js";
 
 export type DeploymentIdentityStatus =
   | { state: "initializing" }
@@ -35,15 +38,6 @@ export interface DeploymentIdentityRepository {
 export interface BindableDeploymentIdentityController
   extends DeploymentIdentityController {
   bindRepository(repository: DeploymentIdentityRepository): void;
-}
-
-export class OwnerPhoneNumberValidationError extends Error {
-  public readonly code = "OWNER_PHONE_NUMBER_INVALID" as const;
-
-  public constructor() {
-    super("OWNER_PHONE_NUMBER_INVALID");
-    this.name = "OwnerPhoneNumberValidationError";
-  }
 }
 
 export type LegacyOwnerPhoneSelection =

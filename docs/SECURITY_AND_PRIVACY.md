@@ -60,7 +60,7 @@ Rejections use a stable HTTP 403 response. These checks are defense against cros
 | `/agent/dashboard`, `/agent/dashboard.js` | Public setup UI | None for `GET` |
 | Photon/ChatGPT status routes | Public, including active device-flow values | None for `GET` |
 | `GET /api/setup/owner/status` | Public; masked phone only | None for `GET` |
-| `POST /api/setup/owner` | Public; strict size-limited E.164 JSON | Origin and fetch-metadata checks |
+| `POST /api/setup/owner` | Public; exact size-limited country and phone JSON normalized server-side to E.164, or legacy exact E.164 JSON | Origin and fetch-metadata checks |
 | Photon/ChatGPT setup start routes | Public | Origin and fetch-metadata checks |
 
 Public responses may include provider status, device codes, verification URLs, assigned iMessage numbers, masked owner information, detailed readiness, and bounded error codes. They never include the raw owner phone, access tokens, project secrets, Codex credentials, database credentials, message content, or unrestricted provider exceptions.

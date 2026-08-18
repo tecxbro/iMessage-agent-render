@@ -114,6 +114,130 @@ function createDashboardHarness(options: DashboardHarnessOptions = {}) {
   };
 }
 
+function createOwnerFormHarness(responseOk = true) {
+  type OwnerForm = {
+    addEventListener(
+      type: string,
+      listener: (event: SubmitEvent) => Promise<void> | void,
+    ): void;
+    querySelector(): { disabled: boolean };
+    setAttribute: ReturnType<typeof vi.fn>;
+    removeAttribute: ReturnType<typeof vi.fn>;
+  };
+  type SubmitEvent = {
+    preventDefault(): void;
+    currentTarget: OwnerForm;
+  };
+  let submit: ((event: SubmitEvent) => Promise<void> | void) | undefined;
+  let toggleCountry: (() => void) | undefined;
+  let changeCountry: (() => void) | undefined;
+  const reload = vi.fn();
+  const submitButton = { disabled: false };
+  const input = {
+    value: "(415) 555-0123",
+    placeholder: "(415) 555-0123",
+    focus: vi.fn(),
+    setAttribute: vi.fn(),
+    removeAttribute: vi.fn(),
+  };
+  const country = {
+    value: "",
+    disabled: true,
+    required: false,
+    selectedIndex: 0,
+    options: [
+      { dataset: {} },
+      { dataset: { callingCode: "44" } },
+    ],
+    focus: vi.fn(),
+    setAttribute: vi.fn(),
+    removeAttribute: vi.fn(),
+    addEventListener(type: string, listener: () => void) {
+      if (type === "change") changeCountry = listener;
+    },
+  };
+  const fields = { hidden: true };
+  const prefix = { textContent: "+1", hidden: false };
+  const help = { textContent: "U.S. number — we’ll add +1." };
+  const error = { textContent: "" };
+  const attributes = new Map([["aria-expanded", "false"]]);
+  const toggle = {
+    textContent: "Not in the U.S.?",
+    getAttribute(name: string) {
+      return attributes.get(name) ?? null;
+    },
+    setAttribute(name: string, value: string) {
+      attributes.set(name, value);
+    },
+    addEventListener(type: string, listener: () => void) {
+      if (type === "click") toggleCountry = listener;
+    },
+  };
+  const form: OwnerForm = {
+    addEventListener(
+      type: string,
+      listener: (event: SubmitEvent) => Promise<void> | void,
+    ) {
+      if (type === "submit") submit = listener;
+    },
+    querySelector: () => submitButton,
+    setAttribute: vi.fn(),
+    removeAttribute: vi.fn(),
+  };
+  const fetchImplementation = vi.fn(async () => ({
+    ok: responseOk,
+    json: async () =>
+      responseOk
+        ? { state: "configured", maskedPhoneNumber: "••••••0123" }
+        : { error: "OWNER_PHONE_NUMBER_INVALID" },
+  }));
+
+  runInNewContext(renderDashboardScript(), {
+    document: {
+      currentScript: { dataset: { polling: "false" } },
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      body: { dataset: {} },
+      getElementById(id: string) {
+        if (id === "owner-form") return form;
+        if (id === "owner-phone-number") return input;
+        if (id === "owner-country") return country;
+        if (id === "owner-international-fields") return fields;
+        if (id === "owner-phone-prefix") return prefix;
+        if (id === "owner-format-help") return help;
+        if (id === "owner-country-toggle") return toggle;
+        if (id === "owner-error") return error;
+        return null;
+      },
+    },
+    fetch: fetchImplementation,
+    window: {
+      location: { reload },
+      addEventListener: vi.fn(),
+      clearTimeout: vi.fn(),
+    },
+  });
+
+  return {
+    changeCountry: () => changeCountry!(),
+    country,
+    error,
+    fetchImplementation,
+    fields,
+    help,
+    input,
+    prefix,
+    reload,
+    submit: async () => {
+      const preventDefault = vi.fn();
+      await submit!({ preventDefault, currentTarget: form });
+      expect(preventDefault).toHaveBeenCalledOnce();
+    },
+    toggle,
+    toggleCountry: () => toggleCountry!(),
+  };
+}
+
 describe("dashboard authentication popup", () => {
   it("uses same-origin setup requests without a password or CSRF credential", () => {
     const script = renderDashboardScript();
@@ -123,92 +247,92 @@ describe("dashboard authentication popup", () => {
     expect(script).not.toContain("csrfToken");
     expect(script).toContain('body: JSON.stringify({})');
     expect(script).toContain('fetch("/api/setup/owner"');
-    expect(script).toContain("JSON.stringify({ phoneNumber })");
+    expect(script).toContain("JSON.stringify({ countryCode, phoneNumber })");
     expect(script).not.toContain("+14155550123");
     expect(script).not.toContain("x-agent-setup");
   });
 
   it("submits the owner phone from the dashboard and clears the browser field immediately", async () => {
-    type OwnerForm = {
-      addEventListener(
-        type: string,
-        listener: (event: {
-          preventDefault(): void;
-          currentTarget: OwnerForm;
-        }) => Promise<void> | void,
-      ): void;
-      querySelector(): { disabled: boolean };
-      setAttribute: ReturnType<typeof vi.fn>;
-      removeAttribute: ReturnType<typeof vi.fn>;
-    };
-    let submit:
-      | ((event: { preventDefault(): void; currentTarget: OwnerForm }) => Promise<void> | void)
-      | undefined;
-    const reload = vi.fn();
-    const button = { disabled: false };
-    const input = {
-      value: "+14155550123",
-      focus: vi.fn(),
-      setAttribute: vi.fn(),
-    };
-    const error = { textContent: "" };
-    const form: OwnerForm = {
-      addEventListener(
-        type: string,
-        listener: (event: {
-          preventDefault(): void;
-          currentTarget: OwnerForm;
-        }) => Promise<void> | void,
-      ) {
-        if (type === "submit") submit = listener;
-      },
-      querySelector: () => button,
-      setAttribute: vi.fn(),
-      removeAttribute: vi.fn(),
-    };
-    const fetchImplementation = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        state: "configured",
-        maskedPhoneNumber: "••••••0123",
-      }),
-    }));
+    const harness = createOwnerFormHarness();
 
-    runInNewContext(renderDashboardScript(), {
-      document: {
-        currentScript: { dataset: { polling: "false" } },
-        querySelector: () => null,
-        querySelectorAll: () => [],
-        body: { dataset: {} },
-        getElementById(id: string) {
-          if (id === "owner-form") return form;
-          if (id === "owner-phone-number") return input;
-          if (id === "owner-error") return error;
-          return null;
-        },
-      },
-      fetch: fetchImplementation,
-      window: {
-        location: { reload },
-        addEventListener: vi.fn(),
-        clearTimeout: vi.fn(),
-      },
-    });
+    await harness.submit();
 
-    const preventDefault = vi.fn();
-    await submit!({ preventDefault, currentTarget: form });
-
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(input.value).toBe("");
-    expect(fetchImplementation).toHaveBeenCalledWith(
+    expect(harness.input.value).toBe("");
+    expect(harness.fetchImplementation).toHaveBeenCalledWith(
       "/api/setup/owner",
       expect.objectContaining({
         method: "POST",
         credentials: "same-origin",
-        body: JSON.stringify({ phoneNumber: "+14155550123" }),
+        body: JSON.stringify({
+          countryCode: "US",
+          phoneNumber: "(415) 555-0123",
+        }),
       }),
     );
-    expect(reload).toHaveBeenCalledOnce();
+    expect(harness.reload).toHaveBeenCalledOnce();
+  });
+
+  it("reveals international entry, updates the calling code, and submits the selected country", async () => {
+    const harness = createOwnerFormHarness();
+
+    harness.toggleCountry();
+
+    expect(harness.fields.hidden).toBe(false);
+    expect(harness.country.disabled).toBe(false);
+    expect(harness.country.required).toBe(true);
+    expect(harness.country.focus).toHaveBeenCalledOnce();
+    expect(harness.toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(harness.toggle.textContent).toBe("Use a U.S. number");
+    expect(harness.help.textContent).toContain("country code is optional");
+
+    harness.country.value = "GB";
+    harness.country.selectedIndex = 1;
+    harness.changeCountry();
+    harness.input.value = "020 7183 8750";
+    expect(harness.prefix.textContent).toBe("+44");
+    expect(harness.prefix.hidden).toBe(false);
+
+    await harness.submit();
+    expect(harness.fetchImplementation).toHaveBeenCalledWith(
+      "/api/setup/owner",
+      expect.objectContaining({
+        body: JSON.stringify({
+          countryCode: "GB",
+          phoneNumber: "020 7183 8750",
+        }),
+      }),
+    );
+  });
+
+  it("requires a country in international mode and can switch back to the U.S.", async () => {
+    const harness = createOwnerFormHarness();
+
+    harness.toggleCountry();
+    await harness.submit();
+    expect(harness.fetchImplementation).not.toHaveBeenCalled();
+    expect(harness.error.textContent).toBe("Select your country or region.");
+    expect(harness.country.focus).toHaveBeenCalledTimes(2);
+
+    harness.toggleCountry();
+    expect(harness.fields.hidden).toBe(true);
+    expect(harness.country.disabled).toBe(true);
+    expect(harness.country.required).toBe(false);
+    expect(harness.country.value).toBe("");
+    expect(harness.prefix.textContent).toBe("+1");
+    expect(harness.toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(harness.input.focus).toHaveBeenCalledOnce();
+  });
+
+  it("shows the selected-country validation error without echoing the raw number", async () => {
+    const harness = createOwnerFormHarness(false);
+
+    await harness.submit();
+
+    expect(harness.input.value).toBe("");
+    expect(harness.error.textContent).toBe(
+      "Enter a valid phone number for the selected country.",
+    );
+    expect(harness.error.textContent).not.toContain("(415) 555-0123");
   });
 
   it.each(["photon", "chatgpt"] as const)(

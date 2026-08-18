@@ -190,6 +190,19 @@ describe("health and readiness endpoints", () => {
     expect(extra.status).toBe(400);
     await expect(extra.json()).resolves.toEqual({ error: "INVALID_REQUEST" });
 
+    const extraDashboardField = await fetch(`${base}/api/setup/owner`, {
+      ...publicMutation(base),
+      body: JSON.stringify({
+        countryCode: "US",
+        phoneNumber: "4155550123",
+        unexpected: true,
+      }),
+    });
+    expect(extraDashboardField.status).toBe(400);
+    await expect(extraDashboardField.json()).resolves.toEqual({
+      error: "INVALID_REQUEST",
+    });
+
     const invalid = await fetch(`${base}/api/setup/owner`, {
       ...publicMutation(base),
       body: JSON.stringify({ phoneNumber: "415-555-0123" }),
@@ -199,9 +212,24 @@ describe("health and readiness endpoints", () => {
       error: "OWNER_PHONE_NUMBER_INVALID",
     });
 
+    const mismatchedCountry = await fetch(`${base}/api/setup/owner`, {
+      ...publicMutation(base),
+      body: JSON.stringify({
+        countryCode: "GB",
+        phoneNumber: "+33 1 42 68 53 00",
+      }),
+    });
+    expect(mismatchedCountry.status).toBe(400);
+    await expect(mismatchedCountry.json()).resolves.toEqual({
+      error: "OWNER_PHONE_NUMBER_INVALID",
+    });
+
     const configured = await fetch(`${base}/api/setup/owner`, {
       ...publicMutation(base),
-      body: JSON.stringify({ phoneNumber: "+442071838750" }),
+      body: JSON.stringify({
+        countryCode: "GB",
+        phoneNumber: "020 7183 8750",
+      }),
     });
     const configuredBody = await configured.text();
     expect(configured.status).toBe(200);
@@ -224,6 +252,43 @@ describe("health and readiness endpoints", () => {
     const html = await dashboard.text();
     expect(html).toContain("••••••8750");
     expect(html).not.toContain("+442071838750");
+  });
+
+  it("retains the legacy exact E.164 owner request", async () => {
+    const readiness = new ReadinessRegistry();
+    const spectrum = new SpectrumReadiness();
+    let storedPhoneNumber: string | undefined;
+    const identity = createDeploymentIdentityController();
+    identity.bindRepository({
+      async replaceOwnerPhoneNumber(phoneNumber) {
+        storedPhoneNumber = phoneNumber;
+      },
+      async readOwnerPhoneNumber() {
+        return storedPhoneNumber;
+      },
+    });
+    await identity.initialize();
+    health = await startHealthServer({
+      port: 0,
+      host: "127.0.0.1",
+      readiness,
+      deploymentIdentity: identity,
+      spectrum,
+    });
+    const address = health.server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const configured = await fetch(`${base}/api/setup/owner`, {
+      ...publicMutation(base),
+      body: JSON.stringify({ phoneNumber: "+14155550123" }),
+    });
+
+    expect(configured.status).toBe(200);
+    await expect(configured.json()).resolves.toEqual({
+      state: "configured",
+      maskedPhoneNumber: "••••••0123",
+    });
+    expect(storedPhoneNumber).toBe("+14155550123");
   });
 
   it("reports ready only when every critical component is ready", () => {

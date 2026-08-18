@@ -151,3 +151,13 @@ Dashboard pages, setup status, active device-flow values, assigned number, maske
 **Why:** the user explicitly chose the former public-dashboard product behavior as the smaller temporary implementation and rejected any dashboard password stored in the service environment. There is no deployer-bound identity handoff available inside this application, so this decision documents the exposure instead of presenting first-visitor or same-origin behavior as secure authentication.
 
 **Rejected for this release:** keeping either dashboard credential environment value, moving the owner phone back into the Blueprint, a first-visitor password claim, or claiming that Origin/fetch metadata identifies the operator.
+
+## ADR-019 — Default dashboard phone entry to the United States
+
+**Decision:** keep the owner identity canonical as strict E.164, but make the dashboard input boundary U.S.-first. The default form adds the `+1` country code to a valid U.S. national number. A link-style **Not in the U.S.?** disclosure exposes a native country selector; selected-country national input and complete international input are accepted only when they identify a valid number for that country. The server performs normalization and country validation before the existing identity controller persists or provisions the owner.
+
+The public owner route accepts exact `{ countryCode, phoneNumber }` dashboard JSON and retains the former exact `{ phoneNumber }` E.164 shape for compatibility. Existing environment migration inputs remain strict E.164. No browser locale, IP geolocation, database migration, readiness change, or Blueprint prompt is introduced.
+
+**Why:** the product assumes most deployers are in the United States, so requiring them to understand or type `+1` adds avoidable onboarding friction. Keeping validation server-side preserves the authorization, masking, replacement, and Photon contracts while still giving international owners an explicit path.
+
+**Rejected:** requiring E.164 in the default field, inferring country from IP or browser locale, maintaining a hand-written calling-code table, trusting browser-only normalization, or weakening canonical storage validation.

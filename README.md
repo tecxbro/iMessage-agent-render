@@ -11,7 +11,7 @@ Deploy a private iMessage agent powered by Photon Spectrum, Codex, PostgreSQL, a
 You need:
 
 - a Photon account for Spectrum Cloud iMessage setup;
-- the owner's E.164 phone number allowed to message the agent;
+- the owner's personal phone number allowed to message the agent;
 - either a ChatGPT account with Codex device login enabled or an OpenAI API key; and
 - an optional Supermemory API key if you want semantic memory.
 
@@ -32,7 +32,7 @@ The setup dashboard is public. Anyone who can reach the service URL can view its
 
 Dashboard mutations still require a same-origin browser request and reject cross-site fetch metadata. That prevents ordinary drive-by cross-site submissions, but it is not authentication: a person who deliberately opens the public dashboard can change setup.
 
-The dashboard collects the owner's E.164 phone number before Photon setup. The phone number is not a Blueprint prompt and is not required in the environment. It is encrypted and fingerprinted in PostgreSQL, becomes the only iMessage sender authorized to use the agent, and is registered during Photon owner provisioning. The different Photon-assigned number shown at completion is the destination the owner texts. Replacing the owner number in the dashboard revokes the previous owner identity before the new identity can authorize messages.
+The dashboard collects the owner's phone number before Photon setup. U.S. entry is the default, so the owner can type a normal 10-digit number without `+1`; **Not in the U.S.?** reveals a country selector, and international users may enter a national or complete international number. The server validates the selected country and normalizes the value to E.164 before storage. The phone number is not a Blueprint prompt and is not required in the environment. It is encrypted and fingerprinted in PostgreSQL, becomes the only iMessage sender authorized to use the agent, and is registered during Photon owner provisioning. The different Photon-assigned number shown at completion is the destination the owner texts. Replacing the owner number in the dashboard revokes the previous owner identity before the new identity can authorize messages.
 
 ## Finish Codex authentication
 

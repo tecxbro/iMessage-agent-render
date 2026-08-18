@@ -92,7 +92,7 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 **Where to check:** Open the dashboard. Check legacy owner environment keys only in the private Render Environment page; do not print their values or use stored Photon metadata as authorization evidence.
 
-**Expected result:** Saving one valid E.164 phone creates a masked configured status, keeps the raw phone out of responses and logs, unlocks Photon setup, and survives restart. An already active database identity takes precedence over every legacy environment value.
+**Expected result:** Saving one valid dashboard phone creates a masked configured status, keeps the raw phone out of responses and logs, unlocks Photon setup, and survives restart. U.S. national entry and country-selected international entry are normalized to E.164 before storage. An already active database identity takes precedence over every legacy environment value.
 
 **Do not:** Select one legacy handle silently, copy the owner from Photon credential metadata, expose a public fallback route, or delete old environment values before verifying the migrated identity.
 

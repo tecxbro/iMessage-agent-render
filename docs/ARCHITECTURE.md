@@ -271,7 +271,7 @@ The current `src/server.ts` starts this health server first, runs each operation
 | `GET /agent/dashboard`, `GET /agent/dashboard.js` | Public setup UI |
 | Photon status, ChatGPT status | Public setup status, including device-flow values when active |
 | `GET /api/setup/owner/status` | Public; masked owner only |
-| `POST /api/setup/owner` | Same-origin and fetch-metadata checks; exact size-limited E.164 JSON |
+| `POST /api/setup/owner` | Same-origin and fetch-metadata checks; exact size-limited country-aware JSON normalized server-side to E.164, plus the legacy exact E.164 shape |
 | Photon setup start, ChatGPT setup start | Same-origin and fetch-metadata checks; exact empty JSON object |
 
 The server rejects unexpected JSON fields at route boundaries. Same-origin checks reduce drive-by requests but do not prove authorization. Device-code values are excluded from logs.

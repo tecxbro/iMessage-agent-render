@@ -30,7 +30,7 @@ The dashboard has no login and is public to anyone who can reach the service URL
 
 The owner card shows either the setup form or only the masked active phone. The saved personal phone is the only authorized iMessage sender; the separately assigned Photon number is the destination shown at completion. The phone is entered in the dashboard and is not a fresh-deployment environment value.
 
-To replace the owner, open **Change phone number**, save the new E.164 value, and verify one message from the new owner plus rejection of the previous owner. The replacement transaction activates the new encrypted identity and revokes all prior owner-phone identities while leaving collaborator identities unchanged. Never place a phone in a URL, log, or support ticket.
+To replace the owner, open **Change phone number**. U.S. owners can enter a normal 10-digit number without `+1`; international owners select **Not in the U.S.?** and choose their country. Save the new value, then verify one message from the new owner plus rejection of the previous owner. The server stores normalized E.164, and the replacement transaction activates the new encrypted identity and revokes all prior owner-phone identities while leaving collaborator identities unchanged. Never place a phone in a URL, log, or support ticket.
 
 ## Deploy procedure
 
@@ -86,7 +86,7 @@ API-key mode: replace `OPENAI_API_KEY` in Render, restart, and rerun capability 
 
 Symptoms: `/healthz` 200; public `/readyz` 503; Spectrum intake remains stopped; the public dashboard asks for an owner phone.
 
-For a fresh deployment, save the personal owner phone in E.164 form in the dashboard and continue to Photon. For an existing deployment, first verify whether `OWNER_PHONE_NUMBER`, the former long Render alias, or `AGENT_OWNER_HANDLES` is present. The runtime imports only one unambiguous E.164 value and never imports from Photon credentials. If multiple handles or an email-only handle caused migration-required state, open the dashboard and save the intended phone explicitly. Verify the masked status and an authorized message before manually removing old environment values.
+For a fresh deployment, save the personal owner phone in the dashboard and continue to Photon. U.S. entry defaults to national format; international entry requires a selected country, and the server normalizes both to E.164. For an existing deployment, first verify whether `OWNER_PHONE_NUMBER`, the former long Render alias, or `AGENT_OWNER_HANDLES` is present. The runtime imports only one unambiguous E.164 value and never imports from Photon credentials. If multiple handles or an email-only handle caused migration-required state, open the dashboard and save the intended phone explicitly. Verify the masked status and an authorized message before manually removing old environment values.
 
 ### Spectrum disconnect
 

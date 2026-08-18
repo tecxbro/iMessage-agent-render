@@ -108,6 +108,8 @@ describe("public dashboard HTTP boundary", () => {
     const html = await dashboard.text();
     expect(dashboard.status).toBe(200);
     expect(html).toContain("Change phone number");
+    expect(html).toContain("Not in the U.S.?");
+    expect(html).toContain("United Kingdom (+44)");
     expect(html).toContain("••••••0123");
     expect(html).toContain("Photon");
     expect(html).toContain("ChatGPT");
@@ -191,12 +193,16 @@ describe("public dashboard HTTP boundary", () => {
 
     const owner = await fetch(
       `${base}/api/setup/owner`,
-      mutation(base, '{"phoneNumber":"+442071838750"}'),
+      mutation(
+        base,
+        '{"countryCode":"GB","phoneNumber":"020 7183 8750"}',
+      ),
     );
     const ownerBody = await owner.text();
     expect(owner.status).toBe(200);
     expect(ownerBody).toContain("••••••8750");
     expect(ownerBody).not.toContain("+442071838750");
+    expect(ownerBody).not.toContain("020 7183 8750");
 
     const photon = await fetch(
       `${base}/api/setup/photon/start`,

@@ -13,6 +13,10 @@ import {
   type SpectrumFailureCode,
 } from "../http/readiness.js";
 import {
+  ReadReceiptDispatcher,
+  type ReadReceiptDispatcherPort,
+} from "./read-receipts.js";
+import {
   SenderIdentityError,
   normalizeIMessageSender,
   type NormalizedSenderIdentity,
@@ -77,6 +81,7 @@ export interface SpectrumMessageLoopOptions {
   messages: () => AsyncIterable<readonly [Space, Message]>;
   readiness: SpectrumReadiness;
   onIgnored?: (reason: IgnoredSpectrumEventReason) => void;
+  readReceiptDispatcher?: ReadReceiptDispatcherPort;
   restartPolicy?: RestartPolicy;
   signal?: AbortSignal;
   wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
@@ -135,6 +140,8 @@ function defaultWait(milliseconds: number, signal?: AbortSignal): Promise<void> 
 function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted ?? false;
 }
+
+const directHandleReadReceiptDispatcher = new ReadReceiptDispatcher();
 
 function normalizeInboundText(
   space: Space,
@@ -206,7 +213,10 @@ export async function handleSpectrumMessage(
   message: Message,
   options: Pick<
     SpectrumMessageLoopOptions,
-    "authorizeAndIngest" | "onIgnored" | "signal"
+    | "authorizeAndIngest"
+    | "onIgnored"
+    | "readReceiptDispatcher"
+    | "signal"
   >,
 ): Promise<IngestDisposition | IgnoredSpectrumEventReason> {
   const normalized = normalizeInboundText(space, message);
@@ -221,11 +231,12 @@ export async function handleSpectrumMessage(
   );
 
   if (disposition !== "unauthorized") {
-    // Photon delivery does not automatically mean the agent has read the
-    // message. Acknowledge it only after authorization and successful durable
-    // handling so the sender sees Read without leaking activity to rejected
-    // senders or claiming a failed ingest was seen.
-    await message.read();
+    // A receipt is best-effort provider work. Schedule it only after the
+    // authorization and durable-ingest boundary, but never return its promise
+    // to message handling or the supervised stream catch block.
+    (options.readReceiptDispatcher ?? directHandleReadReceiptDispatcher).dispatch(
+      () => message.read(),
+    );
   }
 
   return disposition;
@@ -236,58 +247,75 @@ export async function runSpectrumMessageLoop(
 ): Promise<void> {
   const policy = options.restartPolicy ?? DEFAULT_RESTART_POLICY;
   const wait = options.wait ?? defaultWait;
+  const readReceiptDispatcher =
+    options.readReceiptDispatcher ?? new ReadReceiptDispatcher();
   let restartAttempt = 0;
 
-  options.readiness.markStarting();
+  try {
+    options.readiness.markStarting();
 
-  while (!isAborted(options.signal)) {
-    try {
-      const messages = options.messages();
-      options.readiness.markConnected();
+    while (!isAborted(options.signal)) {
+      try {
+        const messages = options.messages();
+        options.readiness.markConnected();
 
-      for await (const [space, message] of messages) {
+        for await (const [space, message] of messages) {
+          if (isAborted(options.signal)) {
+            break;
+          }
+
+          await handleSpectrumMessage(space, message, {
+            authorizeAndIngest: options.authorizeAndIngest,
+            ...(options.onIgnored === undefined
+              ? {}
+              : { onIgnored: options.onIgnored }),
+            readReceiptDispatcher,
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          });
+          // Receiving and handling an event proves that the restarted stream
+          // is healthy; future disconnects begin a new consecutive-failure
+          // window. Receipt failures never enter this control flow.
+          restartAttempt = 0;
+        }
+
         if (isAborted(options.signal)) {
           break;
         }
 
-        await handleSpectrumMessage(space, message, options);
-        // Receiving and handling an event proves that the restarted stream is
-        // healthy; future disconnects begin a new consecutive-failure window.
-        restartAttempt = 0;
-      }
+        throw new SpectrumStreamEndedError();
+      } catch (error) {
+        if (isAborted(options.signal)) {
+          break;
+        }
 
-      if (isAborted(options.signal)) {
-        break;
-      }
-
-      throw new SpectrumStreamEndedError();
-    } catch (error) {
-      if (isAborted(options.signal)) {
-        break;
-      }
-
-      restartAttempt += 1;
-      const exhausted = restartAttempt > policy.maxRestarts;
-      options.readiness.markDegraded(
-        exhausted
-          ? "SPECTRUM_STREAM_RESTART_EXHAUSTED"
-          : "SPECTRUM_STREAM_DISCONNECTED",
-        restartAttempt,
-      );
-
-      if (exhausted) {
-        throw new SpectrumMessageLoopError(
-          "SPECTRUM_STREAM_RESTART_EXHAUSTED",
-          error,
+        restartAttempt += 1;
+        const exhausted = restartAttempt > policy.maxRestarts;
+        options.readiness.markDegraded(
+          exhausted
+            ? "SPECTRUM_STREAM_RESTART_EXHAUSTED"
+            : "SPECTRUM_STREAM_DISCONNECTED",
+          restartAttempt,
         );
-      }
 
-      await wait(calculateRestartDelay(restartAttempt, policy), options.signal);
-      if (!isAborted(options.signal)) {
-        options.readiness.markStarting(restartAttempt);
+        if (exhausted) {
+          throw new SpectrumMessageLoopError(
+            "SPECTRUM_STREAM_RESTART_EXHAUSTED",
+            error,
+          );
+        }
+
+        await wait(
+          calculateRestartDelay(restartAttempt, policy),
+          options.signal,
+        );
+        if (!isAborted(options.signal)) {
+          options.readiness.markStarting(restartAttempt);
+        }
       }
     }
-  }
 
-  options.readiness.markStopped();
+    options.readiness.markStopped();
+  } finally {
+    await readReceiptDispatcher.close().catch(() => undefined);
+  }
 }

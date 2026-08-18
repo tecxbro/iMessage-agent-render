@@ -94,7 +94,9 @@ These boundaries are non-interchangeable:
 
 The HTTP setup surface has its own operator boundary. `DASHBOARD_SETUP_SECRET` is a private production configuration value generated in the Render Web Service environment. A successful constant-time secret check creates an opaque, server-side session and a session-bound CSRF token. The store permits at most eight active sessions, expires each after eight hours, cleans up stale sessions, and invalidates every session on restart. It is intentionally not a durable identity store.
 
-The browser receives only an opaque session cookie with `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` in production, and no `Domain`. The setup secret is never stored in that cookie, HTML, JavaScript, browser storage, or a URL. This operator boundary is reusable by the owner-phone endpoints planned for Prompt 2; this change does not move the owner phone out of the Render Blueprint prompt.
+The browser receives only an opaque session cookie with `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` in production, and no `Domain`. The setup secret is never stored in that cookie, HTML, JavaScript, browser storage, or a URL. Owner status and setup use this operator boundary; writes also require the session-bound CSRF token and same-origin validation. Public status objects and rendered pages contain only the masked owner phone.
+
+`DeploymentIdentityController` can exist before PostgreSQL is connected. After migrations, `OperationalRepository.ensureDeployment()` creates the deployment and primary owner without a channel identity, then the controller binds to the repository. An active database identity wins; only when none exists may one valid legacy environment phone be imported. Stored Photon metadata is never an authorization source. The controller serializes replacements, exposes masked state, and notifies activation only after persistence succeeds.
 
 ## 4. Boot sequence
 
@@ -106,6 +108,7 @@ sequenceDiagram
   participant H as Health server
   participant B as Bootstrap coordinator
   participant D as Disk and database
+  participant O as Owner identity
   participant C as Codex
   participant S as Spectrum
 
@@ -114,9 +117,10 @@ sequenceDiagram
   B->>B: validate configuration
   B->>D: prepare CODEX_HOME and workspaces
   B->>D: connect database and verify migrations
+  B->>O: ensure deployment and initialize owner
   B->>D: start pg-boss and reconciliation
   B->>C: inspect auth and probe model/effort/sandbox
-  alt auth and capabilities ready
+  alt owner, auth, and capabilities ready
     B->>S: launch supervised gRPC receive loop
     S-->>B: connected
     H-->>R: /readyz = 200
@@ -133,10 +137,11 @@ The ordered startup stages in `startAgentService()` are:
 3. prepare the two persistent directories and Codex config;
 4. connect PostgreSQL;
 5. apply or verify migrations;
-6. start pg-boss;
-7. inspect Codex auth and probe configured capabilities;
-8. configure optional Supermemory; and
-9. start Spectrum only when Codex auth and capabilities are ready.
+6. ensure the deployment, bind the owner identity repository, and import one valid legacy owner only when no database identity exists;
+7. start pg-boss;
+8. inspect Codex auth and probe configured capabilities;
+9. configure optional Supermemory; and
+10. start Spectrum only when owner identity, Photon, Codex auth, and capabilities are ready.
 
 The integration bootstrap must make `startSpectrum()` resolve after supervision has been launched and connection state can be tracked; it must not block bootstrap completion for the lifetime of the stream. It must also run durable-pipeline reconciliation before accepting normal work.
 
@@ -251,11 +256,11 @@ GET /readyz   -> public safe aggregate state; 200 only when critical components 
 GET /readyz   -> public safe aggregate state with 503 otherwise
 ```
 
-Critical readiness components are configuration, database, migrations, queue, Spectrum, Codex auth, Codex capabilities, disk, and workspace. Supermemory may be `disabled` or degraded without making operational readiness depend on semantic storage. Public `/readyz` reports only their aggregate result; it does not include component names, setup actions, owner information, provider states, or provider errors. The authenticated dashboard's same-origin `/readyz` request receives the detailed readiness snapshot.
+Critical readiness components are configuration, database, migrations, queue, owner identity, Spectrum, Codex auth, Codex capabilities, disk, and workspace. Supermemory may be `disabled` or degraded without making operational readiness depend on semantic storage. Public `/readyz` reports only their aggregate result; it does not include component names, setup actions, owner information, provider states, or provider errors. The authenticated dashboard's same-origin `/readyz` request receives the detailed readiness snapshot.
 
 Raw provider errors, credentials, handles, message content, device codes, verification URLs, assigned numbers, detailed readiness, and unrestricted paths never enter unauthenticated responses. Render uses `/healthz` to avoid turning incomplete private enrollment into a restart loop. Operators use `/readyz` as the aggregate acceptance gate and the authenticated dashboard for setup and component detail.
 
-The current `src/server.ts` starts this health server first, runs each operational stage, and shuts the composition down on process signals. Its `/healthz` proves only that the HTTP process is alive; `/readyz` becomes `200` only after PostgreSQL, migrations, queue, Codex auth/capabilities, storage, and Spectrum are ready.
+The current `src/server.ts` starts this health server first, runs each operational stage, and shuts the composition down on process signals. Its `/healthz` proves only that the HTTP process is alive; `/readyz` becomes `200` only after the owner, PostgreSQL, migrations, queue, Codex auth/capabilities, storage, and Spectrum are ready. A fresh deployment without an owner is deliberately live but not ready, and Spectrum intake remains stopped.
 
 ### 8.1 Operator route boundary
 
@@ -266,6 +271,8 @@ The current `src/server.ts` starts this health server first, runs each operation
 | `GET /agent/dashboard` | Public login page when unauthenticated; operational dashboard only with a live session |
 | `POST /api/operator/session` | Public strict, size-limited login attempt with failed-attempt rate limiting |
 | `GET /agent/dashboard.js`, Photon status, ChatGPT status | Live operator session |
+| `GET /api/setup/owner/status` | Live operator session; masked owner only |
+| `POST /api/setup/owner` | Live operator session plus CSRF and same-origin checks; exact size-limited E.164 JSON |
 | Photon setup start, ChatGPT setup start, `DELETE /api/operator/session` | Live operator session plus session-bound CSRF token, same-origin `Origin`, and fetch-metadata validation |
 
 The server rejects unexpected JSON fields at route boundaries. The public `x-agent-setup` convention is removed; possession of dashboard JavaScript never proves authorization. Setup-secret, session, CSRF, and device-code values are excluded from logs.

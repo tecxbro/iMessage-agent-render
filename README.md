@@ -21,10 +21,10 @@ Review current Render pricing before deploying. The Blueprint creates paid resou
 ## Deploy in five steps
 
 1. Click **Deploy to Render** above.
-2. Enter the owner's E.164 phone number when Render prompts for it, such as `+19495550123`.
-3. Let Render create the Web Service, PostgreSQL database, persistent disk, application encryption key, and dashboard setup secret. The pre-deploy command applies the checked-in database migrations.
-4. Open **Web Service > Environment**, reveal `DASHBOARD_SETUP_SECRET`, and use it as the **Deployment setup code** at the Web Service URL. After login, authenticate Photon, then connect ChatGPT from the agent dashboard. If you choose API-key mode instead, set `CODEX_AUTH_MODE=api_key` and add `OPENAI_API_KEY` as a Render secret.
-5. Confirm `/readyz` returns HTTP 200, then message the agent from the authorized iMessage handle.
+2. Approve the Blueprint. New deployments ask for zero user-supplied environment values; Render creates the Web Service, PostgreSQL database, persistent disk, application encryption key, and dashboard setup secret.
+3. Open **Web Service > Environment**, reveal `DASHBOARD_SETUP_SECRET`, and use it as the **Deployment setup code** at the Web Service URL.
+4. After login, enter your personal phone number, authenticate Photon, then connect ChatGPT. If you choose API-key mode instead, set `CODEX_AUTH_MODE=api_key` and add `OPENAI_API_KEY` as a Render secret.
+5. Confirm `/readyz` returns HTTP 200, then text the Photon-assigned number shown at completion from the configured owner phone.
 
 Render keeps auto-deploys off for template-created services. Deploy reviewed updates manually so a push to the original template cannot redeploy every user's copy.
 
@@ -34,7 +34,7 @@ Render generates `DASHBOARD_SETUP_SECRET` inside the private Web Service environ
 
 A successful login creates an eight-hour server-side operator session; the service holds at most eight active sessions. The browser receives an `HttpOnly`, `SameSite=Strict`, `Path=/` cookie that is also `Secure` in production; the setup secret itself is not stored in the cookie or browser storage. Protected setup changes require a session-bound CSRF token and same-origin request. Logout revokes the session, and a service restart invalidates all dashboard sessions.
 
-The owner phone number is still entered in Render during Blueprint deployment. It is not collected by this dashboard; moving it is reserved for the separate Prompt 2 work.
+The authenticated dashboard collects the owner's E.164 phone number before Photon setup. That personal number is the only iMessage sender authorized to use the agent and is also registered during Photon owner provisioning. The different Photon-assigned number shown at completion is the destination the owner texts. Replacing the owner number in the dashboard revokes the previous owner identity before the new identity can authorize messages.
 
 ## Finish Codex authentication
 
@@ -44,7 +44,7 @@ The default `CODEX_AUTH_MODE` is `chatgpt`.
 
 1. Open the deployed **Web Service** URL in a trusted browser.
 2. Enter the Render-generated deployment setup code.
-3. Finish Photon setup first, then select **Connect ChatGPT**.
+3. Save the owner phone and finish Photon setup first, then select **Connect ChatGPT**.
 4. Open the displayed device-auth URL, sign in, and enter the one-time code.
 5. Keep the dashboard open while it verifies the login and prepares Codex. The dashboard advances automatically when each stage is ready.
 
@@ -71,7 +71,7 @@ curl --silent --show-error "https://<service-host>/readyz"
 ```
 
 - `/healthz` returning 200 means the HTTP process is alive.
-- `/readyz` returning 200 means critical storage, PostgreSQL, migration, queue, Codex, and Spectrum checks are ready.
+- `/readyz` returning 200 means owner identity, critical storage, PostgreSQL, migration, queue, Codex, and Spectrum checks are ready.
 - `/readyz` returning 503 means setup is incomplete or a dependency is degraded. Its public response is limited to safe aggregate readiness state.
 
 The root URL is an operator entry point, not an iMessage chat or Photon enrollment link. Before authentication it displays only the deployment setup-code form. Provider status, device codes, verification URLs, the assigned number, owner information, detailed readiness, and provider errors remain inside the authenticated dashboard.
@@ -114,7 +114,7 @@ The most common edits are:
 | Execution behavior | `prompts/execution.system.md` |
 | Approval rules | `prompts/approval-policy.md` |
 | Models and reasoning effort | `.env` model variables |
-| Authorized sender | `OWNER_PHONE_NUMBER` (`AGENT_OWNER_HANDLES` remains a legacy fallback) |
+| Authorized sender | **Change phone number** in the authenticated dashboard; owner environment values are migration inputs only |
 | Semantic memory | `SUPERMEMORY_API_KEY` |
 | Render region, plans, and disk | `render.yaml` |
 | Concurrency and runtime limits | `.env` |

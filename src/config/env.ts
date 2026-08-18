@@ -307,20 +307,6 @@ const rawEnvironmentSchema = z
     }
 
     if (
-      environment.OWNER_PHONE_NUMBER === undefined &&
-      environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123 ===
-        undefined &&
-      environment.AGENT_OWNER_HANDLES === undefined
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["OWNER_PHONE_NUMBER"],
-        message:
-          "OWNER_PHONE_NUMBER is required unless AGENT_OWNER_HANDLES is set by an existing deployment",
-      });
-    }
-
-    if (
       environment.OWNER_PHONE_NUMBER !== undefined &&
       environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123 !==
         undefined &&
@@ -382,24 +368,10 @@ const rawEnvironmentSchema = z
       });
     }
   })
-  .transform((environment) => {
-    const {
-      OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123:
-        renderOwnerPhoneNumber,
-      ...normalizedEnvironment
-    } = environment;
-    const ownerPhoneNumber =
-      renderOwnerPhoneNumber ?? environment.OWNER_PHONE_NUMBER;
-
-    return {
-      ...normalizedEnvironment,
-      OWNER_PHONE_NUMBER: ownerPhoneNumber,
-      AGENT_OWNER_HANDLES:
-        ownerPhoneNumber === undefined
-          ? environment.AGENT_OWNER_HANDLES!
-          : [ownerPhoneNumber],
-    };
-  });
+  .transform((environment) => ({
+    ...environment,
+    AGENT_OWNER_HANDLES: environment.AGENT_OWNER_HANDLES ?? [],
+  }));
 
 export type Environment = z.infer<typeof rawEnvironmentSchema>;
 

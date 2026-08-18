@@ -14,7 +14,7 @@ Before approving the Blueprint, confirm it creates exactly:
 - one Render PostgreSQL database; and
 - one persistent disk attached to the Web Service.
 
-Enter the application owner's phone number when prompted. Render generates `APP_ENCRYPTION_KEY` and `DASHBOARD_SETUP_SECRET` and supplies `DATABASE_URL` from the attached database; Photon and ChatGPT connect from the deployed agent dashboard after operator login.
+New Blueprint deployments ask for zero user-supplied environment values. Render generates `APP_ENCRYPTION_KEY` and `DASHBOARD_SETUP_SECRET` and supplies `DATABASE_URL` from the attached database; the owner phone, Photon, and ChatGPT are configured from the deployed dashboard after operator login.
 
 The build runs `npm ci --include=dev && npm run build`, the pre-deploy phase runs `npm run db:migrate`, and the service starts with `npm start`. The generated `onrender.com` URL is an operator login and setup entry point, not an iMessage chat or Photon enrollment link.
 
@@ -29,7 +29,7 @@ The build runs `npm ci --include=dev && npm run build`, the pre-deploy phase run
 | ChatGPT device login or OpenAI API key | Authenticates Codex | ChatGPT account security or OpenAI Platform |
 | Supermemory API key | Optional semantic memory | Supermemory dashboard |
 
-Enter the owner's phone number in E.164 format, such as `+19495550123`. After deployment, the dashboard authenticates Photon, provisions the provider project and line, and persists its private credentials separately from the owner allowlist.
+After dashboard authentication, enter the owner's personal phone number in E.164 format, such as `+19495550123`. It becomes the only authorized sender and the phone registered during Photon owner provisioning. Photon separately assigns the iMessage destination displayed at completion.
 
 Never place credentials in source control, screenshots, tickets, database rows, Supermemory, or logs.
 
@@ -49,13 +49,7 @@ These are paid resources. Check current Render pricing before deployment. The di
 
 ## 4. Environment values entered during deployment
 
-Render prompts for values marked `sync: false` only when the Blueprint is first created.
-
-| Variable | Required | Value |
-|---|---:|---|
-| `OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123` | Yes | The owner's actual E.164 phone number, such as `+19495550123` |
-
-Render always labels the value control generically, so the Blueprint key carries the format example. Do not enter the example unless it is actually the owner's number. Existing services may keep using `OWNER_PHONE_NUMBER`; if both variables are present, they must match.
+None. The Blueprint contains no `sync: false` values, so a new deployment has no operator-supplied environment form.
 
 The Blueprint supplies these values without prompting:
 
@@ -68,7 +62,7 @@ The Blueprint supplies these values without prompting:
 
 `DASHBOARD_SETUP_SECRET` uses `generateValue: true`, not `sync: false`. When the variable does not already exist, Render creates a random base64-encoded 256-bit value. The value lives only in the Web Service's private environment; open **Web Service > Environment** to reveal or copy the deployment setup code. Blueprint sync preserves an existing generated value instead of rotating it.
 
-For an existing service, add or rotate secrets under **Web Service > Environment**, then rebuild and deploy. Render does not replay newly added `sync: false` prompts during a Blueprint update.
+For an existing service, add or rotate secrets under **Web Service > Environment**, then rebuild and deploy. Legacy owner values are not deleted automatically; remove them manually only after the dashboard shows the migrated masked owner and an authorized message succeeds.
 
 See [Configuration](./CONFIGURATION.md) for every supported variable.
 
@@ -76,14 +70,14 @@ See [Configuration](./CONFIGURATION.md) for every supported variable.
 
 1. Open the deployed Web Service URL in a trusted browser.
 2. Enter `DASHBOARD_SETUP_SECRET` in the **Deployment setup code** field. Do not put it in a URL, screenshot, support ticket, or browser storage.
-3. After authentication, complete Photon and ChatGPT setup in the private dashboard.
+3. After authentication, save the owner's E.164 phone, complete Photon setup, and then complete ChatGPT setup.
 4. Log out when the trusted setup session is no longer needed.
 
 Authentication creates an eight-hour session stored on the server, with no more than eight active sessions retained. The browser cookie contains only an opaque session identifier and is `HttpOnly`, `SameSite=Strict`, `Path=/`, and `Secure` in production, with no `Domain` attribute. State-changing setup requests also require a session-bound CSRF token, a same-origin `Origin`, and a non-cross-site fetch context. Logout revokes the session. A service restart invalidates all sessions and requires a new login.
 
 To rotate an exposed or shared setup code, open **Web Service > Environment**, regenerate or replace `DASHBOARD_SETUP_SECRET`, save the change, and redeploy or restart the service so it reads the replacement. Then sign in with the new value. If the code is lost, use the same Render Environment recovery path; there is no public reset or recovery link. Render does not rotate a generated value merely because the Blueprint is synchronized.
 
-The owner phone number remains the `sync: false` Render Blueprint prompt described above. This dashboard does not collect or change it; that is reserved for Prompt 2.
+Owner status and writes remain inside this boundary. The read route returns only a masked phone, and the write route additionally requires the live session's CSRF token and same-origin request headers. Photon setup is unavailable until an owner is stored.
 
 ## 6. ChatGPT device-login flow
 
@@ -91,7 +85,7 @@ The default mode is `CODEX_AUTH_MODE=chatgpt`.
 
 1. Enable device-code login in the ChatGPT account or workspace if required.
 2. In Render, open the deployed **Web Service** URL and authenticate with the deployment setup code.
-3. Complete Photon authentication on the private agent dashboard.
+3. Save the owner phone and complete Photon authentication on the private agent dashboard.
 4. Select **Connect ChatGPT**, open the device-auth popup, sign in, and enter the one-time code.
 5. Keep the dashboard open. It closes the popup when the browser permits, returns focus to setup, and shows Codex preparing.
 6. Confirm the dashboard reaches **Your agent is ready** and public `/readyz` returns HTTP 200.
@@ -127,8 +121,9 @@ curl --silent --show-error "https://<service-host>/readyz"
 Expected results:
 
 - `/healthz` returns HTTP 200 when the HTTP process is alive.
-- `/readyz` returns HTTP 200 only when configuration, storage, PostgreSQL, migrations, queue, Codex authentication, Codex capabilities, and Spectrum are ready.
+- `/readyz` returns HTTP 200 only when configuration, storage, PostgreSQL, migrations, queue, owner identity, Codex authentication, Codex capabilities, and Spectrum are ready.
 - `/readyz` returns HTTP 503 with a safe aggregate state when setup is incomplete or a critical dependency is degraded.
+- A fresh deployment before owner setup is expected to return `/healthz` 200 and `/readyz` 503.
 - Supermemory may be `disabled` or `degraded` without blocking the operational pipeline.
 
 Public readiness never includes provider states, owner information, setup actions, private paths, or provider errors. Authenticate to the dashboard for detailed setup state. Do not use `/healthz` as deployment acceptance.
@@ -156,7 +151,7 @@ Offline unit, integration, and chaos tests do not prove a live Render, Photon, C
 6. Require `/healthz` and `/readyz` to return 200.
 7. Run one authorized non-mutating message and one restart follow-up.
 
-If a new `sync: false` variable was added, configure it directly on the existing Web Service before deploying. `DASHBOARD_SETUP_SECRET` is generated instead; confirm it exists in the private service environment before the new revision starts.
+At first startup on this version, an active database owner wins. If none exists, the runtime imports `OWNER_PHONE_NUMBER`, then the former long Render alias, then one unambiguous E.164 `AGENT_OWNER_HANDLES` value. It never imports authorization from stored Photon metadata and never overwrites a database owner on later restarts. Multiple handles or a non-phone handle require the operator to authenticate and save the intended phone in the dashboard. After verifying migration, old owner environment values may be removed manually.
 
 ## 11. Rollback
 

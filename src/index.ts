@@ -7,6 +7,10 @@ import type { ChatGptSetupController } from "./agent/codex-app-server-auth.js";
 import { startHealthServer, type HealthServer } from "./http/server.js";
 import type { DeploymentPageOptions } from "./http/deployment-page.js";
 import type { OperatorAuth } from "./http/operator-auth.js";
+import type {
+  DeploymentIdentityController,
+  DeploymentIdentityStatus,
+} from "./runtime/deployment-identity.js";
 import type { PhotonSetupController } from "./transport/photon-setup.js";
 import {
   GracefulShutdown,
@@ -26,6 +30,10 @@ export interface AgentServiceBootstrap {
   prepareStorage(): Promise<void>;
   connectDatabase(): Promise<void>;
   applyMigrations(): Promise<void>;
+  initializeDeploymentIdentity?(): Promise<{
+    status: DeploymentIdentityStatus;
+    migrationRequired: boolean;
+  }>;
   startQueue(): Promise<void>;
   checkCodex(): Promise<CodexStartupState>;
   configureSupermemory(): Promise<
@@ -54,6 +62,7 @@ export interface StartAgentServiceOptions {
   host?: string;
   bootstrap: AgentServiceBootstrap;
   operatorAuth: OperatorAuth;
+  deploymentIdentity?: DeploymentIdentityController;
   secureSessionCookie?: boolean;
   deploymentPage?: Omit<DeploymentPageOptions, "runtimeMode">;
   photonSetup?: PhotonSetupController;
@@ -100,6 +109,9 @@ export async function startAgentService(
     readiness,
     spectrum: spectrumReadiness,
     operatorAuth: options.operatorAuth,
+    ...(options.deploymentIdentity === undefined
+      ? {}
+      : { deploymentIdentity: options.deploymentIdentity }),
     ...(options.secureSessionCookie === undefined
       ? {}
       : { secureSessionCookie: options.secureSessionCookie }),
@@ -143,6 +155,9 @@ export async function startAgentService(
   const photonConnected = (): boolean =>
     options.photonSetup === undefined ||
     options.photonSetup.status().state === "connected";
+  const ownerConfigured = (): boolean =>
+    options.deploymentIdentity === undefined ||
+    options.deploymentIdentity.status().state === "configured";
 
   const refreshCodexReadiness = async (): Promise<boolean> => {
     codexChecked = true;
@@ -184,7 +199,12 @@ export async function startAgentService(
       }
     }
 
-    if (!codexReady || !photonConnected() || shutdown.signal.aborted) {
+    if (
+      !codexReady ||
+      !ownerConfigured() ||
+      !photonConnected() ||
+      shutdown.signal.aborted
+    ) {
       spectrumReadiness.markStopped();
       return;
     }
@@ -219,6 +239,22 @@ export async function startAgentService(
     return unlockPromise;
   };
 
+  const disposeIdentityListener = options.deploymentIdentity?.onConfigured(
+    async () => {
+      readiness.mark("ownerIdentity", "ok");
+      await requestUnlock(false);
+    },
+  );
+  if (disposeIdentityListener !== undefined) {
+    shutdown.register({
+      name: "deployment-identity-listener",
+      priority: 5,
+      timeoutMs: 1_000,
+      stop: async () => {
+        disposeIdentityListener();
+      },
+    });
+  }
   options.photonSetup?.onConnected?.(() => requestUnlock(false));
   options.chatgptSetup?.onConnected(() => requestUnlock(true));
 
@@ -268,6 +304,50 @@ export async function startAgentService(
       options.bootstrap.applyMigrations,
     );
     readiness.mark("migrations", "ok");
+
+    readiness.mark("ownerIdentity", "starting");
+    if (options.bootstrap.initializeDeploymentIdentity === undefined) {
+      readiness.mark("ownerIdentity", "ok");
+    } else {
+      let identityInitialization: Awaited<
+        ReturnType<
+          NonNullable<
+            AgentServiceBootstrap["initializeDeploymentIdentity"]
+          >
+        >
+      >;
+      try {
+        identityInitialization =
+          await options.bootstrap.initializeDeploymentIdentity();
+      } catch (error) {
+        throw new StartupStageError("OWNER_IDENTITY_STORAGE_FAILED", {
+          cause: error,
+        });
+      }
+      if (identityInitialization.migrationRequired) {
+        readiness.mark(
+          "ownerIdentity",
+          "failed",
+          "OWNER_IDENTITY_MIGRATION_REQUIRED",
+        );
+      } else if (identityInitialization.status.state === "configured") {
+        readiness.mark("ownerIdentity", "ok");
+      } else if (
+        identityInitialization.status.state === "not_configured"
+      ) {
+        readiness.mark(
+          "ownerIdentity",
+          "missing",
+          "OWNER_IDENTITY_NOT_CONFIGURED",
+        );
+      } else if (identityInitialization.status.state === "failed") {
+        readiness.mark(
+          "ownerIdentity",
+          "failed",
+          identityInitialization.status.code,
+        );
+      }
+    }
 
     readiness.mark("queue", "starting");
     await runStartupStage("QUEUE_UNAVAILABLE", options.bootstrap.startQueue);
@@ -320,6 +400,8 @@ export async function startAgentService(
       readiness.mark("database", "failed", code);
     } else if (code === "MIGRATIONS_PENDING") {
       readiness.mark("migrations", "failed", code);
+    } else if (code === "OWNER_IDENTITY_STORAGE_FAILED") {
+      readiness.mark("ownerIdentity", "failed", code);
     } else if (code === "QUEUE_UNAVAILABLE") {
       readiness.mark("queue", "failed", code);
     } else if (code === "SPECTRUM_START_FAILED") {

@@ -1,4 +1,5 @@
 import type { ChatGptSetupStatus } from "../agent/codex-app-server-auth.js";
+import type { DeploymentIdentityStatus } from "../runtime/deployment-identity.js";
 import type { PhotonSetupStatus } from "../transport/photon-setup.js";
 import type { ServiceReadinessSnapshot } from "./readiness.js";
 
@@ -30,6 +31,55 @@ function photonStateLabel(status: PhotonSetupStatus): string {
     case "not_connected":
       return "Not connected";
   }
+}
+
+function ownerStateLabel(status: DeploymentIdentityStatus): string {
+  switch (status.state) {
+    case "configured":
+      return "✓ Saved";
+    case "initializing":
+      return "Loading";
+    case "failed":
+      return "Setup needs attention";
+    case "not_configured":
+      return "Not configured";
+  }
+}
+
+function renderOwnerForm(configured: boolean): string {
+  return `<form id="owner-form" class="owner-form" novalidate>
+    <label for="owner-phone-number"${configured ? ' class="visually-hidden"' : ""}>${configured ? "New phone number" : "Your phone number"}</label>
+    <input
+      id="owner-phone-number"
+      name="phoneNumber"
+      type="tel"
+      inputmode="tel"
+      autocomplete="tel"
+      placeholder="+14155550123"
+      aria-describedby="owner-help owner-error"
+      required
+    >
+    <button class="button" type="submit">${configured ? "Save new number" : "Save and continue"}</button>
+    <p id="owner-error" class="error" aria-live="polite"></p>
+  </form>`;
+}
+
+function renderOwnerAction(status: DeploymentIdentityStatus): string {
+  if (status.state === "initializing") {
+    return `<p class="progress">Loading the saved deployment identity…</p>`;
+  }
+  if (status.state === "failed") {
+    return `<p class="error">Owner setup is unavailable. <code>${escapeHtml(status.code)}</code></p>`;
+  }
+  if (status.state === "configured") {
+    return `<p id="owner-help" class="owner-summary">Only <strong>${escapeHtml(status.maskedPhoneNumber)}</strong> can use this agent.</p>
+      <details class="owner-replace">
+        <summary>Change phone number</summary>
+        ${renderOwnerForm(true)}
+      </details>`;
+  }
+  return `<p id="owner-help" class="owner-help">This is the only phone number allowed to use your agent.</p>
+    ${renderOwnerForm(false)}`;
 }
 
 function chatGptStateLabel(status: ChatGptSetupStatus): string {
@@ -97,6 +147,7 @@ function renderChatGptAction(
 
 function renderFinalPage(
   phoneNumber: string | undefined,
+  maskedOwnerPhoneNumber: string,
   authMode: DeploymentPageOptions["authMode"],
 ): string {
   const number =
@@ -110,6 +161,7 @@ function renderFinalPage(
     <section class="card ready-card" aria-labelledby="ready-title">
       <h2 id="ready-title" class="visually-hidden">Agent readiness</h2>
       <ul class="ready-list">
+        <li>✓ Owner ${escapeHtml(maskedOwnerPhoneNumber)}</li>
         <li>✓ Photon connected</li>
         <li>✓ ${authMode === "chatgpt" ? "ChatGPT" : "OpenAI API key"} connected</li>
         <li>✓ Codex ready</li>
@@ -123,9 +175,11 @@ export function renderDeploymentPage(
   snapshot: ServiceReadinessSnapshot,
   options: DeploymentPageOptions,
   csrfToken: string,
+  ownerStatus: DeploymentIdentityStatus = { state: "not_configured" },
   photonStatus: PhotonSetupStatus = { state: "not_connected" },
   chatGptStatus: ChatGptSetupStatus = { state: "not_connected" },
 ): string {
+  const ownerConfigured = ownerStatus.state === "configured";
   const photonConnected = photonStatus.state === "connected";
   const chatGptConnected =
     options.authMode === "api_key"
@@ -139,6 +193,7 @@ export function renderDeploymentPage(
   const agentReady =
     options.runtimeMode === "agent" &&
     snapshot.ready &&
+    ownerConfigured &&
     photonConnected &&
     chatGptConnected &&
     codexReady;
@@ -147,6 +202,7 @@ export function renderDeploymentPage(
       ? photonStatus.assignedPhoneNumber
       : undefined;
   const polling =
+    ownerStatus.state === "initializing" ||
     photonStatus.state === "awaiting_authorization" ||
     photonStatus.state === "provisioning" ||
     chatGptStatus.state === "starting" ||
@@ -154,18 +210,35 @@ export function renderDeploymentPage(
     (photonConnected && chatGptConnected && !agentReady);
 
   const content = agentReady
-    ? renderFinalPage(assignedPhoneNumber, options.authMode)
+    ? renderFinalPage(
+        assignedPhoneNumber,
+        ownerStatus.state === "configured"
+          ? ownerStatus.maskedPhoneNumber
+          : "",
+        options.authMode,
+      )
     : `<p class="eyebrow">Private agent / setup</p>
     <h1>iMessage Agent</h1>
     <p class="intro">Connect the services below. Message intake stays off until every step is ready.</p>
     <div class="stack">
-      <section class="card" aria-labelledby="photon-title">
+      <section class="card" aria-labelledby="owner-title">
+        <div class="card-heading">
+          <h2 id="owner-title">Your phone number</h2>
+          <div class="state ${ownerConfigured ? "ok" : ""}" aria-live="polite">${escapeHtml(ownerStateLabel(ownerStatus))}</div>
+        </div>
+        ${renderOwnerAction(ownerStatus)}
+      </section>
+      ${
+        ownerConfigured
+          ? `<section class="card" aria-labelledby="photon-title">
         <div class="card-heading">
           <h2 id="photon-title">Photon</h2>
           <div id="photon-state" class="state ${photonConnected ? "ok" : ""}" aria-live="polite">${escapeHtml(photonStateLabel(photonStatus))}</div>
         </div>
         ${renderPhotonAction(photonStatus)}
-      </section>
+      </section>`
+          : ""
+      }
       ${
         photonConnected
           ? `<section class="card" aria-labelledby="chatgpt-title">
@@ -271,7 +344,16 @@ export function renderDeploymentPage(
     .state { color: var(--muted); font-size: 0.8rem; font-weight: 650; letter-spacing: 0.02em; text-align: end; }
     .state.ok, .ready-list { color: var(--text); }
     .auth-flow { display: grid; justify-items: start; gap: 1rem; }
-    .auth-flow p, .progress { max-inline-size: 38rem; margin: 0; color: var(--muted); }
+    .auth-flow p, .progress, .owner-help, .owner-summary { max-inline-size: 38rem; margin: 0; color: var(--muted); }
+    .owner-summary strong { color: var(--text); font-variation-settings: "wght" 650; }
+    .owner-form { display: grid; max-inline-size: 28rem; gap: 0.9rem; }
+    .owner-form label { font-size: 1rem; font-variation-settings: "wght" 600; }
+    .owner-form input { inline-size: 100%; min-block-size: 3rem; padding: 0.7rem 0.85rem; border: 0.0625rem solid var(--line); border-radius: 0.4rem; background: var(--surface); color: var(--text); font: 1.05rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .owner-form input:focus-visible, .owner-replace summary:focus-visible { outline: 0.2rem solid var(--text); outline-offset: 0.2rem; }
+    .owner-form .error:empty { display: none; }
+    .owner-replace { margin-block-start: 1rem; }
+    .owner-replace summary { inline-size: fit-content; min-block-size: 2.75rem; cursor: pointer; font-variation-settings: "wght" 600; }
+    .owner-replace[open] .owner-form { margin-block-start: 1rem; }
     .codex-progress { position: relative; inline-size: 100%; block-size: 0.35rem; margin-block-start: 1.35rem; overflow: hidden; border-radius: 999rem; background: var(--line); }
     .codex-progress span { display: block; inline-size: 34%; block-size: 100%; border-radius: inherit; background: var(--accent); animation: codex-progress 1.4s ease-in-out infinite; transform: translateX(-110%); }
     .device-code { display: block; padding: 0.85rem 1rem; border: 0.0625rem solid var(--line); border-radius: 0.4rem; background: var(--soft); font: 750 clamp(1.2rem, 6vw, 2rem) ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.08em; }
@@ -303,7 +385,7 @@ export function renderDeploymentPage(
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } .codex-progress span { inline-size: 38%; animation: none !important; opacity: 0.55; transform: none; } }
   </style>
 </head>
-<body data-photon-state="${photonStatus.state}" data-chatgpt-state="${chatGptStatus.state}" data-ready="${String(agentReady)}">
+<body data-owner-state="${ownerStatus.state}" data-photon-state="${photonStatus.state}" data-chatgpt-state="${chatGptStatus.state}" data-ready="${String(agentReady)}">
   <a class="skip-link" href="#main-content">Skip to main content</a>
   <header class="topbar">
     <div class="brand">
@@ -389,20 +471,66 @@ export function renderDashboardScript(): string {
       reload();
     }
   }
+  async function saveOwner(event) {
+    event.preventDefault();
+    if (!csrfToken) return;
+    const form = event.currentTarget;
+    const input = document.getElementById("owner-phone-number");
+    const error = document.getElementById("owner-error");
+    const button = form.querySelector("button");
+    if (!input || !input.value.trim()) return;
+    const phoneNumber = input.value;
+    input.value = "";
+    if (button) button.disabled = true;
+    form.setAttribute("aria-busy", "true");
+    if (error) error.textContent = "";
+    try {
+      const response = await fetch("/api/setup/owner", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken
+        },
+        body: JSON.stringify({ phoneNumber })
+      });
+      if (response.ok) {
+        reload();
+        return;
+      }
+      const result = await response.json().catch(() => ({}));
+      if (error) {
+        error.textContent = result.error === "OWNER_PHONE_NUMBER_INVALID"
+          ? "Enter a phone number in E.164 format, starting with + and the country code."
+          : "The owner phone number could not be saved. Try again.";
+      }
+      input.setAttribute("aria-invalid", "true");
+      input.focus();
+    } catch {
+      if (error) error.textContent = "The owner phone number could not be saved. Try again.";
+      input.focus();
+    } finally {
+      if (button) button.disabled = false;
+      form.removeAttribute("aria-busy");
+    }
+  }
   async function refresh() {
     try {
-      const [photonResponse, chatgptResponse, readinessResponse] = await Promise.all([
+      const [ownerResponse, photonResponse, chatgptResponse, readinessResponse] = await Promise.all([
+        fetch("/api/setup/owner/status", { cache: "no-store", credentials: "same-origin" }),
         fetch("/api/setup/photon/status", { cache: "no-store", credentials: "same-origin" }),
         fetch("/api/setup/chatgpt/status", { cache: "no-store", credentials: "same-origin" }),
         fetch("/readyz", { cache: "no-store", credentials: "same-origin" })
       ]);
-      if (photonResponse.status === 401 || chatgptResponse.status === 401) {
+      if (ownerResponse.status === 401 || photonResponse.status === 401 || chatgptResponse.status === 401) {
         reload();
         return;
       }
+      const owner = await ownerResponse.json();
       const photon = await photonResponse.json();
       const chatgpt = await chatgptResponse.json();
       const readiness = await readinessResponse.json();
+      const ownerState = document.body.dataset.ownerState;
       const photonState = document.body.dataset.photonState;
       const chatgptState = document.body.dataset.chatgptState;
       const authCompleted =
@@ -417,6 +545,7 @@ export function renderDashboardScript(): string {
         photonState === "awaiting_authorization" &&
         photon.state === "provisioning";
       const stateChanged =
+        (typeof owner.state === "string" && owner.state !== ownerState) ||
         photon.state !== photonState ||
         chatgpt.state !== chatgptState ||
         String(readiness.ready) !== document.body.dataset.ready;
@@ -431,6 +560,8 @@ export function renderDashboardScript(): string {
     } catch {}
     timer = window.setTimeout(refresh, 2000);
   }
+  const ownerForm = document.getElementById("owner-form");
+  if (ownerForm) ownerForm.addEventListener("submit", saveOwner);
   for (const kind of ["photon", "chatgpt"]) {
     const control = document.getElementById(kind + "-start");
     if (control) control.addEventListener("click", () => void start(kind));

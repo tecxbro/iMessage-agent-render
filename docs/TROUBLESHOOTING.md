@@ -62,7 +62,7 @@ curl --fail --silent --show-error "https://<service-host>/healthz"
 curl --silent --show-error "https://<service-host>/readyz"
 ```
 
-**Expected result:** HTTP 200 only when configuration, database, migrations, queue, Codex, storage, and Spectrum are ready. HTTP 503 during incomplete setup is truthful and does not expose the failing private component.
+**Expected result:** HTTP 200 only when configuration, database, migrations, queue, owner identity, Codex, storage, and Spectrum are ready. HTTP 503 during incomplete setup is truthful and does not expose the failing private component. Before a fresh owner is saved, `/healthz` stays 200 while `/readyz` correctly stays 503.
 
 **Do not:** Use `/healthz` as acceptance, paste raw provider errors into tickets, or weaken readiness checks.
 
@@ -92,9 +92,29 @@ curl --silent --show-error "https://<service-host>/readyz"
 
 **Where to check:** Confirm the dashboard was opened directly from the deployed service origin and the session has not expired. Refresh the login/dashboard page to obtain current session state.
 
-**Expected result:** Authenticated same-origin dashboard requests include cookies and the current CSRF token automatically. Photon/ChatGPT start and logout remain unavailable to unauthenticated or cross-site requests.
+**Expected result:** Authenticated same-origin dashboard requests include cookies and the current CSRF token automatically. Owner writes, Photon/ChatGPT start, and logout remain unavailable to unauthenticated or cross-site requests.
 
 **Do not:** Disable Origin/fetch-metadata validation, expose the expected token in an error, or restore the public dashboard header.
+
+## Owner setup is missing or migration is required
+
+**What it means:** No active owner identity exists in PostgreSQL, or legacy `AGENT_OWNER_HANDLES` contains multiple handles or a non-phone identity that cannot be migrated to the single-phone flow safely.
+
+**Where to check:** Authenticate to the dashboard. Check legacy owner environment keys only in the private Render Environment page; do not print their values or use stored Photon metadata as authorization evidence.
+
+**Expected result:** Saving one valid E.164 phone creates a masked configured status, keeps the raw phone out of responses and logs, unlocks Photon setup, and survives restart. An already active database identity takes precedence over every legacy environment value.
+
+**Do not:** Select one legacy handle silently, copy the owner from Photon credential metadata, expose a public fallback route, or delete old environment values before verifying the migrated identity.
+
+## Previous owner can still message after replacement
+
+**What it means:** The owner replacement invariant or deployed revision is incorrect.
+
+**Where to check:** Stop intake and inspect redacted `channel_identities` state through an authorized database procedure. Exactly one owner identity should be active for the deployment; older owner identities should have `revoked_at` set.
+
+**Expected result:** The previous phone is rejected before persistence, queueing, or model work, while the replacement phone is accepted. Collaborator identities are unchanged.
+
+**Do not:** Delete identity history, edit fingerprints manually, or resume intake while multiple active owner identities exist.
 
 ## Dashboard setup code is lost or exposed
 

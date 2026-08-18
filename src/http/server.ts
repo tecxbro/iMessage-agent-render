@@ -9,6 +9,10 @@ import express, {
 } from "express";
 
 import type { ChatGptSetupController } from "../agent/codex-app-server-auth.js";
+import {
+  OwnerPhoneNumberValidationError,
+  type DeploymentIdentityController,
+} from "../runtime/deployment-identity.js";
 import type { PhotonSetupController } from "../transport/photon-setup.js";
 import {
   OPERATOR_SESSION_COOKIE,
@@ -38,6 +42,7 @@ export interface HealthApplicationOptions {
   secureSessionCookie?: boolean;
   spectrum?: SpectrumReadiness;
   deploymentPage?: DeploymentPageOptions;
+  deploymentIdentity?: DeploymentIdentityController;
   photonSetup?: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
 }
@@ -216,6 +221,9 @@ export function createHealthApplication(
             supermemoryConfigured: false,
           },
           session.csrfToken,
+          options.deploymentIdentity?.status() ?? {
+            state: "not_configured",
+          },
           options.photonSetup?.status() ?? { state: "not_connected" },
           chatGptStatus(),
         ),
@@ -308,6 +316,72 @@ export function createHealthApplication(
     );
     response.set("cache-control", "no-store");
     response.status(200).json({ success: true });
+  });
+
+  application.get("/api/setup/owner/status", (request, response) => {
+    if (requireReadSession(request, response, options.operatorAuth) === undefined) {
+      return;
+    }
+    response.set("cache-control", "no-store");
+    const status = options.deploymentIdentity?.status();
+    if (status?.state === "configured") {
+      response.status(200).json({
+        state: status.state,
+        maskedPhoneNumber: status.maskedPhoneNumber,
+      });
+      return;
+    }
+    if (status?.state === "not_configured") {
+      response.status(200).json({ state: status.state });
+      return;
+    }
+    response.status(503).json({
+      error:
+        status?.state === "failed"
+          ? status.code
+          : "OWNER_IDENTITY_UNAVAILABLE",
+    });
+  });
+
+  application.post("/api/setup/owner", csrf, async (request, response) => {
+    response.set("cache-control", "no-store");
+    if (!isExactObject(request.body, ["phoneNumber"])) {
+      sendInvalidRequest(response);
+      return;
+    }
+    if (typeof request.body["phoneNumber"] !== "string") {
+      response.status(400).json({ error: "OWNER_PHONE_NUMBER_INVALID" });
+      return;
+    }
+    if (options.deploymentIdentity === undefined) {
+      response.status(503).json({
+        error: "OWNER_IDENTITY_STORAGE_FAILED",
+      });
+      return;
+    }
+    try {
+      const status = await options.deploymentIdentity.configureOwner(
+        request.body["phoneNumber"],
+      );
+      if (status.state === "configured") {
+        response.status(200).json({
+          state: status.state,
+          maskedPhoneNumber: status.maskedPhoneNumber,
+        });
+        return;
+      }
+      response.status(503).json({
+        error: "OWNER_IDENTITY_STORAGE_FAILED",
+      });
+    } catch (error) {
+      if (error instanceof OwnerPhoneNumberValidationError) {
+        response.status(400).json({ error: error.code });
+        return;
+      }
+      response.status(503).json({
+        error: "OWNER_IDENTITY_STORAGE_FAILED",
+      });
+    }
   });
 
   application.post("/api/setup/photon/start", csrf, async (request, response) => {
@@ -430,6 +504,7 @@ export async function startHealthServer(input: {
   secureSessionCookie?: boolean;
   spectrum?: SpectrumReadiness;
   deploymentPage?: DeploymentPageOptions;
+  deploymentIdentity?: DeploymentIdentityController;
   photonSetup?: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
 }): Promise<HealthServer> {

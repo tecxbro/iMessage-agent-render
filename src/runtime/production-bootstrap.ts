@@ -94,6 +94,12 @@ import {
 } from "../transport/spectrum.js";
 import { PhotonCredentialsStore } from "./photon-credentials.js";
 import { preparePersistentStorage } from "./persistent-storage.js";
+import {
+  createDeploymentIdentityController,
+  initializeDeploymentIdentityController,
+  selectLegacyOwnerPhoneNumber,
+  type DeploymentIdentityController,
+} from "./deployment-identity.js";
 
 interface QueueComposition {
   operational: OperationalRepository;
@@ -114,6 +120,7 @@ export interface ProductionRuntime {
   promptBundleVersion: string;
   bootstrap: AgentServiceBootstrap;
   operatorAuth: OperatorAuth;
+  deploymentIdentity: DeploymentIdentityController;
   photonSetup: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
 }
@@ -142,10 +149,9 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   const storedPhotonSetup = await photonCredentialsStore.load();
   const legacySpectrumCredentials =
     spectrumCredentialsFromEnvironment(environment);
+  const deploymentIdentity = createDeploymentIdentityController();
   const photonSetup = new PhotonSetupService({
-    ...(environment.OWNER_PHONE_NUMBER === undefined
-      ? {}
-      : { ownerPhoneNumber: environment.OWNER_PHONE_NUMBER }),
+    ownerIdentity: deploymentIdentity,
     credentialsStore: photonCredentialsStore,
     ...(storedPhotonSetup === undefined
       ? {}
@@ -154,15 +160,18 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   });
   let spectrumCredentials: SpectrumCloudCredentials | undefined =
     resolveSpectrumCloudCredentials(storedPhotonSetup, environment);
-  const ownerHandles =
-    storedPhotonSetup === undefined
-      ? environment.AGENT_OWNER_HANDLES
-      : [storedPhotonSetup.ownerPhoneNumber];
-  const protectedValues = [
+  const protectedValues: string[] = [
     environment.DATABASE_URL,
     environment.APP_ENCRYPTION_KEY,
     dashboardSetupSecret,
-    ...ownerHandles,
+    ...(environment.OWNER_PHONE_NUMBER === undefined
+      ? []
+      : [environment.OWNER_PHONE_NUMBER]),
+    ...(environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123 ===
+    undefined
+      ? []
+      : [environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123]),
+    ...environment.AGENT_OWNER_HANDLES,
     ...(environment.SPECTRUM_PROJECT_SECRET === undefined
       ? []
       : [environment.SPECTRUM_PROJECT_SECRET]),
@@ -172,6 +181,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
           storedPhotonSetup.photonDeviceBearerToken,
           storedPhotonSetup.photonProjectId,
           storedPhotonSetup.spectrumProjectSecret,
+          storedPhotonSetup.ownerPhoneNumber,
           storedPhotonSetup.assignedIMessageNumber,
         ]),
     ...(environment.OPENAI_API_KEY === undefined
@@ -182,6 +192,11 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       : [environment.SUPERMEMORY_API_KEY]),
   ];
   const logger = createLogger({ protectedValues });
+  const protectValue = (value: string): void => {
+    if (!protectedValues.includes(value)) {
+      protectedValues.push(value);
+    }
+  };
   const operatorAuth = createOperatorAuth({ setupSecret: dashboardSetupSecret });
   const inFlightChains = new InFlightChainRegistry();
   const interruptSupersededChains = (chainIds: readonly string[]): void => {
@@ -235,6 +250,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
 
   // Mutable provider lifecycle state
   let databaseClient: DatabaseClient | undefined;
+  let operationalRepository: OperationalRepository | undefined;
   let queue: DurableQueue | undefined;
   let composition: QueueComposition | undefined;
   let spectrumApp: SpectrumApp | undefined;
@@ -308,16 +324,47 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       );
     },
 
-    async startQueue() {
-      const client = required(databaseClient, "Queue startup");
+    async initializeDeploymentIdentity() {
+      const client = required(databaseClient, "Deployment identity startup");
       const operational = new OperationalRepository(client.database, {
         deploymentId: environment.DEPLOYMENT_ID,
-        ownerHandles,
         fingerprintKey: environment.APP_ENCRYPTION_KEY,
         encrypt: cipher.encrypt,
         decrypt: cipher.decrypt,
       });
-      await operational.provisionDeployment();
+      await operational.ensureDeployment();
+      operationalRepository = operational;
+      const legacyOwner = selectLegacyOwnerPhoneNumber({
+        ...(environment.OWNER_PHONE_NUMBER === undefined
+          ? {}
+          : { ownerPhoneNumber: environment.OWNER_PHONE_NUMBER }),
+        ...(environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123 ===
+        undefined
+          ? {}
+          : {
+              renderOwnerPhoneNumber:
+                environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123,
+            }),
+        ownerHandles: environment.AGENT_OWNER_HANDLES,
+      });
+      const initialization = await initializeDeploymentIdentityController({
+        controller: deploymentIdentity,
+        repository: operational,
+        legacyOwner,
+        protectPhoneNumber: protectValue,
+      });
+      return {
+        status: initialization.status,
+        migrationRequired: initialization.migrationRequired,
+      };
+    },
+
+    async startQueue() {
+      const client = required(databaseClient, "Queue startup");
+      const operational = required(
+        operationalRepository,
+        "Queue deployment identity startup",
+      );
 
       queue = new DurableQueue({
         connectionString: environment.DATABASE_URL,
@@ -685,6 +732,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     promptBundleVersion: promptBundle.version,
     bootstrap,
     operatorAuth,
+    deploymentIdentity,
     photonSetup,
     ...(chatgptSetup === undefined ? {} : { chatgptSetup }),
   };

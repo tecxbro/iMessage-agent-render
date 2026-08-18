@@ -19,7 +19,7 @@ Expected composed-service states:
 
 - `/healthz` is HTTP 200 whenever the Node process can serve diagnostics.
 - `/readyz` is HTTP 200 only when every critical component is `ok`.
-- `/readyz` is HTTP 503 during shutdown, missing/expired Codex auth, database failure, migration/queue failure, invalid disk/workspace storage, or Spectrum disconnect.
+- `/readyz` is HTTP 503 during shutdown, missing owner setup, missing/expired Codex auth, database failure, migration/queue failure, invalid disk/workspace storage, or Spectrum disconnect.
 - Supermemory may be `disabled` or `degraded` without blocking the operational pipeline.
 
 The public readiness response is limited to safe aggregate state. Authenticate to the dashboard for provider and component detail. If any unauthenticated response contains a device code, verification URL, assigned number, owner information, provider error, credential, message, database URL, setup action, or private path, treat that as a security incident.
@@ -30,7 +30,9 @@ Retrieve `DASHBOARD_SETUP_SECRET` only from the private Render Web Service **Env
 
 Log out after setup or diagnostics on a trusted browser. Logout revokes the session immediately. Eight-hour expiration and service restart also end a session; sign in again instead of weakening the boundary or trying the removed `x-agent-setup` header.
 
-The owner phone number remains configured through the Render Blueprint prompt until Prompt 2. Operator dashboard authentication does not change the iMessage owner allowlist.
+After login, the owner card shows either the setup form or only the masked active phone. Saving or changing it uses the operator session, session-bound CSRF token, and same-origin checks. The saved personal phone is the only authorized sender; the separately assigned Photon number is the destination shown at completion.
+
+To replace the owner, open **Change phone number**, save the new E.164 value, and verify one message from the new owner plus rejection of the previous owner. The replacement transaction activates the new encrypted identity and revokes all prior owner-phone identities while leaving collaborator identities unchanged. Never place a phone in a URL, log, or support ticket.
 
 ## Deploy procedure
 
@@ -83,6 +85,12 @@ npm run codex:status
 Complete device login, verify `$CODEX_HOME/auth.json` remains mode `0600`, then restart and rerun capability probes.
 
 API-key mode: replace `OPENAI_API_KEY` in Render, restart, and rerun capability probes. Do not change `CODEX_AUTH_MODE` as a fallback unless that is an explicit operator decision.
+
+### Owner identity missing or legacy migration required
+
+Symptoms: `/healthz` 200; public `/readyz` 503; Spectrum intake remains stopped; the authenticated dashboard asks for an owner phone.
+
+For a fresh deployment, save the personal owner phone in E.164 form and continue to Photon. For an existing deployment, first verify whether `OWNER_PHONE_NUMBER`, the former long Render alias, or `AGENT_OWNER_HANDLES` is present. The runtime imports only one unambiguous E.164 value and never imports from Photon credentials. If multiple handles or an email-only handle caused migration-required state, authenticate to the dashboard and save the intended phone explicitly. Verify the masked status and an authorized message before manually removing old environment values.
 
 ### Spectrum disconnect
 

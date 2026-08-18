@@ -116,6 +116,16 @@ State-changing setup requests require the live session, `X-CSRF-Token`, same-ori
 
 **Why:** provider enrollment discloses sensitive, actionable state and starts external setup work. A public custom header and possession of dashboard JavaScript cannot authenticate an operator. A small restart-invalidated in-memory session store fits the existing single-instance deployment and leaves a reusable boundary for later owner-phone endpoints.
 
-**Constraint:** the owner phone number still comes from the Render Blueprint prompt. Moving it into authenticated onboarding is Prompt 2, not part of this decision.
+**Constraint:** ADR-016 applies this boundary to dashboard-managed owner setup; the authentication/session mechanism itself remains unchanged.
 
 **Rejected:** public setup/status endpoints, `x-agent-setup: dashboard`, the setup secret in a cookie or rendered page, browser storage or URL authentication, callback-shaped provider flows, and durable/multi-tenant sessions in this single-owner release.
+
+## ADR-016 — Store the single owner identity through authenticated onboarding
+
+**Decision:** new Render Blueprints ask for no user-supplied environment values. After operator authentication, the dashboard accepts one E.164 personal phone through a CSRF- and same-origin-protected route. PostgreSQL `channel_identities` is the authorization authority: the phone is encrypted, fingerprinted per deployment, and returned publicly only as a mask. Replacing it activates the new identity and revokes prior owner-phone identities transactionally. Photon resolves this database owner once per setup attempt; its separately assigned line remains the destination shown at completion.
+
+Existing deployments first prefer an active database owner, then import `OWNER_PHONE_NUMBER`, the former long Render alias, or one unambiguous E.164 `AGENT_OWNER_HANDLES` value. Stored Photon metadata is never imported as authorization. Ambiguous handles require explicit dashboard recovery, and old environment values remain until an operator removes them after verification.
+
+**Why:** sender authorization must survive restart without making provider credentials or a deployment form the authority. The authenticated dashboard is the narrow operator boundary already designed for sensitive setup mutations. Separating the personal owner phone from the assigned agent line also makes the onboarding contract accurate.
+
+**Rejected:** a public owner route, query/header/cookie/path phone inputs, plaintext/settings/provider authorization, silently selecting one legacy handle, overwriting an active database identity from the environment, or starting Spectrum before owner setup.

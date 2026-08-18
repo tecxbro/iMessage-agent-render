@@ -18,15 +18,15 @@ All changes require a service restart. Render-managed values should be changed t
 
 | Variable | Required | Default | Where to obtain it | Restart required | Sensitive |
 |---|---:|---|---|---:|---:|
-| `OWNER_PHONE_NUMBER` | Yes locally or on existing deployments | — | Owner's E.164 phone number | Yes | Private |
-| `OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123` | New Render deployments only | — | Render Blueprint prompt | Yes | Private |
-| `AGENT_OWNER_HANDLES` | Legacy fallback only | — | Existing comma-separated numbers or iMessage emails | Yes | Private |
+| `OWNER_PHONE_NUMBER` | Legacy migration only | — | Existing deployment environment | Yes | Private |
+| `OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123` | Legacy migration only | — | Former Render Blueprint environment | Yes | Private |
+| `AGENT_OWNER_HANDLES` | Legacy migration only | — | Existing single E.164 handle | Yes | Private |
 | `PAIRING_MODE` | No | `off` | Operator policy | Yes | No |
 | `GROUP_MODE` | No | `owner_mentions_only` | Operator policy | Yes | No |
 
-The Render Blueprint uses the long `OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123` key because Render's `sync: false` form does not support custom placeholders. Enter the actual owner number in E.164 format, such as `+19495550123`; the key's example is not a value to copy. The runtime normalizes that Render-only alias to `OWNER_PHONE_NUMBER`.
+Fresh deployments leave every owner variable unset and save the owner through the authenticated dashboard. Startup first prefers an active encrypted database identity. Only when none exists does it import `OWNER_PHONE_NUMBER`, then the former long Render alias, then a single unambiguous E.164 `AGENT_OWNER_HANDLES` value. Conflicting phone variables are rejected, and multiple handles or a non-phone handle produce a stable migration-required state instead of a silent choice.
 
-Existing deployments and local `.env` files may continue using `OWNER_PHONE_NUMBER`. If both phone variables are set, they must match. `AGENT_OWNER_HANDLES` remains a backwards-compatible fallback for existing comma-separated phone numbers or iMessage emails; emails are normalized to lowercase. Photon line setup does not replace this application allowlist.
+Imported values are one-time inputs: successful import persists the encrypted identity and later restarts do not overwrite it from the environment. Stored Photon owner metadata is provider setup state, never sender-authorization authority. After the masked dashboard status and an authorized message verify migration, remove old environment values manually if desired.
 
 Keep `PAIRING_MODE=off` unless pairing has been explicitly reviewed for the deployment. `GROUP_MODE=disabled` rejects group use; `owner_mentions_only` requires the owner/group policy enforced by the application.
 
@@ -36,7 +36,7 @@ Keep `PAIRING_MODE=off` unless pairing has been explicitly reviewed for the depl
 |---|---:|---|---|---:|---:|
 | `DASHBOARD_SETUP_SECRET` | Production | — | Render-generated secret or independent high-entropy local value | Yes | Yes |
 
-Render declares this variable with `generateValue: true`, so a new deployment receives a random base64-encoded 256-bit value without prompting the user. Find it in the deployed Web Service's private **Environment** page and enter it only in the dashboard's **Deployment setup code** field. It is separate from the owner phone allowlist: authenticating the setup dashboard does not authorize an iMessage sender, and the owner phone remains a Render Blueprint input until Prompt 2.
+Render declares this variable with `generateValue: true`, so a new deployment receives a random base64-encoded 256-bit value without prompting the user. Find it in the deployed Web Service's private **Environment** page and enter it only in the dashboard's **Deployment setup code** field. It is separate from the owner allowlist: authentication permits the operator to save the owner through the CSRF-protected dashboard route, but does not itself authorize an iMessage sender.
 
 Each successful login creates an eight-hour server-side session, with at most eight active sessions retained. Logout revokes the session, and restarting the service invalidates every session.
 

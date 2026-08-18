@@ -138,6 +138,7 @@ export async function startAgentService(
   let startupStagesReady = false;
   let codexChecked = false;
   let codexReady = false;
+  let codexProbeInProgress = false;
   let spectrumStarted = false;
   let unlockAgain = false;
   let forceCodexProbe = false;
@@ -155,6 +156,7 @@ export async function startAgentService(
     readiness.mark("codexAuth", "starting");
     readiness.mark("codexCapabilities", "starting");
     let codex: CodexStartupState;
+    codexProbeInProgress = true;
     try {
       codex = await options.bootstrap.checkCodex();
     } catch {
@@ -168,6 +170,8 @@ export async function startAgentService(
       options.onStartupFailure?.("CODEX_CHECK_FAILED");
       spectrumReadiness.markStopped();
       return false;
+    } finally {
+      codexProbeInProgress = false;
     }
     readiness.mark("codexAuth", codex.auth, codex.authCode);
     readiness.mark(
@@ -221,16 +225,24 @@ export async function startAgentService(
   const requestUnlock = (forceProbe: boolean): Promise<void> => {
     unlockAgain = true;
     forceCodexProbe ||= forceProbe;
-    unlockPromise ??= (async () => {
-      while (unlockAgain && !shutdown.signal.aborted) {
-        const probe = forceCodexProbe;
-        unlockAgain = false;
-        forceCodexProbe = false;
-        await tryUnlockAgent(probe);
-      }
-    })().finally(() => {
-      unlockPromise = undefined;
-    });
+    unlockPromise ??= Promise.resolve()
+      .then(async () => {
+        // Start only after unlockPromise is assigned so synchronous callbacks
+        // cannot enter requestUnlock and create a second runner.
+        while (unlockAgain && !shutdown.signal.aborted) {
+          const probe = forceCodexProbe;
+          unlockAgain = false;
+          forceCodexProbe = false;
+          await tryUnlockAgent(probe);
+        }
+      })
+      .finally(() => {
+        unlockPromise = undefined;
+        if (unlockAgain && !shutdown.signal.aborted) {
+          return requestUnlock(false);
+        }
+        return undefined;
+      });
     return unlockPromise;
   };
 
@@ -253,10 +265,10 @@ export async function startAgentService(
   options.photonSetup?.onConnected?.(() => requestUnlock(false));
   options.chatgptSetup?.onConnected(() => requestUnlock(true));
   const disposeCapabilitiesListener =
-    options.chatgptSetup?.onCapabilitiesChanged(() => {
-      // A catalog refresh awaits its listeners. Start the readiness re-probe
-      // without returning that promise so checkCodex can safely await the same
-      // in-flight refresh instead of creating a listener cycle.
+    options.chatgptSetup?.onCapabilitiesChanged((capabilities) => {
+      if (capabilities.state === "refreshing" || codexProbeInProgress) {
+        return;
+      }
       void requestUnlock(true);
     });
   if (disposeCapabilitiesListener !== undefined) {

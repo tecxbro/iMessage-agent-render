@@ -516,25 +516,42 @@ describe("composed service lifecycle recovery", () => {
     });
   });
 
-  it("re-probes readiness when account model capabilities change", async () => {
-    let pairAvailable = true;
-    let capabilitiesListener: (() => void | Promise<void>) | undefined;
+  it("runs one readiness probe for a production-shaped catalog change", async () => {
+    let capabilitiesListener:
+      | Parameters<ChatGptSetupController["onCapabilitiesChanged"]>[0]
+      | undefined;
     let listenerDisposed = false;
+    const availableCapabilities = () => ({
+      state: "available" as const,
+      planType: "plus",
+      models: [],
+      refreshedAt: new Date(),
+    });
+    const publishCatalogChange = async (): Promise<void> => {
+      await capabilitiesListener?.({
+        ...availableCapabilities(),
+        state: "refreshing",
+      });
+      await capabilitiesListener?.(availableCapabilities());
+    };
+    let refreshCount = 0;
+    const refreshCapabilities = vi.fn(async () => {
+      refreshCount += 1;
+      if (refreshCount > 4) {
+        throw new Error("readiness probe feedback loop");
+      }
+      await publishCatalogChange();
+      return availableCapabilities();
+    });
     const chatgptSetup = {
-      ...chatGptCapabilityMethods,
       initialize: async () => ({ state: "connected" as const }),
       status: () => ({ state: "connected" as const }),
       start: async () => ({ state: "connected" as const }),
+      capabilities: availableCapabilities,
+      refreshCapabilities,
       onConnected: () => () => undefined,
       onCapabilitiesChanged: (listener) => {
-        capabilitiesListener = async () => {
-          await listener({
-            state: "available",
-            planType: "plus",
-            models: [],
-            refreshedAt: new Date(),
-          });
-        };
+        capabilitiesListener = listener;
         return () => {
           listenerDisposed = true;
           capabilitiesListener = undefined;
@@ -542,15 +559,10 @@ describe("composed service lifecycle recovery", () => {
       },
       close: async () => undefined,
     } satisfies ChatGptSetupController;
-    const checkCodex = vi.fn(async () =>
-      pairAvailable
-        ? ({ auth: "ok", capabilities: "ok" } as const)
-        : ({
-            auth: "ok",
-            capabilities: "failed",
-            capabilityCode: "CODEX_CAPABILITY_FAILED",
-          } as const),
-    );
+    const checkCodex = vi.fn(async () => {
+      await chatgptSetup.refreshCapabilities();
+      return { auth: "ok", capabilities: "ok" } as const;
+    });
     const startSpectrum = vi.fn(async ({ readiness }) => {
       readiness.markConnected();
     });
@@ -573,19 +585,14 @@ describe("composed service lifecycle recovery", () => {
     runningServices.push(service);
 
     expect(checkCodex).toHaveBeenCalledOnce();
+    expect(refreshCapabilities).toHaveBeenCalledOnce();
     expect(startSpectrum).toHaveBeenCalledOnce();
 
-    pairAvailable = false;
-    await capabilitiesListener?.();
+    await publishCatalogChange();
     await vi.waitFor(() => expect(checkCodex).toHaveBeenCalledTimes(2));
-    await expect(fetchReadiness(service)).resolves.toMatchObject({
-      status: 503,
-      body: { ready: false },
-    });
-
-    pairAvailable = true;
-    await capabilitiesListener?.();
-    await vi.waitFor(() => expect(checkCodex).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(checkCodex).toHaveBeenCalledTimes(2);
+    expect(refreshCapabilities).toHaveBeenCalledTimes(2);
     expect(startSpectrum).toHaveBeenCalledOnce();
     await expect(fetchReadiness(service)).resolves.toMatchObject({
       status: 200,

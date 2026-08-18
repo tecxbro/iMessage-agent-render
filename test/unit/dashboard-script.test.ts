@@ -129,7 +129,93 @@ describe("dashboard authentication popup", () => {
     expect(script).toContain('credentials: "same-origin"');
     expect(script).toContain('"X-CSRF-Token": csrfToken');
     expect(script).toContain('body: JSON.stringify({})');
+    expect(script).toContain('fetch("/api/setup/owner"');
+    expect(script).toContain("JSON.stringify({ phoneNumber })");
+    expect(script).not.toContain("+14155550123");
     expect(script).not.toContain("x-agent-setup");
+  });
+
+  it("submits the owner phone with CSRF and clears the browser field immediately", async () => {
+    type OwnerForm = {
+      addEventListener(
+        type: string,
+        listener: (event: {
+          preventDefault(): void;
+          currentTarget: OwnerForm;
+        }) => Promise<void> | void,
+      ): void;
+      querySelector(): { disabled: boolean };
+      setAttribute: ReturnType<typeof vi.fn>;
+      removeAttribute: ReturnType<typeof vi.fn>;
+    };
+    let submit:
+      | ((event: { preventDefault(): void; currentTarget: OwnerForm }) => Promise<void> | void)
+      | undefined;
+    const reload = vi.fn();
+    const button = { disabled: false };
+    const input = {
+      value: "+14155550123",
+      focus: vi.fn(),
+      setAttribute: vi.fn(),
+    };
+    const error = { textContent: "" };
+    const form: OwnerForm = {
+      addEventListener(
+        type: string,
+        listener: (event: {
+          preventDefault(): void;
+          currentTarget: OwnerForm;
+        }) => Promise<void> | void,
+      ) {
+        if (type === "submit") submit = listener;
+      },
+      querySelector: () => button,
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+    };
+    const fetchImplementation = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        state: "configured",
+        maskedPhoneNumber: "••••••0123",
+      }),
+    }));
+
+    runInNewContext(renderDashboardScript(), {
+      document: {
+        currentScript: { dataset: { polling: "false" } },
+        querySelector: () => ({ content: "session-bound-csrf-token" }),
+        querySelectorAll: () => [],
+        body: { dataset: {} },
+        getElementById(id: string) {
+          if (id === "owner-form") return form;
+          if (id === "owner-phone-number") return input;
+          if (id === "owner-error") return error;
+          return null;
+        },
+      },
+      fetch: fetchImplementation,
+      window: {
+        location: { reload },
+        addEventListener: vi.fn(),
+        clearTimeout: vi.fn(),
+      },
+    });
+
+    const preventDefault = vi.fn();
+    await submit!({ preventDefault, currentTarget: form });
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(input.value).toBe("");
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      "/api/setup/owner",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        body: JSON.stringify({ phoneNumber: "+14155550123" }),
+      }),
+    );
+    expect(reload).toHaveBeenCalledOnce();
   });
 
   it.each(["photon", "chatgpt"] as const)(

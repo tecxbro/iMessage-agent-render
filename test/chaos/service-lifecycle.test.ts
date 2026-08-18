@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatGptSetupController } from "../../src/agent/codex-app-server-auth.js";
 import { createOperatorAuth } from "../../src/http/operator-auth.js";
+import type {
+  DeploymentIdentityController,
+  DeploymentIdentityStatus,
+} from "../../src/runtime/deployment-identity.js";
 import {
   startAgentService,
   type AgentServiceBootstrap,
@@ -241,6 +245,95 @@ describe("composed service lifecycle recovery", () => {
     expect(internalReadiness.actions).toEqual([
       expect.stringContaining("reconnect ChatGPT"),
     ]);
+  });
+
+  it("keeps intake and readiness closed until owner setup and disposes its listener", async () => {
+    let identityStatus: DeploymentIdentityStatus = {
+      state: "not_configured",
+    };
+    let configuredListener: (() => void | Promise<void>) | undefined;
+    let listenerDisposed = false;
+    const deploymentIdentity: DeploymentIdentityController = {
+      initialize: async () => identityStatus,
+      status: () => ({ ...identityStatus }),
+      configureOwner: async () => {
+        identityStatus = {
+          state: "configured",
+          maskedPhoneNumber: "••••••0123",
+        };
+        await configuredListener?.();
+        return identityStatus;
+      },
+      readOwnerPhoneNumber: async () =>
+        identityStatus.state === "configured" ? "+14155550123" : undefined,
+      onConfigured(listener) {
+        configuredListener = listener;
+        return () => {
+          listenerDisposed = true;
+          configuredListener = undefined;
+        };
+      },
+    };
+    const photonSetup = {
+      status: () => ({ state: "connected" as const }),
+      start: async () => ({ state: "connected" as const }),
+    } satisfies PhotonSetupController;
+    const startSpectrum = vi.fn(async ({ readiness }) => {
+      readiness.markConnected();
+    });
+    const service = await startAgentService({
+      port: 0,
+      host: "127.0.0.1",
+      installSignalHandlers: false,
+      deploymentIdentity,
+      photonSetup,
+      operatorAuth: createTestOperatorAuth(),
+      bootstrap: {
+        prepareConfiguration: async () => undefined,
+        prepareStorage: async () => undefined,
+        connectDatabase: async () => undefined,
+        applyMigrations: async () => undefined,
+        initializeDeploymentIdentity: async () => ({
+          status: identityStatus,
+          migrationRequired: false,
+        }),
+        startQueue: async () => undefined,
+        checkCodex: async () => ({ auth: "ok", capabilities: "ok" }),
+        configureSupermemory: async () => "disabled",
+        startSpectrum,
+      },
+    });
+    runningServices.push(service);
+
+    expect(startSpectrum).not.toHaveBeenCalled();
+    await expect(fetchReadiness(service)).resolves.toMatchObject({
+      status: 503,
+      body: { ready: false },
+    });
+    expect(
+      service.readiness.snapshot(service.spectrumReadiness.snapshot()),
+    ).toMatchObject({
+      components: {
+        ownerIdentity: {
+          state: "missing",
+          code: "OWNER_IDENTITY_NOT_CONFIGURED",
+        },
+        spectrum: { state: "missing" },
+      },
+    });
+    const address = service.health.server.address() as AddressInfo;
+    const live = await fetch(`http://127.0.0.1:${address.port}/healthz`);
+    expect(live.status).toBe(200);
+
+    await deploymentIdentity.configureOwner("+14155550123");
+    expect(startSpectrum).toHaveBeenCalledOnce();
+    await expect(fetchReadiness(service)).resolves.toMatchObject({
+      status: 200,
+      body: { ready: true },
+    });
+
+    await service.shutdown("test");
+    expect(listenerDisposed).toBe(true);
   });
 
   it("keeps intake off until Photon and ChatGPT are both connected, then unlocks exactly once", async () => {

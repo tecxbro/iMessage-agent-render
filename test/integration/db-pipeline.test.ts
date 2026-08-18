@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -12,6 +12,7 @@ import { ChainRepository } from "../../src/db/repositories/chains.js";
 import { ApprovalRepository } from "../../src/db/repositories/approvals.js";
 import { InboundRepository } from "../../src/db/repositories/inbound.js";
 import { OutboundRepository } from "../../src/db/repositories/outbound.js";
+import { OperationalRepository } from "../../src/db/repositories/operational.js";
 import { RetentionRepository } from "../../src/db/repositories/retention.js";
 import {
   approvals,
@@ -25,6 +26,12 @@ import {
   owners,
   spaces,
 } from "../../src/db/schema.js";
+import {
+  DatabaseAuthorizationDirectory,
+  DeterministicSenderAuthorizer,
+  fingerprintSenderHandle,
+} from "../../src/security/authorize-sender.js";
+import { createDataCipher } from "../../src/security/data-cipher.js";
 
 const databaseUrl = process.env["POSTGRES_PIPELINE_TEST_DATABASE_URL"];
 const describeDatabase = databaseUrl === undefined ? describe.skip : describe;
@@ -122,6 +129,157 @@ describeDatabase("PostgreSQL durable pipeline", () => {
       retentionExpiresAt: new Date("2026-09-14T00:00:00Z"),
     });
   }
+
+  it("persists one replaceable owner identity and fails closed on invariant violations", async () => {
+    const identityDeploymentId = "20000000-0000-4000-8000-000000000001";
+    const fingerprintKey =
+      "integration-owner-fingerprint-key-material-32-bytes";
+    const cipher = createDataCipher(Buffer.alloc(32, 7).toString("base64"));
+    const operational = new OperationalRepository(client.database, {
+      deploymentId: identityDeploymentId,
+      fingerprintKey,
+      encrypt: cipher.encrypt,
+      decrypt: cipher.decrypt,
+    });
+
+    await operational.ensureDeployment();
+    await operational.ensureDeployment();
+    await expect(operational.readOwnerPhoneNumber()).resolves.toBeUndefined();
+
+    const identityOwners = await client.database
+      .select({ id: owners.id })
+      .from(owners)
+      .where(eq(owners.deploymentId, identityDeploymentId));
+    expect(identityOwners).toHaveLength(1);
+    const primaryOwnerId = identityOwners[0]!.id;
+
+    const previousPhone = "+14155550123";
+    const replacementPhone = "+14155550124";
+    const collaboratorPhone = "+14155550125";
+    await operational.replaceOwnerPhoneNumber(previousPhone);
+
+    const restarted = new OperationalRepository(client.database, {
+      deploymentId: identityDeploymentId,
+      fingerprintKey,
+      encrypt: cipher.encrypt,
+      decrypt: cipher.decrypt,
+    });
+    await expect(restarted.readOwnerPhoneNumber()).resolves.toBe(previousPhone);
+
+    const collaboratorFingerprint = fingerprintSenderHandle(
+      identityDeploymentId,
+      collaboratorPhone,
+      fingerprintKey,
+    );
+    await client.database.insert(channelIdentities).values({
+      id: "20000000-0000-4000-8000-000000000005",
+      deploymentId: identityDeploymentId,
+      ownerId: primaryOwnerId,
+      normalizedHandleCiphertext: cipher.encrypt(collaboratorPhone),
+      handleFingerprint: collaboratorFingerprint,
+      role: "collaborator",
+      verifiedAt: new Date(),
+    });
+
+    await restarted.replaceOwnerPhoneNumber(replacementPhone);
+    await expect(restarted.readOwnerPhoneNumber()).resolves.toBe(
+      replacementPhone,
+    );
+
+    const previousFingerprint = fingerprintSenderHandle(
+      identityDeploymentId,
+      previousPhone,
+      fingerprintKey,
+    );
+    const replacementFingerprint = fingerprintSenderHandle(
+      identityDeploymentId,
+      replacementPhone,
+      fingerprintKey,
+    );
+    const identityRows = await client.database
+      .select({
+        fingerprint: channelIdentities.handleFingerprint,
+        role: channelIdentities.role,
+        revokedAt: channelIdentities.revokedAt,
+      })
+      .from(channelIdentities)
+      .where(eq(channelIdentities.deploymentId, identityDeploymentId));
+    expect(identityRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fingerprint: previousFingerprint,
+          role: "owner",
+          revokedAt: expect.any(Date),
+        }),
+        {
+          fingerprint: replacementFingerprint,
+          role: "owner",
+          revokedAt: null,
+        },
+        {
+          fingerprint: collaboratorFingerprint,
+          role: "collaborator",
+          revokedAt: null,
+        },
+      ]),
+    );
+
+    const authorizer = new DeterministicSenderAuthorizer({
+      deploymentId: identityDeploymentId,
+      fingerprintKey,
+      directory: new DatabaseAuthorizationDirectory(client.database),
+      groupPolicy: { mode: "disabled", agentHandles: [] },
+    });
+    const authorizationInput = (phoneNumber: string) => ({
+      externalMessageId: `message-${phoneNumber}`,
+      receivedAt: new Date(),
+      sender: {
+        address: phoneNumber,
+        kind: "phone" as const,
+        service: "iMessage" as const,
+      },
+      space: {
+        routePhone: "+14155559999",
+        spaceGuid: "identity-space",
+        spaceType: "dm" as const,
+      },
+      text: "hello",
+      mentionedAddresses: [],
+    });
+    await expect(authorizer.authorize(authorizationInput(previousPhone))).resolves
+      .toMatchObject({ authorized: false, reason: "identity-revoked" });
+    await expect(
+      authorizer.authorize(authorizationInput(replacementPhone)),
+    ).resolves.toMatchObject({ authorized: true, context: { role: "owner" } });
+
+    await client.database.insert(channelIdentities).values({
+      id: "20000000-0000-4000-8000-000000000006",
+      deploymentId: identityDeploymentId,
+      ownerId: primaryOwnerId,
+      normalizedHandleCiphertext: cipher.encrypt("+14155550126"),
+      handleFingerprint: fingerprintSenderHandle(
+        identityDeploymentId,
+        "+14155550126",
+        fingerprintKey,
+      ),
+      role: "owner",
+      verifiedAt: new Date(),
+    });
+    await expect(restarted.readOwnerPhoneNumber()).rejects.toThrow(
+      "Multiple active owner phone identities",
+    );
+    const activeOwners = await client.database
+      .select({ id: channelIdentities.id })
+      .from(channelIdentities)
+      .where(
+        and(
+          eq(channelIdentities.deploymentId, identityDeploymentId),
+          eq(channelIdentities.role, "owner"),
+          isNull(channelIdentities.revokedAt),
+        ),
+      );
+    expect(activeOwners).toHaveLength(2);
+  });
 
   it("deduplicates concurrent provider events and drains a burst once in order", async () => {
     const receivedAt = new Date("2026-08-14T00:00:01Z");

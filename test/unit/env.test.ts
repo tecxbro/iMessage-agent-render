@@ -32,7 +32,7 @@ describe("loadEnvironment", () => {
     const environment = loadEnvironment(validEnvironment());
 
     expect(environment.OWNER_PHONE_NUMBER).toBe("+15551234567");
-    expect(environment.AGENT_OWNER_HANDLES).toEqual(["+15551234567"]);
+    expect(environment.AGENT_OWNER_HANDLES).toEqual([]);
     expect(environment.CODEX_HOME).toBe(resolve(".codex-agent"));
     expect(environment.AGENT_WORKSPACE_ROOT).toBe(
       resolve(".agent-workspaces"),
@@ -187,7 +187,14 @@ describe("loadEnvironment", () => {
     expect(environment.SPECTRUM_PROJECT_SECRET).toBeUndefined();
   });
 
-  it("uses AGENT_OWNER_HANDLES only as a backwards-compatible fallback", () => {
+  it("preserves legacy OWNER_PHONE_NUMBER as a migration input", () => {
+    const environment = loadEnvironment(validEnvironment());
+
+    expect(environment.OWNER_PHONE_NUMBER).toBe("+15551234567");
+    expect(environment.AGENT_OWNER_HANDLES).toEqual([]);
+  });
+
+  it("preserves AGENT_OWNER_HANDLES as a legacy migration input", () => {
     const environment = loadEnvironment(
       validEnvironment({
         OWNER_PHONE_NUMBER: undefined,
@@ -201,7 +208,7 @@ describe("loadEnvironment", () => {
     ]);
   });
 
-  it("normalizes the Render Blueprint owner-phone alias", () => {
+  it("preserves the Render Blueprint owner-phone alias for migration", () => {
     const environment = loadEnvironment(
       validEnvironment({
         OWNER_PHONE_NUMBER: undefined,
@@ -209,11 +216,11 @@ describe("loadEnvironment", () => {
       }),
     );
 
-    expect(environment.OWNER_PHONE_NUMBER).toBe("+19495550123");
-    expect(environment.AGENT_OWNER_HANDLES).toEqual(["+19495550123"]);
-    expect(environment).not.toHaveProperty(
-      "OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123",
-    );
+    expect(environment.OWNER_PHONE_NUMBER).toBeUndefined();
+    expect(
+      environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123,
+    ).toBe("+19495550123");
+    expect(environment.AGENT_OWNER_HANDLES).toEqual([]);
   });
 
   it("rejects conflicting local and Render owner-phone values", () => {
@@ -227,15 +234,20 @@ describe("loadEnvironment", () => {
     ).toThrow(/must match when both are set/u);
   });
 
-  it("requires a new owner phone number or the legacy owner fallback", () => {
-    expect(() =>
-      loadEnvironment(
-        validEnvironment({
-          OWNER_PHONE_NUMBER: undefined,
-          AGENT_OWNER_HANDLES: undefined,
-        }),
-      ),
-    ).toThrow(/OWNER_PHONE_NUMBER is required/);
+  it("loads a fresh environment without an owner and normalizes an empty authorization list", () => {
+    const environment = loadEnvironment(
+      validEnvironment({
+        OWNER_PHONE_NUMBER: undefined,
+        OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123: undefined,
+        AGENT_OWNER_HANDLES: undefined,
+      }),
+    );
+
+    expect(environment.OWNER_PHONE_NUMBER).toBeUndefined();
+    expect(
+      environment.OWNER_PHONE_NUMBER_E164_EXAMPLE_PLUS19495550123,
+    ).toBeUndefined();
+    expect(environment.AGENT_OWNER_HANDLES).toEqual([]);
   });
 
   it("requires legacy Spectrum credentials to be supplied as a pair", () => {

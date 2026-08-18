@@ -12,6 +12,11 @@ import {
   createOperatorAuth,
   type OperatorAuth,
 } from "../../src/http/operator-auth.js";
+import {
+  createDeploymentIdentityController,
+  type DeploymentIdentityController,
+  type DeploymentIdentityStatus,
+} from "../../src/runtime/deployment-identity.js";
 import { startHealthServer, type HealthServer } from "../../src/http/server.js";
 import type { PhotonSetupController } from "../../src/transport/photon-setup.js";
 
@@ -29,6 +34,26 @@ afterEach(async () => {
 function createTestOperatorAuth(): OperatorAuth {
   operatorAuth = createOperatorAuth({ setupSecret: SETUP_SECRET });
   return operatorAuth;
+}
+
+function deploymentIdentity(
+  initialStatus: DeploymentIdentityStatus = {
+    state: "configured",
+    maskedPhoneNumber: "••••••4567",
+  },
+): DeploymentIdentityController {
+  let status = initialStatus;
+  return {
+    initialize: async () => status,
+    status: () => ({ ...status }),
+    configureOwner: async () => {
+      status = { state: "configured", maskedPhoneNumber: "••••••0123" };
+      return status;
+    },
+    readOwnerPhoneNumber: async () =>
+      status.state === "configured" ? "+15551234567" : undefined,
+    onConfigured: () => () => undefined,
+  };
 }
 
 interface AuthenticatedSession {
@@ -76,6 +101,7 @@ function markCriticalComponentsReady(readiness: ReadinessRegistry): void {
     "configuration",
     "database",
     "migrations",
+    "ownerIdentity",
     "queue",
     "codexAuth",
     "codexCapabilities",
@@ -97,6 +123,7 @@ describe("health and readiness endpoints", () => {
       host: "127.0.0.1",
       readiness,
       operatorAuth: createTestOperatorAuth(),
+      deploymentIdentity: deploymentIdentity({ state: "not_configured" }),
       spectrum,
     });
     const address = health.server.address() as AddressInfo;
@@ -126,9 +153,10 @@ describe("health and readiness endpoints", () => {
     expect(deployment.headers.get("x-frame-options")).toBe("DENY");
     const deploymentPage = await deployment.text();
     expect(deploymentPage).toContain("iMessage Agent");
-    expect(deploymentPage).toContain("Photon");
-    expect(deploymentPage).toContain("Not connected");
-    expect(deploymentPage).toContain("Authenticate with Photon");
+    expect(deploymentPage).toContain("Your phone number");
+    expect(deploymentPage).toContain("Not configured");
+    expect(deploymentPage).toContain("Save and continue");
+    expect(deploymentPage).not.toContain("Authenticate with Photon");
     expect(deploymentPage).toContain("Photon PolySans");
     expect(deploymentPage).toContain('src="/agent/photon-logo.png"');
     expect(deploymentPage).toContain('href="https://photon.codes"');
@@ -185,6 +213,89 @@ describe("health and readiness endpoints", () => {
     });
   });
 
+  it("validates and persists owner setup through masked authenticated endpoints", async () => {
+    const readiness = new ReadinessRegistry();
+    const spectrum = new SpectrumReadiness();
+    let storedPhoneNumber: string | undefined;
+    const identity = createDeploymentIdentityController();
+    identity.bindRepository({
+      async replaceOwnerPhoneNumber(phoneNumber) {
+        storedPhoneNumber = phoneNumber;
+      },
+      async readOwnerPhoneNumber() {
+        return storedPhoneNumber;
+      },
+    });
+    await identity.initialize();
+    health = await startHealthServer({
+      port: 0,
+      host: "127.0.0.1",
+      readiness,
+      operatorAuth: createTestOperatorAuth(),
+      deploymentIdentity: identity,
+      spectrum,
+    });
+    const address = health.server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${address.port}`;
+    const session = await authenticateOperator(base);
+
+    const initial = await fetch(`${base}/api/setup/owner/status`, {
+      headers: authenticatedHeaders(session),
+    });
+    await expect(initial.json()).resolves.toEqual({
+      state: "not_configured",
+    });
+
+    const extra = await fetch(`${base}/api/setup/owner`, {
+      ...protectedRequest(base, session),
+      body: JSON.stringify({
+        phoneNumber: "+14155550123",
+        unexpected: true,
+      }),
+    });
+    expect(extra.status).toBe(400);
+    await expect(extra.json()).resolves.toEqual({ error: "INVALID_REQUEST" });
+
+    const invalid = await fetch(`${base}/api/setup/owner`, {
+      ...protectedRequest(base, session),
+      body: JSON.stringify({ phoneNumber: "415-555-0123" }),
+    });
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toEqual({
+      error: "OWNER_PHONE_NUMBER_INVALID",
+    });
+
+    const configured = await fetch(`${base}/api/setup/owner`, {
+      ...protectedRequest(base, session),
+      body: JSON.stringify({ phoneNumber: "+442071838750" }),
+    });
+    const configuredBody = await configured.text();
+    expect(configured.status).toBe(200);
+    expect(JSON.parse(configuredBody)).toEqual({
+      state: "configured",
+      maskedPhoneNumber: "••••••8750",
+    });
+    expect(configuredBody).not.toContain("+442071838750");
+    expect(storedPhoneNumber).toBe("+442071838750");
+
+    const status = await fetch(`${base}/api/setup/owner/status`, {
+      headers: authenticatedHeaders(session),
+    });
+    const statusBody = await status.text();
+    expect(JSON.parse(statusBody)).toEqual({
+      state: "configured",
+      maskedPhoneNumber: "••••••8750",
+    });
+    expect(statusBody).not.toContain("+442071838750");
+
+    const dashboard = await fetch(`${base}/agent/dashboard`, {
+      headers: authenticatedHeaders(session),
+    });
+    const html = await dashboard.text();
+    expect(html).toContain("••••••8750");
+    expect(html).not.toContain("+442071838750");
+  });
+
   it("reports ready only when every critical component is ready", () => {
     const readiness = new ReadinessRegistry();
     const spectrum = new SpectrumReadiness();
@@ -225,6 +336,7 @@ describe("health and readiness endpoints", () => {
       host: "127.0.0.1",
       readiness,
       operatorAuth: createTestOperatorAuth(),
+      deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
         authMode: "api_key",
@@ -287,6 +399,7 @@ describe("health and readiness endpoints", () => {
       host: "127.0.0.1",
       readiness,
       operatorAuth: createTestOperatorAuth(),
+      deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
         authMode: "chatgpt",
@@ -355,6 +468,7 @@ describe("health and readiness endpoints", () => {
       host: "127.0.0.1",
       readiness,
       operatorAuth: createTestOperatorAuth(),
+      deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
         authMode: "chatgpt",
@@ -407,6 +521,7 @@ describe("health and readiness endpoints", () => {
       host: "127.0.0.1",
       readiness,
       operatorAuth: createTestOperatorAuth(),
+      deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
         authMode: "chatgpt",
@@ -475,6 +590,7 @@ describe("health and readiness endpoints", () => {
       host: "127.0.0.1",
       readiness,
       operatorAuth: createTestOperatorAuth(),
+      deploymentIdentity: deploymentIdentity(),
       spectrum,
       deploymentPage: {
         authMode: "chatgpt",
@@ -520,6 +636,7 @@ describe("health and readiness endpoints", () => {
       host: "127.0.0.1",
       readiness,
       operatorAuth: createTestOperatorAuth(),
+      deploymentIdentity: deploymentIdentity(),
       spectrum,
       photonSetup,
     });
@@ -558,6 +675,7 @@ describe("health and readiness endpoints", () => {
       host: "127.0.0.1",
       readiness,
       operatorAuth: createTestOperatorAuth(),
+      deploymentIdentity: deploymentIdentity(),
       spectrum,
     });
     const address = health.server.address() as AddressInfo;

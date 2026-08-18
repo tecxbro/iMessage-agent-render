@@ -12,6 +12,10 @@ import {
 import { ReadinessRegistry } from "../../src/http/readiness.js";
 import { startHealthServer, type HealthServer } from "../../src/http/server.js";
 import type {
+  DeploymentIdentityController,
+  DeploymentIdentityStatus,
+} from "../../src/runtime/deployment-identity.js";
+import type {
   PhotonSetupController,
   PhotonSetupStatus,
 } from "../../src/transport/photon-setup.js";
@@ -20,6 +24,7 @@ const SETUP_SECRET = "security-test-dashboard-setup-secret-material-0001";
 const PHOTON_DEVICE_CODE = "PHOTON-PRIVATE-CODE";
 const CHATGPT_DEVICE_CODE = "CHATGPT-PRIVATE-CODE";
 const ASSIGNED_NUMBER = "+16285550123";
+const OWNER_PHONE_NUMBER = "+14155550123";
 
 let health: HealthServer | undefined;
 let operatorAuth: OperatorAuth | undefined;
@@ -40,6 +45,7 @@ interface SessionCredentials {
 interface TestServerOptions {
   secureSessionCookie?: boolean;
   operatorAuthOptions?: Omit<OperatorAuthOptions, "setupSecret">;
+  deploymentIdentity?: DeploymentIdentityController;
   photonSetup?: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
 }
@@ -57,6 +63,8 @@ async function startTestServer(options: TestServerOptions = {}): Promise<string>
     host: "127.0.0.1",
     readiness,
     operatorAuth,
+    deploymentIdentity:
+      options.deploymentIdentity ?? configuredDeploymentIdentity(),
     ...(options.secureSessionCookie === undefined
       ? {}
       : { secureSessionCookie: options.secureSessionCookie }),
@@ -69,6 +77,26 @@ async function startTestServer(options: TestServerOptions = {}): Promise<string>
   });
   const address = health.server.address() as AddressInfo;
   return `http://127.0.0.1:${address.port}`;
+}
+
+function configuredDeploymentIdentity(
+  initialStatus: DeploymentIdentityStatus = {
+    state: "configured",
+    maskedPhoneNumber: "••••••0123",
+  },
+): DeploymentIdentityController {
+  let status = initialStatus;
+  return {
+    initialize: async () => status,
+    status: () => ({ ...status }),
+    configureOwner: async () => {
+      status = { state: "configured", maskedPhoneNumber: "••••••0123" };
+      return status;
+    },
+    readOwnerPhoneNumber: async () =>
+      status.state === "configured" ? OWNER_PHONE_NUMBER : undefined,
+    onConfigured: () => () => undefined,
+  };
 }
 
 async function login(
@@ -195,6 +223,7 @@ describe("operator HTTP authentication and CSRF boundary", () => {
       CHATGPT_DEVICE_CODE,
       "https://app.photon.codes/device",
       ASSIGNED_NUMBER,
+      OWNER_PHONE_NUMBER,
       "CODEX_AUTH_MISSING",
       "CHATGPT_LOGIN_FAILED",
     ]) {
@@ -212,8 +241,13 @@ describe("operator HTTP authentication and CSRF boundary", () => {
 
     const responses = await Promise.all([
       fetch(`${base}/agent/dashboard.js`, { headers: oldHeader }),
+      fetch(`${base}/api/setup/owner/status`, { headers: oldHeader }),
       fetch(`${base}/api/setup/photon/status`, { headers: oldHeader }),
       fetch(`${base}/api/setup/chatgpt/status`, { headers: oldHeader }),
+      fetch(`${base}/api/setup/owner`, {
+        method: "POST",
+        headers: oldHeader,
+      }),
       fetch(`${base}/api/setup/photon/start`, {
         method: "POST",
         headers: oldHeader,
@@ -224,7 +258,7 @@ describe("operator HTTP authentication and CSRF boundary", () => {
       }),
     ]);
     expect(responses.map((response) => response.status)).toEqual([
-      401, 401, 401, 403, 403,
+      401, 401, 401, 401, 403, 403, 403,
     ]);
     for (const response of responses) {
       const deniedBody = await response.text();
@@ -235,6 +269,7 @@ describe("operator HTTP authentication and CSRF boundary", () => {
         "https://app.photon.codes/device",
         "https://auth.openai.com/codex/device",
         ASSIGNED_NUMBER,
+        OWNER_PHONE_NUMBER,
         "CODEX_AUTH_MISSING",
         "CHATGPT_LOGIN_FAILED",
       ]) {
@@ -276,14 +311,18 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     });
 
     const deniedResponses = await Promise.all([
+      fetch(`${base}/api/setup/owner/status`),
       fetch(`${base}/api/setup/photon/status`),
       fetch(`${base}/api/setup/chatgpt/status`),
       fetch(`${base}/agent/dashboard`),
     ]);
-    expect(deniedResponses.map(({ status }) => status)).toEqual([401, 401, 200]);
+    expect(deniedResponses.map(({ status }) => status)).toEqual([
+      401, 401, 401, 200,
+    ]);
     for (const response of deniedResponses) {
       const body = await response.text();
       expect(body).not.toContain(ASSIGNED_NUMBER);
+      expect(body).not.toContain(OWNER_PHONE_NUMBER);
       expect(body).not.toContain(CHATGPT_DEVICE_CODE);
       expect(body).not.toContain("https://auth.openai.com/codex/device");
     }
@@ -347,9 +386,12 @@ describe("operator HTTP authentication and CSRF boundary", () => {
   });
 
   it("rejects missing or invalid CSRF tokens, foreign origins, and cross-site fetches", async () => {
+    const identity = configuredDeploymentIdentity();
+    const configureOwner = vi.fn(identity.configureOwner);
     const photonStart = vi.fn(connectedPhotonSetup().start);
     const chatGptStart = vi.fn(chatGptSetup().start);
     const base = await startTestServer({
+      deploymentIdentity: { ...identity, configureOwner },
       photonSetup: {
         status: connectedPhotonSetup().status,
         start: photonStart,
@@ -362,6 +404,7 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     const credentials = (await login(base)).credentials!;
 
     for (const target of [
+      { endpoint: "/api/setup/owner", method: "POST" as const },
       { endpoint: "/api/setup/photon/start", method: "POST" as const },
       { endpoint: "/api/setup/chatgpt/start", method: "POST" as const },
       { endpoint: "/api/operator/session", method: "DELETE" as const },
@@ -402,6 +445,7 @@ describe("operator HTTP authentication and CSRF boundary", () => {
         await expect(response.json()).resolves.toEqual({ error: "FORBIDDEN" });
       }
     }
+    expect(configureOwner).not.toHaveBeenCalled();
     expect(photonStart).not.toHaveBeenCalled();
     expect(chatGptStart).not.toHaveBeenCalled();
   });
@@ -525,6 +569,12 @@ describe("operator HTTP authentication and CSRF boundary", () => {
     });
     const credentials = (await login(base)).credentials!;
     await fetch(
+      `${base}/api/setup/owner`,
+      csrfRequest(base, credentials, {
+        body: JSON.stringify({ phoneNumber: OWNER_PHONE_NUMBER }),
+      }),
+    );
+    await fetch(
       `${base}/api/setup/chatgpt/start`,
       csrfRequest(base, credentials),
     );
@@ -543,6 +593,7 @@ describe("operator HTTP authentication and CSRF boundary", () => {
       credentials.csrfToken,
       PHOTON_DEVICE_CODE,
       CHATGPT_DEVICE_CODE,
+      OWNER_PHONE_NUMBER,
     ]) {
       expect(output).not.toContain(privateValue);
     }

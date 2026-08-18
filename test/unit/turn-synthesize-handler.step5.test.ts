@@ -129,12 +129,12 @@ describe("Step 5 final synthesis handler", () => {
         decision: expect.objectContaining({
           mode: "direct",
           userMessage: expect.stringMatching(
-            /^Some requested work couldn’t be completed\./,
+            /^part of that didn’t finish\./,
           ),
         }),
         encryptedParts: [
           expect.stringMatching(
-            /^encrypted:Some requested work couldn’t be completed\./,
+            /^encrypted:part of that didn’t finish\./,
           ),
         ],
       }),

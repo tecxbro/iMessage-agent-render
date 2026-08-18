@@ -176,7 +176,7 @@ function withTruthfulPartialFailure(
   }
   return interactionDecisionSchema.parse({
     ...decision,
-    userMessage: `Some requested work couldn’t be completed. ${decision.userMessage}`,
+    userMessage: `part of that didn’t finish. ${decision.userMessage}`,
   });
 }
 

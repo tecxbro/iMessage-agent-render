@@ -108,9 +108,9 @@ describe("Step 5 slash-command handlers", () => {
     const result = await handleSlashCommand(command("/status"), context, deps);
 
     expect(deps.getStatus).toHaveBeenCalledWith(context);
-    expect(result.message).toContain("Messaging: ready");
-    expect(result.message).toContain("Work: ready (2 active)");
-    expect(result.message).toContain("Model mode: main");
+    expect(result.message).toContain("messaging: ready");
+    expect(result.message).toContain("work: ready (2 active)");
+    expect(result.message).toContain("model mode: main");
     expect(result.message).not.toMatch(/task\.execute|queue|gpt-5|codex event|raw log/i);
   });
 
@@ -135,13 +135,15 @@ describe("Step 5 slash-command handlers", () => {
     );
 
     expect(deps.getModelProfile).toHaveBeenCalledWith(context);
-    expect(shown.message).toContain("Model mode: auto");
+    expect(shown.message).toContain("model mode: auto");
     expect(deps.setModelProfile).toHaveBeenNthCalledWith(1, context, "deep");
     expect(deps.setModelProfile).toHaveBeenNthCalledWith(2, context, null);
     expect(deps.setModelProfile).toHaveBeenCalledTimes(2);
-    expect(selected.message).toMatch(/future turns/i);
-    expect(automatic.message).toMatch(/future turns/i);
-    expect(invalid.message).toMatch(/unknown model mode/i);
+    expect(selected.message).toBe("model mode set to deep");
+    expect(automatic.message).toBe("model mode set to auto");
+    expect(invalid.message).toBe(
+      "unknown model mode. choose auto, fast, main, balanced, hard, or deep",
+    );
   });
 
   it("scopes cancel and new-thread changes while preserving saved memory", async () => {
@@ -155,8 +157,10 @@ describe("Step 5 slash-command handlers", () => {
 
     expect(deps.cancelActive).toHaveBeenCalledWith(context);
     expect(deps.resetInteractionThread).toHaveBeenCalledWith(context);
-    expect(canceled.message).toMatch(/this conversation/i);
-    expect(reset.message).toMatch(/saved memory is unchanged/i);
+    expect(canceled.message).toBe("canceled it");
+    expect(reset.message).toBe(
+      "started a fresh conversation. saved memory is unchanged",
+    );
   });
 
   it("lists bounded user-safe named contexts and sanitizes embedded control characters", async () => {
@@ -195,9 +199,9 @@ describe("Step 5 slash-command handlers", () => {
       deps,
     );
 
-    expect(unknown.message).toBe("Unknown command. Try /help.");
-    expect(injectedHelp.message).toBe("Usage: /help");
-    expect(extraCancel.message).toBe("Usage: /cancel");
+    expect(unknown.message).toBe("unknown command. try /help");
+    expect(injectedHelp.message).toBe("usage: /help");
+    expect(extraCancel.message).toBe("usage: /cancel");
     expect(deps.cancelActive).not.toHaveBeenCalled();
     expect(deps.resetInteractionThread).not.toHaveBeenCalled();
     expect(deps.setModelProfile).not.toHaveBeenCalled();

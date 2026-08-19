@@ -43,6 +43,7 @@ import {
   type Environment,
 } from "../config/env.js";
 import { loadPromptBundle } from "../config/prompt-bundle.js";
+import { DeliveryError } from "../conversation/errors.js";
 import { createDatabaseClient, type DatabaseClient } from "../db/client.js";
 import { runDatabaseMigrations } from "../db/migrate.js";
 import { ChainRepository } from "../db/repositories/chains.js";
@@ -66,8 +67,11 @@ import {
 } from "../db/repositories/model-settings.js";
 import { OperationalRepository } from "../db/repositories/operational.js";
 import { OrchestrationRepository } from "../db/repositories/orchestration.js";
-import { OutboundRepository } from "../db/repositories/outbound.js";
+import { OutboundDeliveryRepository } from "../db/repositories/outbound-delivery.js";
 import { RetentionRepository } from "../db/repositories/retention.js";
+import { CompatibilityDeliveryRouter } from "../delivery/compatibility-router.js";
+import { DeliveryCoordinator } from "../delivery/delivery-coordinator.js";
+import { SpectrumDeliveryTransport } from "../delivery/spectrum-delivery-transport.js";
 import type { AgentServiceBootstrap } from "../index.js";
 import type { ModelSettingsController } from "../http/server.js";
 import { ModelSettingsHttpController } from "../http/model-settings-controller.js";
@@ -81,6 +85,7 @@ import { createLogger } from "../observability/logger.js";
 import { DurableQueue } from "../queue/boss.js";
 import { createInboundFlushHandler } from "../queue/handlers/inbound-flush.js";
 import { createInteractionCoordinateHandler } from "../queue/handlers/interaction-coordinate.js";
+import { createOutboundCoordinateHandler } from "../queue/handlers/outbound-coordinate.js";
 import { createOutboundSendHandler } from "../queue/handlers/outbound-send.js";
 import { createApprovalRequestHandler } from "../queue/handlers/approval-request.js";
 import { createApprovalExecuteHandler } from "../queue/handlers/approval-execute.js";
@@ -154,7 +159,6 @@ interface QueueComposition {
   operational: OperationalRepository;
   pipeline: DurablePipeline;
   chains: ChainRepository;
-  outbound: OutboundRepository;
   orchestration: OrchestrationRepository;
   failures: FailureRepository;
   retention: RetentionRepository;
@@ -615,7 +619,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         client.database,
         authorizationReferences,
       );
-      const outbound = new OutboundRepository(client.database);
+      const outboundDelivery = new OutboundDeliveryRepository(client.database);
       const authorizationDirectory = new DatabaseAuthorizationDirectory(
         client.database,
       );
@@ -722,6 +726,48 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       const failures = new FailureRepository(client.database, protectedValues);
       const retention = new RetentionRepository(client.database);
       const memoryPublisher = new PgBossMemoryQueuePublisher(queue.boss);
+      const deliveryCoordinator = new DeliveryCoordinator({
+        repository: outboundDelivery,
+        transport: new SpectrumDeliveryTransport(outboundTransport),
+        decrypt: cipher.decrypt,
+        afterBatchComplete: async () => {
+          await memoryPublisher.reconcile(memoryCuration, {
+            providerEnabled: memoryProvider !== undefined,
+          });
+        },
+        onFailure: async ({ outboundBatchId, error, signal }) => {
+          const now = new Date();
+          await failures.recordFailureFailSafe({
+            correlationType: "outbound_batch",
+            correlationId: outboundBatchId,
+            component: "outbound",
+            errorCode: signal.aborted
+              ? "OUTBOUND_ABORTED"
+              : error instanceof DeliveryError
+                ? error.code
+                : "OUTBOUND_COORDINATOR_FAILED",
+            retryable:
+              error instanceof DeliveryError ? error.retryable : true,
+            safeMessage:
+              error instanceof DeliveryError
+                ? error.message
+                : "Outbound delivery failed. Inspect the coordinator claim and provider readiness before retrying.",
+            payloadSummary: { queue: QUEUE_NAMES.outboundCoordinate },
+            retentionExpiresAt: new Date(
+              now.getTime() +
+                environment.FAILURE_RETENTION_DAYS * 24 * 60 * 60 * 1_000,
+            ),
+          });
+        },
+      });
+      const deliveryRouter = new CompatibilityDeliveryRouter({
+        coordinator: deliveryCoordinator,
+        publisher: {
+          publish: async (payload) => {
+            await publisher.enqueueOutboundCoordinate(payload);
+          },
+        },
+      });
       const approvalCipher = createApprovalPayloadCipher(
         environment.APP_ENCRYPTION_KEY,
       );
@@ -825,7 +871,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       const pipeline = new DurablePipeline({
         inbound,
         chains,
-        outbound,
+        outbound: outboundDelivery,
         orchestration,
         publisher,
         ...(conversationActorRegistry === undefined ||
@@ -857,7 +903,6 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         operational,
         pipeline,
         chains,
-        outbound,
         orchestration,
         failures,
         retention,
@@ -926,6 +971,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         repository: orchestration,
         interaction,
         publisher,
+        deliveryRouter,
         memoryPublisher: publisher,
         reconcileMemory: async () => {
           await memoryPublisher.reconcile(memoryCuration, {
@@ -988,34 +1034,63 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       const synthesizeHandler = createTurnSynthesizeHandler({
         repository: orchestration,
         interaction,
-        publisher,
+        deliveryRouter,
         promptBundle,
         encrypt: cipher.encrypt,
       });
-      await queue.registerWorker(QUEUE_NAMES.turnSynthesize, async (payload, signal) =>
-        inFlightChains.run(payload.chainId, signal, (chainSignal) =>
-          synthesizeHandler(payload, chainSignal),
-        ),
+      await queue.registerWorker(
+        QUEUE_NAMES.turnSynthesize,
+        async (payload, signal) =>
+          inFlightChains.run(payload.chainId, signal, (chainSignal) =>
+            synthesizeHandler(payload, chainSignal),
+          ),
       );
-      const outboundHandler = createOutboundSendHandler({
-        outbound,
-        failures,
-        transport: outboundTransport,
-        decrypt: cipher.decrypt,
-        failureRetentionDays: environment.FAILURE_RETENTION_DAYS,
-        afterBatchComplete: async () => {
-          await memoryPublisher.reconcile(memoryCuration, {
-            providerEnabled: memoryProvider !== undefined,
-          });
-        },
+      const outboundCoordinateHandler = createOutboundCoordinateHandler({
+        coordinator: deliveryCoordinator,
       });
-      await queue.registerWorker(QUEUE_NAMES.outboundSend, async (payload, signal) => {
-        const chainId = await outbound.findChainIdForBatch(payload.outboundBatchId);
-        if (chainId === undefined) return await outboundHandler(payload, signal);
-        await inFlightChains.run(chainId, signal, (chainSignal) =>
-          outboundHandler(payload, chainSignal),
+      const outboundSendCompatibilityHandler = createOutboundSendHandler({
+        coordinator: deliveryCoordinator,
+      });
+      const runDelivery = async (
+        outboundBatchId: string,
+        signal: AbortSignal,
+        handler: (signal: AbortSignal) => Promise<void>,
+      ): Promise<void> => {
+        const chainId = await outboundDelivery.findChainIdForBatch(
+          outboundBatchId,
         );
-      });
+        if (chainId === undefined) {
+          await handler(signal);
+          return;
+        }
+        await inFlightChains.run(chainId, signal, (chainSignal) =>
+          handler(chainSignal),
+        );
+      };
+      await queue.registerWorker(
+        QUEUE_NAMES.outboundCoordinate,
+        async (payload, signal) => {
+          await runDelivery(
+            payload.outboundBatchId,
+            signal,
+            async (runSignal) => {
+              await outboundCoordinateHandler(payload, runSignal);
+            },
+          );
+        },
+      );
+      await queue.registerWorker(
+        QUEUE_NAMES.outboundSend,
+        async (payload, signal) => {
+          await runDelivery(
+            payload.outboundBatchId,
+            signal,
+            async (runSignal) => {
+              await outboundSendCompatibilityHandler(payload, runSignal);
+            },
+          );
+        },
+      );
       await queue.registerWorker(
         QUEUE_NAMES.approvalRequest,
         async (payload) => {

@@ -31,7 +31,7 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         })),
         findQueuedChains: vi.fn(async () => []),
       },
-      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      outbound: { findRecoverableBatchIds: vi.fn(async () => []) },
       publisher: {
         scheduleInboundFlush: vi.fn(async () => {
           order.push("schedule-replacement");
@@ -39,6 +39,7 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         enqueueTurnPlan: vi.fn(async () => undefined),
         enqueueTaskExecute: vi.fn(async () => undefined),
         enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate: vi.fn(async () => undefined),
         enqueueOutboundSend: vi.fn(async () => undefined),
         enqueueApprovalRequest: vi.fn(async () => undefined),
         enqueueApprovalExecute: vi.fn(async () => undefined),
@@ -110,12 +111,13 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         })),
         findQueuedChains: vi.fn(async () => []),
       },
-      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      outbound: { findRecoverableBatchIds: vi.fn(async () => []) },
       publisher: {
         scheduleInboundFlush,
         enqueueTurnPlan: vi.fn(async () => undefined),
         enqueueTaskExecute: vi.fn(async () => undefined),
         enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate: vi.fn(async () => undefined),
         enqueueOutboundSend: vi.fn(async () => undefined),
         enqueueApprovalRequest: vi.fn(async () => undefined),
         enqueueApprovalExecute: vi.fn(async () => undefined),
@@ -169,7 +171,7 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         })),
         findQueuedChains: vi.fn(async () => []),
       },
-      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      outbound: { findRecoverableBatchIds: vi.fn(async () => []) },
       publisher: {
         scheduleInboundFlush: vi.fn(async () => {
           events.push("legacy-flush-scheduled");
@@ -177,6 +179,7 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         enqueueTurnPlan: vi.fn(async () => undefined),
         enqueueTaskExecute: vi.fn(async () => undefined),
         enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate: vi.fn(async () => undefined),
         enqueueOutboundSend: vi.fn(async () => undefined),
         enqueueApprovalRequest: vi.fn(async () => undefined),
         enqueueApprovalExecute: vi.fn(async () => undefined),
@@ -248,12 +251,13 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         supersedeActiveChain: vi.fn(),
         findQueuedChains: vi.fn(async () => []),
       },
-      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      outbound: { findRecoverableBatchIds: vi.fn(async () => []) },
       publisher: {
         scheduleInboundFlush: vi.fn(async () => undefined),
         enqueueTurnPlan: vi.fn(async () => undefined),
         enqueueTaskExecute: vi.fn(async () => undefined),
         enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate: vi.fn(async () => undefined),
         enqueueOutboundSend: vi.fn(async () => undefined),
         enqueueApprovalRequest: vi.fn(async () => undefined),
         enqueueApprovalExecute: vi.fn(async () => undefined),
@@ -309,12 +313,13 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         })),
         findQueuedChains: vi.fn(async () => []),
       },
-      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      outbound: { findRecoverableBatchIds: vi.fn(async () => []) },
       publisher: {
         scheduleInboundFlush,
         enqueueTurnPlan: vi.fn(async () => undefined),
         enqueueTaskExecute: vi.fn(async () => undefined),
         enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate: vi.fn(async () => undefined),
         enqueueOutboundSend: vi.fn(async () => undefined),
         enqueueApprovalRequest: vi.fn(async () => undefined),
         enqueueApprovalExecute: vi.fn(async () => undefined),
@@ -367,12 +372,13 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         supersedeActiveChain: vi.fn(),
         findQueuedChains: vi.fn(async () => []),
       },
-      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      outbound: { findRecoverableBatchIds: vi.fn(async () => []) },
       publisher: {
         scheduleInboundFlush: vi.fn(async () => undefined),
         enqueueTurnPlan: vi.fn(async () => undefined),
         enqueueTaskExecute: vi.fn(async () => undefined),
         enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate: vi.fn(async () => undefined),
         enqueueOutboundSend: vi.fn(async () => undefined),
         enqueueApprovalRequest: vi.fn(async () => undefined),
         enqueueApprovalExecute: vi.fn(async () => undefined),
@@ -417,12 +423,13 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         supersedeActiveChain: vi.fn(),
         findQueuedChains: vi.fn(async () => []),
       },
-      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      outbound: { findRecoverableBatchIds: vi.fn(async () => []) },
       publisher: {
         scheduleInboundFlush: vi.fn(async () => undefined),
         enqueueTurnPlan: vi.fn(async () => undefined),
         enqueueTaskExecute: vi.fn(async () => undefined),
         enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate: vi.fn(async () => undefined),
         enqueueOutboundSend: vi.fn(async () => undefined),
         enqueueApprovalRequest: vi.fn(async () => undefined),
         enqueueApprovalExecute: vi.fn(async () => undefined),
@@ -461,12 +468,13 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
         supersedeActiveChain: vi.fn(),
         findQueuedChains: vi.fn(async () => []),
       },
-      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      outbound: { findRecoverableBatchIds: vi.fn(async () => []) },
       publisher: {
         scheduleInboundFlush: vi.fn(async () => undefined),
         enqueueTurnPlan: vi.fn(async () => undefined),
         enqueueTaskExecute: vi.fn(async () => undefined),
         enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate: vi.fn(async () => undefined),
         enqueueOutboundSend: vi.fn(async () => undefined),
         enqueueApprovalRequest: vi.fn(async () => undefined),
         enqueueApprovalExecute: vi.fn(async () => undefined),
@@ -493,6 +501,44 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
     await vi.waitFor(() => {
       expect(durableWake).toHaveBeenCalledWith({ spaceId, reason: "inbound" });
     });
+  });
+
+  it("recovers materialized legacy batches through outbound.coordinate", async () => {
+    const enqueueOutboundCoordinate = vi.fn(async () => undefined);
+    const enqueueOutboundSend = vi.fn(async () => undefined);
+    const pipeline = new DurablePipeline({
+      inbound: {
+        ingestAcceptedMessage: vi.fn(),
+        findSpacesWithUndrainedInbound: vi.fn(async () => []),
+      },
+      chains: {
+        supersedeActiveChain: vi.fn(),
+        findQueuedChains: vi.fn(async () => []),
+      },
+      outbound: {
+        findRecoverableBatchIds: vi.fn(async () => [batchId]),
+      },
+      publisher: {
+        scheduleInboundFlush: vi.fn(async () => undefined),
+        enqueueTurnPlan: vi.fn(async () => undefined),
+        enqueueTaskExecute: vi.fn(async () => undefined),
+        enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate,
+        enqueueOutboundSend,
+        enqueueApprovalRequest: vi.fn(async () => undefined),
+        enqueueApprovalExecute: vi.fn(async () => undefined),
+        enqueueMemoryCurate: vi.fn(async () => undefined),
+      },
+      debounceMs: 4_000,
+    });
+
+    await expect(pipeline.reconcile()).resolves.toMatchObject({
+      outboundJobsScheduled: 1,
+    });
+    expect(enqueueOutboundCoordinate).toHaveBeenCalledWith({
+      outboundBatchId: batchId,
+    });
+    expect(enqueueOutboundSend).not.toHaveBeenCalled();
   });
 
   it("uses stable singleton keys when debounce, planning, synthesis, and send enqueue retry", async () => {
@@ -546,9 +592,8 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
       expectedChainVersion: 1,
       expectedState: "executing",
     });
-    await publisher.enqueueOutboundSend({
+    await publisher.enqueueOutboundCoordinate({
       outboundBatchId: batchId,
-      expectedState: "sending",
     });
 
     expect(sendSingletonKeys).toEqual([

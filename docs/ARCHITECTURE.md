@@ -250,7 +250,20 @@ repository and queue.
 
 ### 5.7 Send
 
-`outbound.send` rehydrates the native Spectrum space using its stored GUID and route phone, claims the next materialized part, sends it with a stable client GUID, and advances the database cursor only after acknowledgement.
+Chain synthesis still materializes every part before delivery. It then wakes the
+delivery coordinator in-process and publishes an `outbound.coordinate` recovery
+job for the same batch. The direct wake removes queue-pickup latency; the
+coordinator registry and PostgreSQL claim make duplicate direct and queue wakes
+converge on one cursor. `outbound.send` remains registered temporarily only to
+wake that same coordinator for jobs created by an older application revision.
+
+The coordinator rehydrates the native Spectrum space using its stored GUID and
+route phone, claims the next materialized part, sends it with a stable client
+GUID, and advances the database cursor only after acknowledgement. Chain-origin
+batches retain chain cancellation/state checks and complete the chain after the
+final part. Interaction-origin batches require the matching current run and
+actor generation; their final checkpoint completes the run and advances the
+conversation finalization cursor instead of changing chain state.
 
 ```ts
 clientGuid = sha256(`${deploymentId}:${outboundBatchId}:${position}`)
@@ -350,7 +363,7 @@ values are excluded from logs.
 | Planning | Versioned singleton retries or cancellation; no stale batch | Handler/repository fake and offline integration coverage; production composition/live path untested |
 | Execution | Abort superseded Codex work; bounded retry/failure persists | Handler, repository, Codex cancellation, and recovery fake coverage; production composition/live path untested |
 | Synthesis | Terminal scan enqueues one singleton synthesis; partial failure is preserved | Handler/repository fake and offline integration coverage; production composition/live path untested |
-| Each outbound part | Resume at persisted cursor and retain the same logical client GUID | Fake crash at each materialized part; Spectrum 12.7 cannot receive the caller GUID, so a post-send/pre-checkpoint crash can duplicate one bubble |
+| Each outbound part | Direct and queued wakes converge on one leased coordinator; resume at persisted cursor and retain the same logical client GUID | Coordinator unit/chaos and PostgreSQL claim coverage; Spectrum 12.7 cannot receive the caller GUID, so a post-send/pre-checkpoint crash can duplicate one bubble |
 | Memory write or queue publication | Operational response stays complete; encrypted candidates remain durable and reconciliation republishes missing work | PostgreSQL integration and chaos coverage; live Supermemory untested |
 | Spectrum disconnect | Readiness degrades; the active run is cleared and the activation coordinator performs bounded recovery | Message-loop and activation race/chaos coverage; live disconnect/replay untested |
 | PostgreSQL timeout | Readiness false; do not begin untracked model work; resume durable jobs after recovery | Composed boot-time timeout/readiness coverage; runtime post-start database health transition is not implemented or tested |

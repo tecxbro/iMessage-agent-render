@@ -7,6 +7,7 @@ import type {
   ApprovalRequestPayload,
   InteractionCoordinatePayload,
   MemoryCuratePayload,
+  OutboundCoordinatePayload,
   OutboundSendPayload,
   TaskExecutePayload,
   TurnPlanPayload,
@@ -18,6 +19,7 @@ export interface QueuePublisher {
   enqueueTurnPlan(payload: TurnPlanPayload): Promise<void>;
   enqueueTaskExecute(payload: TaskExecutePayload): Promise<void>;
   enqueueTurnSynthesize(payload: TurnSynthesizePayload): Promise<void>;
+  enqueueOutboundCoordinate(payload: OutboundCoordinatePayload): Promise<void>;
   enqueueOutboundSend(payload: OutboundSendPayload): Promise<void>;
   enqueueApprovalRequest(payload: ApprovalRequestPayload): Promise<void>;
   enqueueApprovalExecute(payload: ApprovalExecutePayload): Promise<void>;
@@ -101,6 +103,16 @@ export class PgBossPublisher
     );
   }
 
+  public async enqueueOutboundCoordinate(
+    payload: OutboundCoordinatePayload,
+  ): Promise<void> {
+    await this.sendSingleton(
+      QUEUE_NAMES.outboundCoordinate,
+      payload,
+      `outbound:${payload.outboundBatchId}`,
+    );
+  }
+
   public async enqueueApprovalRequest(
     payload: ApprovalRequestPayload,
   ): Promise<void> {
@@ -135,6 +147,7 @@ export class PgBossPublisher
       | typeof QUEUE_NAMES.turnPlan
       | typeof QUEUE_NAMES.taskExecute
       | typeof QUEUE_NAMES.turnSynthesize
+      | typeof QUEUE_NAMES.outboundCoordinate
       | typeof QUEUE_NAMES.outboundSend
       | typeof QUEUE_NAMES.approvalRequest
       | typeof QUEUE_NAMES.approvalExecute
@@ -144,6 +157,7 @@ export class PgBossPublisher
       | TurnPlanPayload
       | TaskExecutePayload
       | TurnSynthesizePayload
+      | OutboundCoordinatePayload
       | OutboundSendPayload
       | ApprovalRequestPayload
       | ApprovalExecutePayload

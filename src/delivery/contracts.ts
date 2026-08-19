@@ -55,4 +55,5 @@ export interface DeliveryCoordinatorPort {
     payload: OutboundCoordinatePayload,
     signal: AbortSignal,
   ): Promise<void>;
+  wake(outboundBatchId: string, signal?: AbortSignal): Promise<void>;
 }

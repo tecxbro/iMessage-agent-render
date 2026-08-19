@@ -202,11 +202,15 @@ Materialized response and resume cursor.
 | Column | Notes |
 |---|---|
 | `id` | UUID |
-| `chain_id`, `space_id` | Foreign keys |
+| `chain_id` | Nullable legacy-chain origin |
+| `interaction_run_id` | Nullable conversation-actor foreign-key origin |
+| `space_id` | Foreign key |
 | `state` | `queued`, `sending`, `sent`, `failed`, `canceled` |
 | `start_index` | Next part to attempt |
 | `part_count` | Immutable |
 | `created_at`, `completed_at` | Timestamps |
+
+Exactly one origin is required: `chain_id` xor `interaction_run_id`.
 
 ### `outbound_parts`
 
@@ -276,7 +280,8 @@ Durable operational diagnostics.
 | `turn.plan` | Interaction decision | `chain:<id>:plan` |
 | `task.execute` | Run one execution task | `task:<id>` |
 | `turn.synthesize` | Aggregate terminal tasks | `chain:<id>:synthesize` |
-| `outbound.send` | Resume a materialized batch | `outbound:<batch-id>` |
+| `outbound.coordinate` | Resume a materialized batch through the delivery coordinator | `outbound:<batch-id>` |
+| `outbound.send` | Compatibility wake for jobs created before the coordinator cutover | `outbound:<batch-id>` |
 | `memory.curate` | Project durable memory | `chain:<id>:memory` |
 | `maintenance.retention` | Apply retention policies | scheduled singleton |
 | `maintenance.health` | Optional provider probes | scheduled singleton |

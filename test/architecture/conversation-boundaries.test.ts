@@ -51,7 +51,7 @@ describe("conversation actor boundaries", () => {
     );
   });
 
-  it("registers observe coordination without cutting legacy handlers over", async () => {
+  it("keeps observe coordination while cutting delivery over", async () => {
     const production = await source("src/runtime/production-bootstrap.ts");
     const pipeline = await source("src/queue/pipeline.ts");
     const inbound = await source("src/db/repositories/inbound.ts");
@@ -73,7 +73,7 @@ describe("conversation actor boundaries", () => {
     expect(production).toContain("createTurnPlanHandler");
     expect(production).toContain("createTurnSynthesizeHandler");
     expect(production).toContain("createOutboundSendHandler");
-    expect(production).not.toContain("outboundCoordinate");
+    expect(production).toContain("createOutboundCoordinateHandler");
     expect(production).not.toContain(
       "await pipeline.reconcileConversationObservations();",
     );
@@ -82,6 +82,7 @@ describe("conversation actor boundaries", () => {
       "inboundFlush",
       "turnPlan",
       "turnSynthesize",
+      "outboundCoordinate",
       "outboundSend",
     ]) {
       expect(
@@ -90,6 +91,11 @@ describe("conversation actor boundaries", () => {
         ),
       ).toHaveLength(1);
     }
+    expect(production).toContain("new DeliveryCoordinator");
+    expect(production).toContain("QUEUE_NAMES.outboundCoordinate");
+    expect(production).toContain("QUEUE_NAMES.outboundSend");
+    expect(pipeline).toContain("enqueueOutboundCoordinate");
+    expect(pipeline).not.toContain("enqueueOutboundSend");
   });
 
   it("requires atomic encrypted ingest and typed CAS results", async () => {

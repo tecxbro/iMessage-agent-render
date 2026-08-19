@@ -20,6 +20,7 @@ describeDatabase("pg-boss durable queue", () => {
     queue = new DurableQueue({ connectionString: databaseUrl });
     await queue.start();
     await queue.boss.deleteAllJobs(QUEUE_NAMES.outboundSend);
+    await queue.boss.deleteAllJobs(QUEUE_NAMES.outboundCoordinate);
     await queue.boss.deleteAllJobs(QUEUE_NAMES.turnSynthesize);
     await queue.boss.deleteAllJobs(QUEUE_NAMES.inboundFlush);
     await queue.boss.deleteAllJobs(QUEUE_NAMES.turnPlan);
@@ -30,20 +31,18 @@ describeDatabase("pg-boss durable queue", () => {
     await queue?.stop();
   });
 
-  it("creates one queued outbound job for concurrent singleton sends", async () => {
+  it("creates one queued outbound coordinator job for concurrent wakes", async () => {
     const publisher = new PgBossPublisher(queue.boss);
     await Promise.all([
-      publisher.enqueueOutboundSend({
+      publisher.enqueueOutboundCoordinate({
         outboundBatchId: batchId,
-        expectedState: "queued",
       }),
-      publisher.enqueueOutboundSend({
+      publisher.enqueueOutboundCoordinate({
         outboundBatchId: batchId,
-        expectedState: "queued",
       }),
     ]);
 
-    const jobs = await queue.boss.findJobs(QUEUE_NAMES.outboundSend, {
+    const jobs = await queue.boss.findJobs(QUEUE_NAMES.outboundCoordinate, {
       queued: true,
     });
     expect(

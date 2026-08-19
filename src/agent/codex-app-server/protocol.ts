@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+import type { RequestId } from "./generated/RequestId.js";
+import type { ServerNotification } from "./generated/ServerNotification.js";
+import type { ServerRequest } from "./generated/ServerRequest.js";
+
 export const MAXIMUM_PROTOCOL_LINE_BYTES = 1_048_576;
 
 export class CodexAppServerProtocolError extends Error {
@@ -9,10 +13,55 @@ export class CodexAppServerProtocolError extends Error {
   }
 }
 
+export class CodexAppServerConnectionClosedError extends CodexAppServerProtocolError {
+  public readonly requestWasWritten: boolean;
+
+  public constructor(requestWasWritten: boolean) {
+    super();
+    this.name = "CodexAppServerConnectionClosedError";
+    this.requestWasWritten = requestWasWritten;
+  }
+}
+
+export class CodexAppServerGenerationChangedError extends CodexAppServerProtocolError {
+  public constructor(
+    public readonly expectedGeneration: number,
+    public readonly actualGeneration: number,
+  ) {
+    super();
+    this.name = "CodexAppServerGenerationChangedError";
+  }
+}
+
+export class CodexAppServerRequestTimeoutError extends CodexAppServerProtocolError {
+  public constructor(public readonly requestWasWritten: boolean) {
+    super();
+    this.name = "CodexAppServerRequestTimeoutError";
+  }
+}
+
 export interface AppServerNotification {
   method: string;
   params: unknown;
 }
+
+export interface AppServerRequest {
+  id: RequestId;
+  method: string;
+  params: unknown;
+}
+
+export type TypedAppServerNotification = ServerNotification;
+export type TypedAppServerRequest = ServerRequest;
+
+export type AppServerRequestResolution =
+  | { result: unknown }
+  | {
+      error: {
+        code: number;
+        message: string;
+      };
+    };
 
 export const requestIdSchema = z.union([
   z.number().int(),
@@ -41,14 +90,14 @@ export const responseEnvelopeSchema = z
 export const serverRequestEnvelopeSchema = z
   .object({
     id: requestIdSchema,
-    method: z.string(),
+    method: z.string().trim().min(1).max(256),
     params: z.unknown(),
   })
   .passthrough();
 
 export const notificationEnvelopeSchema = z
   .object({
-    method: z.string(),
+    method: z.string().trim().min(1).max(256),
     params: z.unknown(),
   })
   .passthrough();

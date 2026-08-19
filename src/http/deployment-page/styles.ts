@@ -95,6 +95,7 @@ export const DEPLOYMENT_PAGE_STYLES = `    @font-face {
     .agent-number span { color: var(--muted); }
     .agent-number strong { font-size: clamp(2rem, 7vw, 3.5rem); font-weight: 400; letter-spacing: -0.035em; }
     .agent-or { color: var(--muted); }
+    .agent-or, .text-agent-button { margin-block-end: 1rem; }
     .text-agent-button { flex: 0 0 auto; }
     .ready-message { margin: 0; font-size: 1.3rem; }
     .advanced-card { margin-block-start: 1.5rem; }
@@ -123,7 +124,7 @@ export const DEPLOYMENT_PAGE_STYLES = `    @font-face {
     .visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     @keyframes enter { from { opacity: 0; transform: translateY(0.6rem); } to { opacity: 1; transform: translateY(0); } }
     @keyframes codex-progress { 0% { transform: translateX(-110%); } 55% { transform: translateX(105%); } 100% { transform: translateX(300%); } }
-    @media (max-width: 32rem) { .card-heading { align-items: flex-start; } .state { max-inline-size: 10rem; } .ready-shell { padding-block: 1.5rem; } .ready-shell h1 { font-size: 2.6rem; } .ready-card { gap: 1.1rem; margin-block-start: 1.25rem; padding-block: 1.25rem; } .ready-list { gap: 0.45rem; font-size: 1.15rem; } .agent-start { align-items: flex-start; flex-direction: column; gap: 0.8rem; } .ready-message { font-size: 1.1rem; } .footer-inner { align-items: flex-start; flex-direction: column; gap: 0.25rem; } .footer-links { justify-content: flex-start; } }
+    @media (max-width: 32rem) { .card-heading { align-items: flex-start; } .state { max-inline-size: 10rem; } .ready-shell { padding-block: 1.5rem; } .ready-shell h1 { font-size: 2.6rem; } .ready-card { gap: 1.1rem; margin-block-start: 1.25rem; padding-block: 1.25rem; } .ready-list { gap: 0.45rem; font-size: 1.15rem; } .agent-start { align-items: flex-start; flex-direction: column; gap: 0.8rem; } .agent-or, .text-agent-button { margin-block-end: 0; } .ready-message { font-size: 1.1rem; } .footer-inner { align-items: flex-start; flex-direction: column; gap: 0.25rem; } .footer-links { justify-content: flex-start; } }
     @media (prefers-contrast: more) { :root { --muted: #3f3f3d; --line: #777772; } .card, .device-code { border-width: 0.125rem; } }
     @media (prefers-contrast: forced) { .codex-progress { border: 0.125rem solid CanvasText; } .codex-progress span { background: Highlight; } }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } .codex-progress span { inline-size: 38%; animation: none !important; opacity: 0.55; transform: none; } }`;

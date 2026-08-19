@@ -104,4 +104,53 @@ describe("observe conversation actor", () => {
       name: "AbortError",
     });
   });
+
+  it("aborts an in-flight snapshot read during disposal", async () => {
+    let loadStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      loadStarted = resolve;
+    });
+    const actor = new ObserveConversationActor({
+      spaceId,
+      repository: {
+        loadConversation: async () => {
+          loadStarted();
+          return await new Promise<ConversationSnapshot | null>(() => undefined);
+        },
+      },
+      metrics: new ConversationObservationMetrics(),
+      readTimeoutMs: 10_000,
+    });
+
+    const wake = actor.wake("recovery");
+    await started;
+    actor.dispose();
+
+    await expect(wake).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("bounds retained cursor metrics and exports each observation", () => {
+    const records: string[] = [];
+    const metrics = new ConversationObservationMetrics({
+      maximumTrackedSpaces: 1,
+      onRecord: (observation) => records.push(observation.spaceId),
+    });
+    metrics.record({
+      snapshot: snapshot({ latest: 1, finalized: 0 }),
+      reasons: new Set(["inbound"]),
+      observedAt,
+    });
+    const anotherSpaceId = "41000000-0000-4000-8000-000000000002";
+    const second = snapshot({ latest: 2, finalized: 1 });
+    second.state.spaceId = anotherSpaceId;
+    metrics.record({
+      snapshot: second,
+      reasons: new Set(["recovery"]),
+      observedAt,
+    });
+
+    expect(metrics.get(spaceId)).toBeUndefined();
+    expect(metrics.snapshot()).toHaveLength(1);
+    expect(records).toEqual([spaceId, anotherSpaceId]);
+  });
 });

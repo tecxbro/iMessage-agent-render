@@ -71,7 +71,8 @@ async function initializeInTransaction(
     locked.actorGeneration === 0 &&
     locked.state === "idle" &&
     locked.activeInteractionRunId === null &&
-    (nullableRows.length > 0 ||
+    (cursorPolicy === "repair_completed_prefix" ||
+      nullableRows.length > 0 ||
       (locked.acceptedThroughSequence === locked.latestInputSequence &&
         locked.finalizedThroughSequence === locked.latestInputSequence));
 

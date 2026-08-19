@@ -1,11 +1,13 @@
 import {
   and,
   asc,
+  desc,
   eq,
   gt,
   gte,
   inArray,
   isNull,
+  lt,
   lte,
   or,
   sql,
@@ -250,6 +252,57 @@ export class ConversationRecoveryRepository {
     });
   }
 
+  public async loadRecentMessagesBeforeSequence(input: {
+    spaceId: string;
+    beforeSequence: number;
+    limit?: number;
+  }): Promise<SequencedInboundMessageRecord[]> {
+    if (!Number.isSafeInteger(input.beforeSequence) || input.beforeSequence < 1) {
+      throw new Error(
+        "Conversation history boundary must be a positive input sequence.",
+      );
+    }
+    const rows = await this.database
+      .select({
+        messageId: messages.id,
+        spaceId: messages.spaceId,
+        inputSequence: messages.inputSequence,
+        senderIdentityId: messages.senderIdentityId,
+        contentCiphertext: messages.contentCiphertext,
+        contentHash: messages.contentHash,
+        receivedAt: messages.receivedAt,
+        retentionExpiresAt: messages.retentionExpiresAt,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.spaceId, input.spaceId),
+          eq(messages.direction, "inbound"),
+          lt(messages.inputSequence, input.beforeSequence),
+        ),
+      )
+      .orderBy(desc(messages.inputSequence), desc(messages.id))
+      .limit(boundedLimit(input.limit ?? 20));
+
+    return rows.reverse().map((row) => {
+      if (
+        row.inputSequence === null ||
+        row.receivedAt === null ||
+        !Number.isSafeInteger(row.inputSequence) ||
+        row.inputSequence < 0
+      ) {
+        throw new Error(
+          "Conversation history loaded an invalid sequenced inbound row. Repair the affected space before starting the actor.",
+        );
+      }
+      return {
+        ...row,
+        inputSequence: row.inputSequence,
+        receivedAt: row.receivedAt,
+      };
+    });
+  }
+
   public async loadActorSnapshot(spaceId: string) {
     const [row] = await this.database
       .select({
@@ -460,6 +513,14 @@ export class PostgresConversationRepository
     throughSequence: number;
   }) {
     return this.recovery.loadMessagesBySequenceRange(input);
+  }
+
+  public async loadRecentMessagesBeforeSequence(input: {
+    spaceId: string;
+    beforeSequence: number;
+    limit?: number;
+  }) {
+    return this.recovery.loadRecentMessagesBeforeSequence(input);
   }
 
   public async loadActorSnapshot(spaceId: string) {

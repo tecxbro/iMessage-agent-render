@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDatabaseClient, type DatabaseClient } from "../../src/db/client.js";
 import { runDatabaseMigrations } from "../../src/db/migrate.js";
 import { conversationStates } from "../../src/db/schema-fragments/conversation-actors.js";
+import { ownerBindingRevisions } from "../../src/db/schema-fragments/photon-installations.js";
 import {
   chains,
   channelIdentities,
@@ -16,7 +17,10 @@ import {
   spaces,
 } from "../../src/db/schema.js";
 import { PostgresConversationRepository } from "../../src/db/repositories/conversation-recovery.js";
+import { ChainRepository } from "../../src/db/repositories/chains.js";
+import { InboundRepository } from "../../src/db/repositories/inbound.js";
 import { SequencedInboundRepository } from "../../src/db/repositories/sequenced-inbound.js";
+import { ConversationAuthorizationGate } from "../../src/security/conversation-authorization-gate.js";
 
 const databaseUrl = process.env["POSTGRES_PIPELINE_TEST_DATABASE_URL"];
 const describeDatabase = databaseUrl === undefined ? describe.skip : describe;
@@ -64,6 +68,10 @@ async function seedIdentityAndSpaces(client: DatabaseClient): Promise<void> {
     id: ids.owner,
     deploymentId: ids.deployment,
     timezone: "UTC",
+  });
+  await client.database.insert(ownerBindingRevisions).values({
+    deploymentId: ids.deployment,
+    ownerRevision: 4,
   });
   await client.database.insert(channelIdentities).values({
     id: ids.identity,
@@ -185,6 +193,96 @@ describeDatabase("transactional conversation ingestion", () => {
     expect(persisted).toEqual([
       { id: messageId(101), sequence: 1 },
       { id: messageId(103), sequence: 2 },
+    ]);
+  });
+
+  it("captures and revalidates the authorized principal for the actor suffix", async () => {
+    await repository.ingestInput(
+      inboundInput({
+        id: messageId(150),
+        externalMessageId: "authorized-actor-input",
+      }),
+    );
+    const gate = new ConversationAuthorizationGate(client.database);
+
+    const reference = await gate.authorize({
+      spaceId: ids.spaceA,
+      throughSequence: 1,
+    });
+    expect(reference).toEqual({
+      deploymentId: ids.deployment,
+      ownerId: ids.owner,
+      identityId: ids.identity,
+      authorizationRevision: 4,
+    });
+    if (reference === null) {
+      throw new Error("authorization reference fixture was not captured");
+    }
+    const persistedReference = {
+      ...reference,
+      interactionRunId: ids.run,
+      createdAt: new Date("2026-08-19T09:59:00Z"),
+    };
+    await expect(gate.revalidate(persistedReference)).resolves.toBe(true);
+
+    await client.database
+      .update(channelIdentities)
+      .set({ revokedAt: new Date("2026-08-19T10:00:00Z") })
+      .where(eq(channelIdentities.id, ids.identity));
+    await expect(
+      gate.authorize({ spaceId: ids.spaceA, throughSequence: 1 }),
+    ).resolves.toBeNull();
+    await expect(gate.revalidate(persistedReference)).resolves.toBe(false);
+  });
+
+  it("lets legacy rollback process only the suffix above the finalized cursor", async () => {
+    await repository.ingestInput(
+      inboundInput({ id: messageId(160), externalMessageId: "actor-finalized" }),
+    );
+    await repository.ingestInput(
+      inboundInput({
+        id: messageId(161),
+        externalMessageId: "rollback-suffix-1",
+        receivedAt: new Date("2026-08-19T10:00:02Z"),
+      }),
+    );
+    await repository.ingestInput(
+      inboundInput({
+        id: messageId(162),
+        externalMessageId: "rollback-suffix-2",
+        // Prove rollback ordering follows input_sequence, not provider time.
+        receivedAt: new Date("2026-08-19T10:00:01Z"),
+      }),
+    );
+    await client.database
+      .update(conversationStates)
+      .set({ acceptedThroughSequence: 1, finalizedThroughSequence: 1 })
+      .where(eq(conversationStates.spaceId, ids.spaceA));
+    await client.database
+      .update(deployments)
+      .set({
+        effectiveModelId: "gpt-5.6-luna",
+        effectiveReasoningEffort: "high",
+        modelSelectionState: "preferred",
+      })
+      .where(eq(deployments.id, ids.deployment));
+    const legacyInbound = new InboundRepository(client.database);
+    const legacyChains = new ChainRepository(client.database);
+
+    await expect(
+      legacyInbound.findSpacesWithUndrainedInbound(),
+    ).resolves.toEqual([ids.spaceA]);
+    const flushed = await legacyChains.flushInboundMessages(ids.spaceA);
+    expect(flushed?.messageIds).toEqual([messageId(161), messageId(162)]);
+    const persisted = await client.database
+      .select({ id: messages.id, drainedChainId: messages.drainedChainId })
+      .from(messages)
+      .where(eq(messages.spaceId, ids.spaceA))
+      .orderBy(asc(messages.inputSequence));
+    expect(persisted).toEqual([
+      { id: messageId(160), drainedChainId: null },
+      { id: messageId(161), drainedChainId: flushed?.chainId ?? null },
+      { id: messageId(162), drainedChainId: flushed?.chainId ?? null },
     ]);
   });
 
@@ -332,7 +430,7 @@ describeDatabase("transactional conversation ingestion", () => {
     expect(after?.activeRun).toMatchObject({ acceptedThroughSequence: 1 });
   });
 
-  it("sequences observe-mode input without taking finalization ownership", async () => {
+  it("repairs the completed observe prefix before the first actor-mode input", async () => {
     await client.database.insert(chains).values({
       id: ids.chain1,
       spaceId: ids.spaceA,
@@ -397,6 +495,48 @@ describeDatabase("transactional conversation ingestion", () => {
       acceptedThroughSequence: 1,
       finalizedThroughSequence: 1,
     });
+
+    await client.database.insert(chains).values({
+      id: ids.chain2,
+      spaceId: ids.spaceA,
+      version: 2,
+      state: "complete",
+      chainStartedAt: new Date("2026-08-18T10:02:00Z"),
+      completedAt: new Date("2026-08-18T10:02:30Z"),
+    });
+    await client.database
+      .update(messages)
+      .set({ drainedChainId: ids.chain2 })
+      .where(eq(messages.id, messageId(451)));
+
+    const actorIngested = await repository.ingestInput(
+      inboundInput({
+        id: messageId(452),
+        externalMessageId: "first-actor-input",
+        receivedAt: new Date("2026-08-18T10:03:00Z"),
+      }),
+    );
+
+    expect(actorIngested).toMatchObject({
+      status: "inserted",
+      input: { inputSequence: 4 },
+    });
+    const actorSnapshot = await repository.loadActorSnapshot(ids.spaceA);
+    expect(actorSnapshot?.state).toMatchObject({
+      latestInputSequence: 4,
+      acceptedThroughSequence: 3,
+      finalizedThroughSequence: 3,
+    });
+    await expect(
+      repository.loadRecentMessagesBeforeSequence({
+        spaceId: ids.spaceA,
+        beforeSequence: 4,
+        limit: 2,
+      }),
+    ).resolves.toMatchObject([
+      { inputSequence: 2 },
+      { inputSequence: 3 },
+    ]);
   });
 
   it("initializes legacy rows by received_at and id and leaves an incomplete suffix outstanding", async () => {

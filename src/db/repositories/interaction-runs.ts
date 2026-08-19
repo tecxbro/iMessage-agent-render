@@ -358,7 +358,9 @@ export class InteractionRunRepository {
       }
       const transitionAllowed =
         (candidateRun.state === "active" &&
-          (actualRun.state === "starting" || actualRun.state === "active")) ||
+          (actualRun.state === "starting" ||
+            actualRun.state === "active" ||
+            actualRun.state === "finalizing")) ||
         (candidateRun.state === "finalizing" &&
           (actualRun.state === "active" || actualRun.state === "finalizing")) ||
         (candidateRun.state === "completed" &&

@@ -8,7 +8,10 @@ import {
   type DatabaseClient,
 } from "../../src/db/client.js";
 import { runDatabaseMigrations } from "../../src/db/migrate.js";
-import { ChainRepository } from "../../src/db/repositories/chains.js";
+import {
+  ChainRepository,
+  InboundFlushDeferredError,
+} from "../../src/db/repositories/chains.js";
 import { ApprovalRepository } from "../../src/db/repositories/approvals.js";
 import { InboundRepository } from "../../src/db/repositories/inbound.js";
 import { OutboundRepository } from "../../src/db/repositories/outbound.js";
@@ -503,8 +506,8 @@ describeDatabase("PostgreSQL durable pipeline", () => {
     );
   });
 
-  it("recovers a crash between durable ingest and explicit supersession", async () => {
-    const first = await ingest("crash-original", new Date("2026-08-14T00:00:01Z"));
+  it("defers an ordinary suffix while a legacy chain remains active", async () => {
+    await ingest("crash-original", new Date("2026-08-14T00:00:01Z"));
     const oldChain = await chainRepository.flushInboundMessages(
       spaceId,
       new Date("2026-08-14T00:00:02Z"),
@@ -518,20 +521,24 @@ describeDatabase("PostgreSQL durable pipeline", () => {
       new Date("2026-08-14T00:00:03Z"),
     );
 
-    // Simulate restart reconciliation calling flush without the ingest service's
-    // normal supersedeActiveChain call.
-    const recovered = await chainRepository.flushInboundMessages(
-      spaceId,
-      new Date("2026-08-14T00:00:04Z"),
-    );
-
-    expect(recovered?.messageIds).toEqual([first.messageId, correction.messageId]);
-    expect(recovered?.canceledChainIds).toEqual([oldChain?.chainId]);
+    await expect(
+      chainRepository.flushInboundMessages(
+        spaceId,
+        new Date("2026-08-14T00:00:04Z"),
+      ),
+    ).rejects.toBeInstanceOf(InboundFlushDeferredError);
     const [oldState] = await client.database
       .select({ state: chains.state })
       .from(chains)
       .where(eq(chains.id, oldChain?.chainId ?? ""));
-    expect(oldState?.state).toBe("canceled");
+    expect(oldState?.state).toBe("planning");
+    const pending = await client.database
+      .select({ id: messages.id, drainedChainId: messages.drainedChainId })
+      .from(messages)
+      .where(eq(messages.id, correction.messageId));
+    expect(pending).toEqual([
+      { id: correction.messageId, drainedChainId: null },
+    ]);
   });
 
   it("moves the outbound cursor only after acknowledgement is checkpointed", async () => {

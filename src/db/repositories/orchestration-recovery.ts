@@ -173,7 +173,13 @@ export class OrchestrationRecoveryRepository {
     const active = await this.database
       .select({ chainId: chains.id, version: chains.version })
       .from(chains)
-      .where(and(eq(chains.state, "executing"), isNull(chains.canceledAt)))
+      .where(
+        and(
+          eq(chains.state, "executing"),
+          isNull(chains.canceledAt),
+          isNull(chains.sourceInteractionRunId),
+        ),
+      )
       .orderBy(asc(chains.createdAt))
       .limit(limit);
     const payloads: TurnSynthesizePayload[] = [];

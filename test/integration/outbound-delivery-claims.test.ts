@@ -38,6 +38,7 @@ const ids = {
   wrongToken: "12000000-0000-4000-8000-000000000099",
   run: "12000000-0000-4000-8000-000000000010",
   interactionSpace: "12000000-0000-4000-8000-000000000011",
+  interactionChain: "12000000-0000-4000-8000-000000000014",
 } as const;
 
 let t0 = new Date();
@@ -186,7 +187,7 @@ describeDatabase("outbound delivery claims", () => {
     ).rejects.toThrow();
   });
 
-  it("finalizes only the matching current interaction run after its final part", async () => {
+  it("atomically finalizes the interaction with its batch and delivers after later input", async () => {
     await client.database.insert(spaces).values({
       id: ids.interactionSpace,
       deploymentId: ids.deployment,
@@ -211,12 +212,20 @@ describeDatabase("outbound delivery claims", () => {
     });
     await client.database.insert(conversationStates).values({
       spaceId: ids.interactionSpace,
-      latestInputSequence: 5,
+      latestInputSequence: 4,
       acceptedThroughSequence: 4,
       finalizedThroughSequence: 1,
       actorGeneration: 7,
       activeInteractionRunId: ids.run,
       state: "finalizing",
+    });
+    await client.database.insert(chains).values({
+      id: ids.interactionChain,
+      spaceId: ids.interactionSpace,
+      version: 1,
+      state: "executing",
+      sourceInteractionRunId: ids.run,
+      chainStartedAt: t0,
     });
     const repository = new OutboundDeliveryRepository(client.database);
 
@@ -231,6 +240,25 @@ describeDatabase("outbound delivery claims", () => {
       code: "DELIVERY_BATCH_INVALID",
       retryable: false,
     });
+    await client.database
+      .update(conversationStates)
+      .set({ latestInputSequence: 5 })
+      .where(eq(conversationStates.spaceId, ids.interactionSpace));
+    await expect(
+      repository.materializeInteractionBatch({
+        interactionRunId: ids.run,
+        spaceId: ids.interactionSpace,
+        generation: 7,
+        encryptedParts: ["cipher:stale"],
+      }),
+    ).rejects.toMatchObject({
+      code: "DELIVERY_BATCH_INVALID",
+      retryable: false,
+    });
+    await client.database
+      .update(conversationStates)
+      .set({ latestInputSequence: 4 })
+      .where(eq(conversationStates.spaceId, ids.interactionSpace));
     const outboundBatchId = await repository.materializeInteractionBatch({
       interactionRunId: ids.run,
       spaceId: ids.interactionSpace,
@@ -246,24 +274,42 @@ describeDatabase("outbound delivery claims", () => {
       }),
     ).resolves.toBe(outboundBatchId);
 
-    await client.database
-      .update(conversationStates)
-      .set({ actorGeneration: 8 })
+    const [materializedRun] = await client.database
+      .select({
+        state: interactionRuns.state,
+        completedAt: interactionRuns.completedAt,
+      })
+      .from(interactionRuns)
+      .where(eq(interactionRuns.id, ids.run));
+    const [materializedConversation] = await client.database
+      .select({
+        state: conversationStates.state,
+        activeInteractionRunId: conversationStates.activeInteractionRunId,
+        finalizedThroughSequence: conversationStates.finalizedThroughSequence,
+      })
+      .from(conversationStates)
       .where(eq(conversationStates.spaceId, ids.interactionSpace));
-    await expect(
-      repository.claimNext({
-        outboundBatchId,
-        claimOwner: "stale-interaction-delivery",
-        leaseDurationMs: 60_000,
-        now: t0,
-      }),
-    ).rejects.toMatchObject({
-      code: "DELIVERY_BATCH_INVALID",
-      retryable: false,
+    expect(materializedRun).toEqual({
+      state: "completed",
+      completedAt: expect.any(Date),
     });
+    expect(materializedConversation).toEqual({
+      state: "idle",
+      activeInteractionRunId: null,
+      finalizedThroughSequence: 4,
+    });
+    const [materializedChain] = await client.database
+      .select({ state: chains.state, completedAt: chains.completedAt })
+      .from(chains)
+      .where(eq(chains.id, ids.interactionChain));
+    expect(materializedChain).toEqual({
+      state: "complete",
+      completedAt: materializedRun?.completedAt,
+    });
+
     await client.database
       .update(conversationStates)
-      .set({ actorGeneration: 7 })
+      .set({ actorGeneration: 8, latestInputSequence: 5 })
       .where(eq(conversationStates.spaceId, ids.interactionSpace));
 
     const first = await repository.claimNext({
@@ -319,7 +365,10 @@ describeDatabase("outbound delivery claims", () => {
       })
       .from(outboundBatches)
       .where(eq(outboundBatches.id, outboundBatchId));
-    expect(run).toEqual({ state: "completed", completedAt });
+    expect(run).toEqual({
+      state: "completed",
+      completedAt: materializedRun?.completedAt,
+    });
     expect(conversation).toEqual({
       state: "idle",
       activeInteractionRunId: null,

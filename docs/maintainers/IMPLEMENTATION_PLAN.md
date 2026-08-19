@@ -187,9 +187,9 @@ Make accepted messages, cancellation, retries, approvals, and outbound delivery 
 
 1. Implement schema constraints before repository methods.
 2. Use transactions for drain/create-chain and cursor advancement.
-3. Schedule `inbound.flush` as a per-space singleton/debounce job.
+3. In legacy/observe mode, schedule `inbound.flush` as a per-space singleton/debounce job; in actor mode, directly wake the actor and best-effort publish `interaction.coordinate` after commit.
 4. Keep message IDs in the database rather than job payload bodies.
-5. Implement `supersedeActiveChain(spaceId, newerMessageId)`.
+5. Keep supersession available only for explicit lifecycle decisions; ordinary inbound ingestion must not call it.
 6. Carry drained messages on cancellation before marking the old chain terminal.
 7. Materialize outbound parts before the send job.
 8. Derive stable client GUIDs from deployment, batch, and position.
@@ -200,7 +200,7 @@ Make accepted messages, cancellation, retries, approvals, and outbound delivery 
 
 - Two concurrent ingests produce one message row and one current flush schedule.
 - Four messages in a burst drain in order into one chain.
-- A new message during planning supersedes and carries prior messages.
+- A new message during planning remains durable and does not cancel the active work.
 - A stale cancellation timestamp does not cancel a new chain.
 - Synthesis and outbound jobs are singleton per chain/batch.
 - Kill after sending part two resumes at the correct cursor.
@@ -258,7 +258,7 @@ and cancellation. ADR-020 supersedes the original static-profile router scope.
    that pair at startup.
 10. Snapshot the effective pair on each new chain; do not route or escalate by
     request complexity.
-11. Abort superseded tasks and record a retryable/canceled terminal result.
+11. Abort tasks only for an explicit actor lifecycle cancellation and record the terminal result.
 12. Bound task runtime, output bytes, and concurrent child processes.
 
 ### Tests

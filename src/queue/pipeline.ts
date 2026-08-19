@@ -38,11 +38,10 @@ export interface ConversationObservationDependencies {
 }
 
 export interface DurableInboundPipelineDependencies {
+  engine?: "legacy" | "observe" | "actor";
   inbound: DurableInboundRepository;
-  chains: Pick<
-    ChainRepository,
-    "supersedeActiveChain" | "findQueuedChains"
-  >;
+  chains: Pick<ChainRepository, "findQueuedChains"> &
+    Partial<Pick<ChainRepository, "supersedeActiveChain">>;
   outbound: Pick<OutboundDeliveryRepository, "findRecoverableBatchIds">;
   orchestration?: Pick<
     OrchestrationRepository,
@@ -52,6 +51,7 @@ export interface DurableInboundPipelineDependencies {
   >;
   publisher: QueuePublisher;
   conversationObservation?: ConversationObservationDependencies;
+  /** Legacy compatibility callback; normal inbound messages never invoke it. */
   onChainsSuperseded?: (chainIds: readonly string[]) => void;
   debounceMs: number;
   taskRuntimeMs?: number;
@@ -92,19 +92,20 @@ export class DurablePipeline {
     // Commit accepted content before touching pg-boss. A queue outage may delay
     // work, but it cannot make an authorized inbound message disappear.
     const result = await this.dependencies.inbound.ingestAcceptedMessage(input);
-    // Both observe hints start only after the sequencing transaction commits.
-    // They are passive and bounded, so neither can hold the legacy receive loop.
-    void this.wakeConversation(input.spaceId, "inbound");
-    if (result.inserted) {
-      // Supersession interrupts stale work; its already accepted messages stay
-      // durable so the repository can carry them into the replacement chain.
-      const superseded = await this.dependencies.chains.supersedeActiveChain(
-        input.spaceId,
-        result.messageId,
-      );
-      if (superseded.canceledChainIds.length > 0) {
-        this.dependencies.onChainsSuperseded?.(superseded.canceledChainIds);
-      }
+    const engine =
+      this.dependencies.engine ??
+      (this.dependencies.conversationObservation === undefined
+        ? "legacy"
+        : "observe");
+    if (engine === "observe") {
+      void this.wakeConversation(input.spaceId, "inbound");
+    } else if (engine === "actor") {
+      // Invoke the direct wake first without awaiting the actor's whole run.
+      // The durable wake is published only after the sequencing commit and is
+      // best-effort: startup cursor reconciliation repairs this split later.
+      this.startDirectWake(input.spaceId, "inbound");
+      await this.publishDurableWake(input.spaceId, "inbound");
+      return result;
     }
 
     try {
@@ -125,9 +126,10 @@ export class DurablePipeline {
   public async reconcile(limit = 100): Promise<ReconciliationResult> {
     // Reconciliation recreates identifier-only jobs from authoritative rows
     // after a crash or a database-commit/queue-publish split failure.
-    const spaceIds = await this.dependencies.inbound.findSpacesWithUndrainedInbound(
-      limit,
-    );
+    const spaceIds =
+      this.engine() === "actor"
+        ? []
+        : await this.dependencies.inbound.findSpacesWithUndrainedInbound(limit);
     for (const spaceId of spaceIds) {
       await this.dependencies.publisher.scheduleInboundFlush(
         { spaceId },
@@ -176,16 +178,17 @@ export class DurablePipeline {
       });
     }
 
-    // Startup observation recovery is intentionally detached from authoritative
-    // legacy reconciliation. Every optional database/queue operation has its own
-    // timeout and reports degraded observation without closing readiness.
-    void this.reconcileConversationObservations(limit).catch((error: unknown) => {
-      this.reportWakeFailure({
-        reason: "recovery",
-        trigger: "recovery_query",
-        error,
+    if (this.engine() !== "legacy") {
+      // Every optional database/queue operation has its own timeout and reports
+      // degraded coordination without closing readiness.
+      void this.reconcileConversationObservations(limit).catch((error: unknown) => {
+        this.reportWakeFailure({
+          reason: "recovery",
+          trigger: "recovery_query",
+          error,
+        });
       });
-    });
+    }
 
     return {
       inboundFlushesScheduled: spaceIds.length,
@@ -261,38 +264,60 @@ export class DurablePipeline {
     if (observation === undefined) {
       return { direct: false, durable: false };
     }
-    const attempts = [
-      {
-        trigger: "direct" as const,
-        run: () => observation.actorRegistry.wake(spaceId, reason),
-      },
-      {
-        trigger: "durable" as const,
-        run: () =>
-          observation.publisher.enqueueInteractionCoordinate({
-            spaceId,
-            reason,
-          }),
-      },
-    ];
-    const results = await Promise.all(
-      attempts.map(async ({ trigger, run }) => {
-        const result = await this.runBounded(
-          run,
-          `${trigger} conversation observation wake`,
-        );
-        if (!result.ok) {
-          this.reportWakeFailure({
-            spaceId,
-            reason,
-            trigger,
-            error: result.error,
-          });
-        }
-        return result.ok;
-      }),
+    const direct = await this.runBounded(
+      () => observation.actorRegistry.wake(spaceId, reason),
+      "direct conversation wake",
     );
-    return { direct: results[0]!, durable: results[1]! };
+    if (!direct.ok) {
+      this.reportWakeFailure({
+        spaceId,
+        reason,
+        trigger: "direct",
+        error: direct.error,
+      });
+    }
+    const durable = await this.publishDurableWake(spaceId, reason);
+    return { direct: direct.ok, durable };
+  }
+
+  private startDirectWake(
+    spaceId: string,
+    reason: InteractionCoordinateReason,
+  ): void {
+    const observation = this.dependencies.conversationObservation;
+    if (observation === undefined) return;
+    let wake: Promise<void>;
+    try {
+      wake = Promise.resolve(observation.actorRegistry.wake(spaceId, reason));
+    } catch (error) {
+      this.reportWakeFailure({ spaceId, reason, trigger: "direct", error });
+      return;
+    }
+    void wake.catch((error: unknown) => {
+      this.reportWakeFailure({ spaceId, reason, trigger: "direct", error });
+    });
+  }
+
+  private async publishDurableWake(
+    spaceId: string,
+    reason: InteractionCoordinateReason,
+  ): Promise<boolean> {
+    const observation = this.dependencies.conversationObservation;
+    if (observation === undefined) return false;
+    const result = await this.runBounded(
+      () =>
+        observation.publisher.enqueueInteractionCoordinate({ spaceId, reason }),
+      "durable conversation wake",
+    );
+    if (!result.ok) {
+      this.reportWakeFailure({
+        spaceId,
+        reason,
+        trigger: "durable",
+        error: result.error,
+      });
+    }
+    return result.ok;
   }
 
   private async runBounded<Result>(
@@ -330,6 +355,15 @@ export class DurablePipeline {
         clearTimeout(timeout);
       }
     }
+  }
+
+  private engine(): "legacy" | "observe" | "actor" {
+    return (
+      this.dependencies.engine ??
+      (this.dependencies.conversationObservation === undefined
+        ? "legacy"
+        : "observe")
+    );
   }
 
   private reportWakeFailure(input: {

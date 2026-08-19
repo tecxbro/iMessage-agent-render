@@ -176,10 +176,10 @@ The loop ignores non-iMessage events, outbound echoes, unsupported content, and 
 
 For each accepted text:
 
-1. insert the message under a unique provider message ID;
+1. authorize and insert the message under a unique provider message ID;
 2. preserve Spectrum space GUID and route phone for restart lookup;
-3. supersede the active interruptible chain when appropriate; and
-4. upsert the per-space `inbound.flush` job for the debounce deadline.
+3. in legacy/observe mode, upsert the per-space `inbound.flush` job for the debounce deadline; or
+4. in actor mode, commit its input sequence, start a direct actor wake, and best-effort publish `interaction.coordinate`.
 
 If queue scheduling fails after insert, the message remains durable. Reconciliation finds spaces with undrained input and re-creates the singleton flush.
 
@@ -195,7 +195,8 @@ snapshot and update a bounded `observedThroughSequence` metric; it has no
 runtime, task, delivery, or mutation port. Each cursor observation is exported
 as structured, content-free operational telemetry only when its cursor changes.
 Observer reads use a dedicated one-connection PostgreSQL pool with client and
-server timeouts, so passive work cannot consume the legacy runtime's pool.
+server timeouts, and are serialized through a process semaphore so passive work
+cannot contend without bound with the legacy runtime.
 
 The legacy `inbound.flush`, `turn.plan`, `turn.synthesize`, and `outbound.send`
 workers remain the sole model and output path. Startup scans the exact
@@ -204,13 +205,49 @@ pagination and emits both recovery wakes sequentially. The scan is detached
 from authoritative startup readiness, and duplicate provider delivery
 republishes both idempotent hints. Observe ingestion advances only
 `latest_input_sequence`; it preserves both accepted and finalized cursors.
-Ongoing finalization remains reserved for the later actor cutover.
-`CONVERSATION_ENGINE=actor` is rejected by this release rather than silently
-downgraded.
+Ongoing finalization remains reserved for actor mode.
+
+#### Active actor cutover
+
+`CONVERSATION_ENGINE=actor` makes the sequenced conversation actor authoritative
+for new messages. Queue publication failure after the insert is logged but does
+not turn the accepted message into an ingestion failure; startup scans
+`latest_input_sequence > finalized_through_sequence` and recreates the wake.
+The actor calls the shared `CodexAppServerSupervisor` through
+`SecureInteractionStartGate` and the App Server interaction client. It does not
+create a temporary compatibility chain or route an actor turn through the
+chain-oriented `InteractionRuntime`. The actor persists and resumes one App
+Server thread ID per space; only a space without a durable thread starts a new
+one.
+
+After a direct completion, the actor persists the structured decision and
+encrypted draft, rechecks the finalization fence, transactionally materializes
+the interaction-origin outbound batch, completes the run, advances
+`finalized_through_sequence`, starts delivery directly, and publishes
+`outbound.coordinate` for recovery. A late input stores the encrypted draft as
+undelivered, leaves `finalized_through_sequence` unchanged, and continues the
+same App Server thread; the stale draft is never materialized for delivery.
+
+A delegated decision creates a task chain with
+`source_interaction_run_id = interaction_runs.id`. Existing task and approval
+workers execute it, but terminal actor-origin results publish
+`interaction.coordinate(..., task_results_ready)` instead of `turn.synthesize`.
+The actor resumes the interaction thread to synthesize the result. Direct
+materialization completes the provenance chain in the same transaction as the
+source interaction run, so startup recovery does not repeatedly wake a result
+that was already synthesized.
 
 ### 5.3 Flush
 
-The flush transaction drains undrained and carried messages in order, creates a versioned chain with the deployment's current effective model/effort snapshot, captures the principal and every authorized contributor identity reference, cancels the stale chain, and enqueues one `turn.plan` job. Queue payloads contain identifiers and expected versions/states, not raw personal content. A later dashboard change affects the next chain and cannot change running work.
+The legacy flush transaction drains only the suffix above
+`finalized_through_sequence`, creates a versioned chain with the deployment's
+current effective model/effort snapshot, captures the principal and every
+authorized contributor identity reference, and enqueues one `turn.plan` job.
+If an ordinary legacy chain is already active, the suffix remains undrained and
+the flush retries later. Ordinary messages do not cancel or supersede work.
+Queue payloads contain identifiers and expected versions/states, not raw
+personal content. A later dashboard change affects the next chain and cannot
+change running work.
 
 ### 5.4 Plan
 
@@ -233,15 +270,16 @@ live-provider execution remains a separate release check. The runner reloads cur
 
 Each `task.execute` handler re-checks chain/task state, re-resolves the current workspace capability at claim time, resolves the code-owned workspace path, restricts the task to the binding's authorized permission-profile set, creates a minimal child environment, and runs through the same secure queued boundary with timeout/cancellation/output bounds. It validates `ExecutionResult` and persists a terminal task result or exact approval proposal. Production seeds the `personal` workspace binding; user text cannot create bindings or broaden its profile set.
 
-Execution agents cannot message the owner or consume their own approval. Their
-results return through synthesis. Every task loads the parent chain's persisted
+Execution agents cannot message the owner or consume their own approval. Legacy
+results return through `turn.synthesize`; actor-origin results wake their source
+interaction run. Every task loads the parent chain's persisted
 model pair; there is no task-complexity router or automatic escalation. The
 production composition registers the durable execution worker with bounded
 concurrency, cancellation, prompts, and the shared orchestration repository.
 
 ### 5.6 Synthesize
 
-The singleton `turn.synthesize` handler loads terminal task results and the same
+For legacy-origin work, the singleton `turn.synthesize` handler loads terminal task results and the same
 chain model pair, preserves truthful partial failures, requires confirmation
 for consequential operations, produces the final user-facing response, and
 materializes every outbound part before sending. The production composition
@@ -262,8 +300,10 @@ route phone, claims the next materialized part, sends it with a stable client
 GUID, and advances the database cursor only after acknowledgement. Chain-origin
 batches retain chain cancellation/state checks and complete the chain after the
 final part. Interaction-origin batches require the matching current run and
-actor generation; their final checkpoint completes the run and advances the
-conversation finalization cursor instead of changing chain state.
+generation when they are materialized; that same transaction completes the run
+and advances the conversation finalization cursor. Their provider checkpoints
+advance only the durable delivery batch, so later actor input cannot invalidate
+an already committed answer.
 
 ```ts
 clientGuid = sha256(`${deploymentId}:${outboundBatchId}:${position}`)
@@ -279,9 +319,11 @@ Direct, task, and synthesis commits persist encrypted memory candidates in their
 
 A `needs_approval` task completion persists the immutable encrypted proposal and publishes `approval.request`. Only an authorized owner response in the allowed space can approve or reject it. Approval consumption atomically binds the stored payload to one action execution and publishes `approval.execute`; startup and maintenance reconciliation repair approved-but-unconsumed records and missing request or execution jobs, while the same maintenance lane expires stale requests. The executor registry receives the approved payload directly, so Codex never reinterprets it. Compare-and-set state and idempotency keys make an approved action execute at most once.
 
-## 6. Supersession and cancellation
+## 6. Explicit cancellation
 
-People send corrections in fragments. Debounce is per space, and a later message can supersede an already drained chain.
+People send corrections in fragments, but an ordinary message never cancels
+active work. Only an explicit actor lifecycle decision may call `cancelTask`,
+`reviseTask`, `pauseTask`, or `cancelInteractionTurn`.
 
 ```mermaid
 stateDiagram-v2
@@ -292,14 +334,14 @@ stateDiagram-v2
   Synthesizing --> Sending: batch materialized
   Sending --> Complete: cursor reaches part count
 
-  Planning --> Canceled: newer accepted message
-  Executing --> Canceled: newer accepted message
-  Synthesizing --> Canceled: newer accepted message
-  Canceled --> Queued: carried into next chain
+  Planning --> Canceled: explicit actor decision
+  Executing --> Canceled: explicit actor decision
+  Synthesizing --> Canceled: explicit actor decision
   Complete --> [*]
 ```
 
-Handlers compare their expected version and state with the authoritative row. A stale cancellation timestamp cannot cancel a later chain. Canceled messages are carried forward, and a canceled chain cannot synthesize, send, or consume an approval.
+Handlers compare their expected version and state with the authoritative row.
+A canceled chain cannot synthesize, send, or consume an approval.
 
 ## 7. Interaction, execution, and security lanes
 
@@ -358,11 +400,11 @@ values are excluded from logs.
 
 | Failure point | Required recovery | Current evidence boundary |
 |---|---|---|
-| Receive: after DB insert, before debounce schedule | Reconciliation re-creates `inbound.flush`; provider duplicate remains harmless | Durable-pipeline fake coverage; final receive composition/live replay untested |
+| Receive: after actor DB insert, before wake publication | Message remains accepted; direct wake may proceed and startup reconciliation re-creates `interaction.coordinate` | Durable-pipeline fake coverage; final live replay untested |
 | Debounce | Messages remain undrained and the per-space singleton can be upserted again | Queue singleton and PostgreSQL pipeline coverage |
 | Planning | Versioned singleton retries or cancellation; no stale batch | Handler/repository fake and offline integration coverage; production composition/live path untested |
-| Execution | Abort superseded Codex work; bounded retry/failure persists | Handler, repository, Codex cancellation, and recovery fake coverage; production composition/live path untested |
-| Synthesis | Terminal scan enqueues one singleton synthesis; partial failure is preserved | Handler/repository fake and offline integration coverage; production composition/live path untested |
+| Execution | Explicit lifecycle cancellation or bounded retry/failure persists; ordinary input does not abort work | Handler, repository, Codex cancellation, and recovery fake coverage; production composition/live path untested |
+| Synthesis | Legacy work enqueues singleton synthesis; actor-origin terminal results wake the source interaction run | Handler/repository fake and offline integration coverage; production composition/live path untested |
 | Each outbound part | Direct and queued wakes converge on one leased coordinator; resume at persisted cursor and retain the same logical client GUID | Coordinator unit/chaos and PostgreSQL claim coverage; Spectrum 12.7 cannot receive the caller GUID, so a post-send/pre-checkpoint crash can duplicate one bubble |
 | Memory write or queue publication | Operational response stays complete; encrypted candidates remain durable and reconciliation republishes missing work | PostgreSQL integration and chaos coverage; live Supermemory untested |
 | Spectrum disconnect | Readiness degrades; the active run is cleared and the activation coordinator performs bounded recovery | Message-loop and activation race/chaos coverage; live disconnect/replay untested |

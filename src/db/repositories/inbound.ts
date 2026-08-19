@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, or } from "drizzle-orm";
 
 import type { PostgresConversationRepository } from "./conversation-recovery.js";
 import type { Database } from "../client.js";
+import { conversationStates } from "../schema-fragments/conversation-actors.js";
 import { messages } from "../schema.js";
 
 export interface AcceptedInboundMessage {
@@ -75,8 +76,23 @@ export class InboundRepository {
     const rows = await this.database
       .selectDistinct({ spaceId: messages.spaceId })
       .from(messages)
+      .leftJoin(
+        conversationStates,
+        eq(conversationStates.spaceId, messages.spaceId),
+      )
       .where(
-        and(eq(messages.direction, "inbound"), isNull(messages.drainedChainId)),
+        and(
+          eq(messages.direction, "inbound"),
+          isNull(messages.drainedChainId),
+          or(
+            isNull(messages.inputSequence),
+            isNull(conversationStates.spaceId),
+            gt(
+              messages.inputSequence,
+              conversationStates.finalizedThroughSequence,
+            ),
+          ),
+        ),
       )
       .orderBy(asc(messages.spaceId))
       .limit(limit);
@@ -99,13 +115,14 @@ export class ConversationSequencedInboundAdapter {
     private readonly conversations: Pick<
       PostgresConversationRepository,
       "ingestObservedInput"
-    >,
+    > & Partial<Pick<PostgresConversationRepository, "ingestInput">>,
+    private readonly mode: "observe" | "actor" = "observe",
   ) {}
 
   public async ingestAcceptedMessage(
     input: AcceptedInboundMessage,
   ): Promise<IngestResult> {
-    const ingested = await this.conversations.ingestObservedInput({
+    const encryptedInput = {
       messageId: input.id ?? randomUUID(),
       spaceId: input.spaceId,
       externalMessageId: input.externalMessageId,
@@ -114,7 +131,18 @@ export class ConversationSequencedInboundAdapter {
       contentHash: input.contentHash,
       receivedAt: input.receivedAt,
       retentionExpiresAt: input.retentionExpiresAt,
-    });
+    };
+    if (this.mode === "actor" && this.conversations.ingestInput === undefined) {
+      throw new Error(
+        "Actor intake requires the transactional sequenced ingestInput repository method.",
+      );
+    }
+    // Call through the repository object. PostgresConversationRepository methods
+    // use private instance fields and cannot be safely invoked as detached
+    // function references.
+    const ingested = this.mode === "actor"
+      ? await this.conversations.ingestInput!(encryptedInput)
+      : await this.conversations.ingestObservedInput(encryptedInput);
     return {
       messageId: ingested.input.messageId,
       inserted: ingested.status === "inserted",

@@ -43,6 +43,14 @@ export type ReconcileDecisionResult =
       status: "continuation";
       draftOutputCiphertext: string;
       fromSequence: number;
+      threadId: string | null;
+    }
+  | {
+      status: "awaiting_tasks";
+    }
+  | {
+      status: "synthesize_tasks";
+      terminalResults: readonly import("../security/action-schema.js").JsonValue[];
     }
   | {
       status: "stale";
@@ -198,6 +206,7 @@ export class DecisionReconciler {
       status: "continuation",
       draftOutputCiphertext,
       fromSequence: run.acceptedThroughSequence + 1,
+      threadId: run.threadId,
     };
   }
 
@@ -232,8 +241,15 @@ export class DecisionReconciler {
           generation: run.generation,
           decisionMetadataJson: metadata,
         });
+        return { status: "awaiting_tasks" };
       }
-      effect = "tasks";
+      if (taskSnapshot.pendingCount > 0) {
+        return { status: "awaiting_tasks" };
+      }
+      return {
+        status: "synthesize_tasks",
+        terminalResults: taskSnapshot.terminalResults,
+      };
     } else if (mode !== "silent") {
       if (run.draftOutputCiphertext === null) {
         throw new Error(`${mode} finalization requires an encrypted draft.`);
@@ -246,6 +262,10 @@ export class DecisionReconciler {
       });
       outboundBatchId = prepared.outboundBatchId;
       effect = "delivery";
+      // Batch materialization is the no-late-input completion fence and
+      // atomically completes the run/cursor. Provider delivery is recovered
+      // independently from the queued interaction-origin batch.
+      return { status: "completed", effect, outboundBatchId };
     }
 
     const result = await this.#repository.checkpointInteraction({

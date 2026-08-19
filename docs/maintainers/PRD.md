@@ -175,7 +175,7 @@ A team that wants to fork the starter for a customer or employee use case and ad
 - Debounce by space for a configurable 3–5 seconds.
 - Keep queued messages in PostgreSQL until the flush handler drains them.
 - Maintain a per-space chain record with generation and send stages.
-- New inbound text supersedes the active chain unless the chain is already marked noninterruptible after explicit approval.
+- New inbound text never cancels active work. Cancellation, revision, pause, and interaction-turn cancellation require an explicit actor lifecycle decision.
 - Canceled drained messages must be written to `carried_messages` and prepended to the next turn as prior context.
 - Queue jobs must have deterministic names/keys and bounded retries.
 
@@ -240,7 +240,9 @@ V1 commands:
 - `/help` — show concise capabilities and safety limits.
 - `/status` — show auth, transport, queue, memory, active jobs, and selected deployment model.
 - `/model` — display the deployment model and point to dashboard Advanced.
-- `/cancel` — cancel active interruptible chains for the space.
+- `/cancel` — retained compatibility command surface. In actor mode it does not
+  call task lifecycle APIs; those operations are reserved for explicit actor
+  decisions and are never inferred from ordinary intake.
 - `/new` — start a fresh interaction thread while preserving owner memory.
 - `/agents` — list named execution agents and current status.
 - `/memory` — show profile summary and recent memory identifiers.
@@ -361,7 +363,7 @@ These are launch targets, not promises about third-party model or transport late
 - First successful iMessage task after deploy.
 - Weekly active owners.
 - Task completion rate.
-- User-canceled or corrected chains successfully superseded.
+- Explicit actor cancellation/revision is applied without treating an ordinary correction message as cancellation.
 - Direct-answer versus delegated-turn mix.
 - Approval completion and rejection rates.
 - Memory recall helpfulness and deletion rate.

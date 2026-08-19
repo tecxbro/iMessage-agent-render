@@ -211,6 +211,10 @@ describeDatabase("task result readiness", () => {
     await operations.createDelegatedChain(ids.run1, [task("first")]);
     await createRun(ids.run2, 2);
     await operations.createDelegatedChain(ids.run2, [task("second")]);
+    await client.database
+      .update(interactionRuns)
+      .set({ state: "finalizing" })
+      .where(eq(interactionRuns.spaceId, ids.space));
     const rows = await client.database
       .select({ id: executionTasks.id, name: executionTasks.name })
       .from(executionTasks);
@@ -233,6 +237,12 @@ describeDatabase("task result readiness", () => {
     ]);
     expect(recoveryScan).toEqual(firstScan);
     expect(Object.keys(firstScan[0] ?? {})).toEqual(["spaceId", "reason"]);
+
+    await client.database
+      .update(interactionRuns)
+      .set({ state: "completed", completedAt: new Date() })
+      .where(eq(interactionRuns.spaceId, ids.space));
+    await expect(readiness.findResultReadySignals()).resolves.toEqual([]);
   });
 
   it("does not signal while any task remains queued, running, or paused", async () => {
@@ -259,5 +269,34 @@ describeDatabase("task result readiness", () => {
     await expect(
       readiness.loadInteractionTaskSnapshot(ids.run1),
     ).resolves.toMatchObject({ pendingCount: 1 });
+  });
+
+  it("suppresses legacy synthesis while actor-origin work awaits approval", async () => {
+    const delegated = await operations.createDelegatedChain(ids.run1, [
+      task("approval-task"),
+    ]);
+    const [row] = await client.database
+      .select({ id: executionTasks.id })
+      .from(executionTasks);
+    if (row === undefined) {
+      throw new Error("approval readiness fixture was not created");
+    }
+    await client.database
+      .update(executionTasks)
+      .set({ state: "needs_approval" })
+      .where(eq(executionTasks.id, row.id));
+
+    await expect(
+      readiness.loadInteractionTaskSnapshot(ids.run1),
+    ).resolves.toMatchObject({ pendingCount: 1, terminalResults: [] });
+    await expect(readiness.findResultReadySignals()).resolves.toEqual([]);
+    await expect(
+      readiness.findResultReadySignalForChain(delegated.chainId),
+    ).resolves.toEqual({ actorOrigin: true, signal: null });
+    await expect(
+      readiness.findResultReadySignalForChain(
+        "73000000-0000-4000-8000-000000000099",
+      ),
+    ).resolves.toEqual({ actorOrigin: false, signal: null });
   });
 });

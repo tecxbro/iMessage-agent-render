@@ -129,7 +129,7 @@ Unique: `(space_id, version)`.
 
 ### `carried_messages`
 
-Preserves drained messages when a chain is superseded.
+Preserves drained messages for explicit lifecycle cancellation and legacy compatibility; ordinary inbound messages do not supersede chains.
 
 | Column | Notes |
 |---|---|

@@ -5,7 +5,7 @@
 The dangerous bugs are not “the model gave an imperfect answer.” They are:
 
 - A message is accepted and lost.
-- A stale chain sends after the user corrected it.
+- A stale draft sends after late input crossed the completion fence.
 - A retry duplicates a bubble.
 - One user receives another user’s memory or response.
 - An unknown sender reaches Codex.
@@ -47,7 +47,9 @@ The test plan therefore treats models and providers as replaceable dependencies 
 
 - Every documented slash command.
 - Ambiguous approval response with multiple pending requests.
-- `/cancel` affects only the current space/owner.
+- `/cancel` remains scoped to the current space/owner when a compatibility
+  cancellation adapter is configured; actor intake does not route an ordinary
+  command or message to task lifecycle APIs.
 - `/new` resets thread, not owner memory.
 - Unknown command returns concise help and never reaches Codex.
 
@@ -118,6 +120,8 @@ Fake CLI emits JSONL for:
 - Sandbox rejection.
 - Cancellation and process termination.
 - Malformed/oversized output.
+- App Server turn start, steer, completion, interruption, and process restart.
+- Actor output is parsed from the structured `agentMessage` and never routed through the legacy `InteractionRuntime`.
 
 ### Supermemory fixtures
 
@@ -140,11 +144,11 @@ Use a disposable PostgreSQL database and real pg-boss.
 4. Four-message burst drains once in order.
 5. Concurrent flush workers produce one chain.
 
-### Supersession and carry-forward
+### Explicit cancellation and legacy carry-forward
 
 1. Start planning.
-2. Insert correction.
-3. Mark old chain canceled.
+2. Insert an ordinary correction and prove it does not cancel the chain.
+3. Apply an explicit lifecycle cancellation in the legacy compatibility path.
 4. Abort fake Codex.
 5. Carry drained messages.
 6. New chain sees earlier request plus correction.
@@ -304,7 +308,7 @@ Run chaos tests repeatedly with randomized kill points.
 - Cross-owner memory and outbound routing isolation.
 - Every `src/db/repositories/**` module is statically independent of queue handlers.
 - Runtime modules do not import HTTP-specific model-setting errors.
-- Production interaction/task/synthesis Codex calls reach `ThreadStore` with a chain ID and are decorated by `SecureStructuredCodexRunner`.
+- Actor interaction calls reach `SecureInteractionStartGate` and the shared App Server interaction client; legacy chain interaction, task, and synthesis calls reach `ThreadStore` with a chain ID and are decorated by `SecureStructuredCodexRunner`.
 
 ## 9. Performance and load
 

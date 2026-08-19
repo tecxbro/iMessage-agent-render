@@ -201,7 +201,7 @@ export class SecureInteractionPermit {
 const ACTION_STATES: Readonly<
   Record<InteractionAppServerAction, ReadonlySet<InteractionRunState>>
 > = {
-  "turn/start": new Set(["starting"]),
+  "turn/start": new Set(["starting", "active"]),
   "turn/steer": new Set(["active"]),
   "turn/interrupt": new Set(["starting", "active", "finalizing"]),
 };

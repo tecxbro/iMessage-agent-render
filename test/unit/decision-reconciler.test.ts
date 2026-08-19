@@ -170,23 +170,7 @@ describe("DecisionReconciler", () => {
       draftOutput: "completed draft",
     });
     expect(fixture.tasks.dispatch).not.toHaveBeenCalled();
-    expect(fixture.checkpointInteraction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spaceId: ids.space,
-        expectedConversation: conversationCasPrecondition(conversation()),
-        expectedRun: interactionRunCasPrecondition(interactionRun()),
-        nextRunState: "completed",
-        nextConversation: {
-          state: "idle",
-          activeInteractionRunId: null,
-          acceptedThroughSequence: 3,
-          finalizedThroughSequence: 3,
-        },
-        draftOutputCiphertext: "cipher:completed draft",
-        terminalReason: null,
-        completedAt: now,
-      }),
-    );
+    expect(fixture.checkpointInteraction).not.toHaveBeenCalled();
   });
 
   it("dispatches delegated work instead of preparing delivery", async () => {
@@ -200,8 +184,7 @@ describe("DecisionReconciler", () => {
     });
 
     await expect(fixture.reconciler.reconcile(reconcileInput)).resolves.toEqual({
-      status: "completed",
-      effect: "tasks",
+      status: "awaiting_tasks",
     });
 
     expect(fixture.tasks.dispatch).toHaveBeenCalledWith({
@@ -227,12 +210,35 @@ describe("DecisionReconciler", () => {
     });
 
     await expect(fixture.reconciler.reconcile(reconcileInput)).resolves.toEqual({
-      status: "completed",
-      effect: "tasks",
+      status: "awaiting_tasks",
     });
 
     expect(fixture.tasks.dispatch).not.toHaveBeenCalled();
     expect(fixture.delivery.prepare).not.toHaveBeenCalled();
+  });
+
+  it("returns terminal delegated results to the actor for synthesis", async () => {
+    const run = interactionRun({
+      decisionMetadataJson: { mode: "delegate", taskCount: 1 },
+      draftOutputCiphertext: null,
+    });
+    const fixture = dependencies({
+      run,
+      snapshot: { state: conversation(), activeRun: run },
+    });
+    const result = { taskId: "research", status: "succeeded" } as const;
+    vi.mocked(fixture.tasks.reconcile).mockResolvedValue({
+      pendingCount: 0,
+      terminalResults: [result],
+    });
+
+    await expect(fixture.reconciler.reconcile(reconcileInput)).resolves.toEqual({
+      status: "synthesize_tasks",
+      terminalResults: [result],
+    });
+    expect(fixture.tasks.dispatch).not.toHaveBeenCalled();
+    expect(fixture.delivery.prepare).not.toHaveBeenCalled();
+    expect(fixture.checkpointInteraction).not.toHaveBeenCalled();
   });
 
   it("rejects a stale generation before delivery or task side effects", async () => {
@@ -282,6 +288,7 @@ describe("DecisionReconciler", () => {
       status: "continuation",
       draftOutputCiphertext: "cipher:completed draft",
       fromSequence: 4,
+      threadId: "thread-7",
     });
 
     expect(fixture.delivery.prepare).not.toHaveBeenCalled();
@@ -320,6 +327,7 @@ describe("DecisionReconciler", () => {
       status: "continuation",
       draftOutputCiphertext: "cipher:",
       fromSequence: 4,
+      threadId: "thread-7",
     });
 
     expect(fixture.cipher.encrypt).toHaveBeenCalledWith("");

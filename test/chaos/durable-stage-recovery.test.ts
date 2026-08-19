@@ -11,7 +11,7 @@ const batchId = "00000000-0000-4000-8000-000000000104";
 const taskId = "00000000-0000-4000-8000-000000000106";
 
 describe("durable receive, debounce, planning, and synthesis recovery", () => {
-  it("interrupts superseded in-flight work before scheduling the replacement flush", async () => {
+  it("never supersedes in-flight work for an ordinary inbound message", async () => {
     const order: string[] = [];
     const onChainsSuperseded = vi.fn((chainIds: readonly string[]) => {
       order.push(`cancel:${chainIds.join(",")}`);
@@ -59,8 +59,8 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
       retentionExpiresAt: new Date("2026-09-13T12:00:00.000Z"),
     });
 
-    expect(onChainsSuperseded).toHaveBeenCalledWith([chainId]);
-    expect(order).toEqual([`cancel:${chainId}`, "schedule-replacement"]);
+    expect(onChainsSuperseded).not.toHaveBeenCalled();
+    expect(order).toEqual(["schedule-replacement"]);
   });
 
   it("interrupts chains superseded during reconciliation flush recovery", async () => {
@@ -149,6 +149,64 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
     expect(scheduleInboundFlush).toHaveBeenNthCalledWith(2, { spaceId }, 4_000);
   });
 
+  it("accepts actor input when durable coordinate publication fails", async () => {
+    const directWake = vi.fn(async () => undefined);
+    const scheduleInboundFlush = vi.fn(async () => undefined);
+    const onWakeFailure = vi.fn();
+    const pipeline = new DurablePipeline({
+      engine: "actor",
+      inbound: {
+        ingestAcceptedMessage: vi.fn(async () => ({ inserted: true, messageId })),
+        findSpacesWithUndrainedInbound: vi.fn(async () => [spaceId]),
+      },
+      chains: { findQueuedChains: vi.fn(async () => []) },
+      outbound: { findRecoverableBatchIds: vi.fn(async () => []) },
+      publisher: {
+        scheduleInboundFlush,
+        enqueueTurnPlan: vi.fn(async () => undefined),
+        enqueueTaskExecute: vi.fn(async () => undefined),
+        enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundCoordinate: vi.fn(async () => undefined),
+        enqueueOutboundSend: vi.fn(async () => undefined),
+        enqueueApprovalRequest: vi.fn(async () => undefined),
+        enqueueApprovalExecute: vi.fn(async () => undefined),
+        enqueueMemoryCurate: vi.fn(async () => undefined),
+      },
+      conversationObservation: {
+        actorRegistry: { wake: directWake },
+        publisher: {
+          enqueueInteractionCoordinate: vi.fn(async () => {
+            throw new Error("simulated interaction queue outage");
+          }),
+        },
+        recovery: { findSpacesWithUnfinalizedInput: vi.fn(async () => []) },
+        onWakeFailure,
+      },
+      debounceMs: 4_000,
+    });
+
+    await expect(
+      pipeline.ingestAndSchedule({
+        spaceId,
+        externalMessageId: "provider-actor-queue-outage",
+        senderIdentityId: "00000000-0000-4000-8000-000000000105",
+        contentCiphertext: "encrypted",
+        contentHash: "hash",
+        receivedAt: new Date("2026-08-14T12:00:00.000Z"),
+        retentionExpiresAt: new Date("2026-09-13T12:00:00.000Z"),
+      }),
+    ).resolves.toEqual({ inserted: true, messageId });
+
+    expect(directWake).toHaveBeenCalledWith(spaceId, "inbound");
+    expect(scheduleInboundFlush).not.toHaveBeenCalled();
+    expect(onWakeFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: "durable", reason: "inbound" }),
+    );
+
+    await pipeline.reconcile();
+    expect(scheduleInboundFlush).not.toHaveBeenCalled();
+  });
+
   it("starts the direct observation wake before durable publication settles", async () => {
     let releaseDurable!: () => void;
     const durableSettled = new Promise<void>((resolve) => {
@@ -224,8 +282,8 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
     expect(events).toEqual([
       "sequenced-commit",
       "direct-wake",
-      "durable-wake-started",
       "legacy-flush-scheduled",
+      "durable-wake-started",
     ]);
     await ingestion;
     expect(ingestionSettled).toBe(true);

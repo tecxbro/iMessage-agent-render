@@ -102,9 +102,22 @@ does not modify accepted or finalized cursors. Direct and durable observation
 wakes are bounded and best-effort, with a detached startup recovery scan and
 duplicate-delivery republish; they cannot close readiness or delay the
 authoritative legacy reply path. Passive reads use an isolated one-connection
-PostgreSQL pool with client and server timeouts.
-`actor` is reserved for the later production cutover. This release rejects it
-at startup rather than silently falling back to another engine.
+PostgreSQL pool and are serialized with a dedicated process semaphore.
+
+`actor` makes the conversation actor authoritative for new messages. It
+requires `CODEX_AUTH_MODE=chatgpt` because active turns use the shared Codex App
+Server supervisor. New inbound messages are transactionally sequenced and wake
+the actor directly; durable wake publication is best-effort and repaired by
+startup reconciliation. Legacy workers stay registered for rollback and older
+jobs, but actor intake does not publish `inbound.flush`, and actor-origin task
+results never publish `turn.synthesize`.
+
+Activate in this order: deploy `observe`; verify cursor reconciliation and wake
+metrics; enable and verify the delivery coordinator with chain-origin batches;
+switch to `actor`; verify an actor direct answer and delegated result; retain
+the `legacy` rollback setting until the reliability suite passes. Rolling back
+to `legacy` reads only the suffix whose `input_sequence` is greater than the
+actor's finalized cursor, so finalized messages are not replayed.
 
 ## Concurrency and limits
 

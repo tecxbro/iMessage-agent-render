@@ -75,12 +75,14 @@ export interface TaskExecuteDependencies {
   approvalPublisher?: Pick<QueuePublisher, "enqueueApprovalRequest">;
   promptBundle: PromptBundle;
   maximumRuntimeMs?: number;
+  /** Returns true when actor-origin work was woken instead of synthesized. */
+  publishActorResultsReady?(chainId: string): Promise<boolean>;
 }
 
 function safeRuntimeMessage(code: CodexRuntimeErrorCode): string {
   switch (code) {
     case "CODEX_CANCELED":
-      return "The task was canceled because a newer turn superseded it.";
+      return "The task was canceled by an explicit interaction or task lifecycle decision.";
     case "CODEX_TIMEOUT":
       return "The task exceeded its bounded runtime.";
     case "CODEX_AUTH_FAILED":
@@ -166,6 +168,7 @@ async function publishOutcome(
   payload: TaskExecutePayload,
   outcome: TaskTerminalOutcome,
   publisher: TaskExecuteDependencies["publisher"],
+  publishActorResultsReady?: (chainId: string) => Promise<boolean>,
 ): Promise<void> {
   if (!outcome.accepted) {
     return;
@@ -181,6 +184,9 @@ async function publishOutcome(
     }),
   );
   if (outcome.shouldSynthesize) {
+    if (await publishActorResultsReady?.(payload.chainId) === true) {
+      return;
+    }
     await publisher.enqueueTurnSynthesize({
       chainId: payload.chainId,
       expectedChainVersion: payload.expectedChainVersion,
@@ -208,7 +214,12 @@ export function createTaskExecuteHandler(dependencies: TaskExecuteDependencies) 
           payload,
           errorCode: error.code,
         });
-        await publishOutcome(payload, outcome, dependencies.publisher);
+        await publishOutcome(
+          payload,
+          outcome,
+          dependencies.publisher,
+          dependencies.publishActorResultsReady,
+        );
         return;
       }
       throw error;
@@ -245,7 +256,12 @@ export function createTaskExecuteHandler(dependencies: TaskExecuteDependencies) 
         payload,
         result: failure,
       });
-      await publishOutcome(payload, outcome, dependencies.publisher);
+      await publishOutcome(
+        payload,
+        outcome,
+        dependencies.publisher,
+        dependencies.publishActorResultsReady,
+      );
       if (outcome.retry) {
         throw error;
       }
@@ -269,6 +285,11 @@ export function createTaskExecuteHandler(dependencies: TaskExecuteDependencies) 
         executionTaskId: payload.taskId,
       });
     }
-    await publishOutcome(payload, outcome, dependencies.publisher);
+    await publishOutcome(
+      payload,
+      outcome,
+      dependencies.publisher,
+      dependencies.publishActorResultsReady,
+    );
   };
 }

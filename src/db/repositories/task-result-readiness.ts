@@ -20,8 +20,12 @@ const terminalTaskStates = new Set([
   "succeeded",
   "failed",
   "canceled",
-  "needs_approval",
 ]);
+
+export interface ActorChainResultReadiness {
+  actorOrigin: boolean;
+  signal: InteractionCoordinatePayload | null;
+}
 
 export interface TaskResultReadinessRepositoryOptions {
   decrypt(ciphertext: string): Promise<string> | string;
@@ -148,10 +152,15 @@ export class TaskResultReadinessRepository {
       })
       .from(chains)
       .innerJoin(executionTasks, eq(executionTasks.chainId, chains.id))
+      .innerJoin(
+        interactionRuns,
+        eq(interactionRuns.id, chains.sourceInteractionRunId),
+      )
       .where(
         and(
           eq(chains.state, "executing"),
           isNotNull(chains.sourceInteractionRunId),
+          eq(interactionRuns.state, "finalizing"),
         ),
       )
       .orderBy(asc(chains.createdAt), asc(executionTasks.createdAt));
@@ -186,5 +195,38 @@ export class TaskResultReadinessRepository {
       }
     }
     return [...signalsBySpace.values()];
+  }
+
+  public async findResultReadySignalForChain(
+    chainId: string,
+  ): Promise<ActorChainResultReadiness> {
+    const parsedChainId = identifierSchema.parse(chainId);
+    const [chain] = await this.database
+      .select({
+        spaceId: chains.spaceId,
+        sourceInteractionRunId: chains.sourceInteractionRunId,
+        sourceRunState: interactionRuns.state,
+      })
+      .from(chains)
+      .leftJoin(
+        interactionRuns,
+        eq(interactionRuns.id, chains.sourceInteractionRunId),
+      )
+      .where(eq(chains.id, parsedChainId))
+      .limit(1);
+    if (chain === undefined || chain.sourceInteractionRunId === null) {
+      return { actorOrigin: false, signal: null };
+    }
+    const snapshot = await this.loadTaskSnapshot(
+      chain.spaceId,
+      chain.sourceInteractionRunId,
+    );
+    return {
+      actorOrigin: true,
+      signal:
+        chain.sourceRunState === "finalizing" && snapshot.resultReady
+        ? { spaceId: chain.spaceId, reason: "task_results_ready" }
+        : null,
+    };
   }
 }

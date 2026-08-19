@@ -25,6 +25,7 @@ import {
   ExecutionCapabilityService,
 } from "../agent/execution-capability-service.js";
 import { InteractionRuntime } from "../agent/interaction-runtime.js";
+import { CodexAppServerActorRuntime } from "../agent/codex-app-server/actor-runtime.js";
 import {
   ApiKeyModelCapabilitySource,
   ChatGptModelCapabilitySource,
@@ -32,7 +33,12 @@ import {
 import { ModelSettingsService } from "../agent/model-settings-service.js";
 import { ThreadStore } from "../agent/thread-store.js";
 import { ActorRegistry } from "../conversation/actor-registry.js";
+import { ConversationActor } from "../conversation/actor.js";
+import { ActorDelivery } from "../conversation/actor-delivery.js";
+import { DatabaseInteractionContextLoader } from "../conversation/database-context-loader.js";
+import { DecisionReconciler } from "../conversation/decision-reconciler.js";
 import { InteractionSemaphore } from "../conversation/interaction-semaphore.js";
+import { TaskLifecycleAdapter } from "../conversation/task-lifecycle-adapter.js";
 import {
   ConversationObservationMetrics,
   ObserveConversationActor,
@@ -49,6 +55,7 @@ import { runDatabaseMigrations } from "../db/migrate.js";
 import { ChainRepository } from "../db/repositories/chains.js";
 import { ChainAuthorizationRepository } from "../db/repositories/chain-authorization.js";
 import { PostgresConversationRepository } from "../db/repositories/conversation-recovery.js";
+import { ConversationThreadRepository } from "../db/repositories/conversation-threads.js";
 import { CommandRepository } from "../db/repositories/commands.js";
 import { PostgresCodexThreadRepository } from "../db/repositories/codex-threads.js";
 import { FailureRepository } from "../db/repositories/failures.js";
@@ -68,6 +75,8 @@ import {
 import { OperationalRepository } from "../db/repositories/operational.js";
 import { OrchestrationRepository } from "../db/repositories/orchestration.js";
 import { OutboundDeliveryRepository } from "../db/repositories/outbound-delivery.js";
+import { TaskOperationsRepository } from "../db/repositories/task-operations.js";
+import { TaskResultReadinessRepository } from "../db/repositories/task-result-readiness.js";
 import { RetentionRepository } from "../db/repositories/retention.js";
 import { CompatibilityDeliveryRouter } from "../delivery/compatibility-router.js";
 import { DeliveryCoordinator } from "../delivery/delivery-coordinator.js";
@@ -117,6 +126,13 @@ import {
 import { SecureStructuredCodexRunner } from "../security/secure-codex-runner.js";
 import { createDataCipher } from "../security/data-cipher.js";
 import { OperationalRateLimits } from "../security/rate-limits.js";
+import { ConversationAuthorizationGate } from "../security/conversation-authorization-gate.js";
+import { InteractionAuthorizationRepository as SecureInteractionAuthorizationRepository } from "../security/interaction-authorization-repository.js";
+import {
+  InteractionActionRateLimits,
+  InteractionPermitSemaphore,
+} from "../security/interaction-runtime-controls.js";
+import { SecureInteractionStartGate } from "../security/secure-interaction-start-gate.js";
 import {
   AuthorizedCommandHandler,
   AuthorizedInboundCommandInterceptor,
@@ -124,6 +140,7 @@ import {
 import { ActionExecutorRegistry } from "../actions/action-executor-registry.js";
 import { auditStartupSecretBoundaries } from "../security/secret-boundaries.js";
 import { runSpectrumMessageLoop } from "../transport/message-loop.js";
+import { InteractionPresence } from "../transport/interaction-presence.js";
 import {
   PhotonInstallationHttpProvider,
   type PhotonSetupController,
@@ -324,6 +341,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
   let photonInstallationService: PhotonInstallationService | undefined;
   let queue: DurableQueue | undefined;
   let conversationActorRegistry: ActorRegistry | undefined;
+  let interactionPresence: InteractionPresence | undefined;
   let composition: QueueComposition | undefined;
   const outboundTransport = new RestartableOutboundTransport();
   const activeSpectrumRuns = new Map<
@@ -369,9 +387,12 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       // Parsing the environment and prompt contract above is the configuration
       // stage. Construct the child allowlist here so unsafe inheritance fails
       // before any provider or database connection is opened.
-      if (environment.CONVERSATION_ENGINE === "actor") {
+      if (
+        environment.CONVERSATION_ENGINE === "actor" &&
+        environment.CODEX_AUTH_MODE !== "chatgpt"
+      ) {
         throw new Error(
-          "CONVERSATION_ENGINE=actor is reserved for the production cutover and is not composed in this release. Use observe or legacy before restarting.",
+          "CONVERSATION_ENGINE=actor requires CODEX_AUTH_MODE=chatgpt because actor turns use the shared Codex App Server supervisor.",
         );
       }
       buildCodexChildEnvironment({
@@ -566,9 +587,9 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       const publisher = new PgBossPublisher(queue.boss);
       const legacyInbound = new InboundRepository(client.database);
       const conversationWriteRepository =
-        environment.CONVERSATION_ENGINE === "observe"
-          ? new PostgresConversationRepository(client.database)
-          : undefined;
+        environment.CONVERSATION_ENGINE === "legacy"
+          ? undefined
+          : new PostgresConversationRepository(client.database);
       const observationReadSemaphore = new InteractionSemaphore(1);
       const conversationObservationRepository =
         environment.CONVERSATION_ENGINE === "observe"
@@ -611,6 +632,9 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
           : new ConversationSequencedInboundAdapter(
               legacyInbound,
               conversationWriteRepository,
+              environment.CONVERSATION_ENGINE === "actor"
+                ? "actor"
+                : "observe",
             );
       const authorizationReferences = new ChainAuthorizationRepository(
         client.database,
@@ -768,6 +792,157 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
           },
         },
       });
+      const taskOperations = new TaskOperationsRepository(client.database, {
+        encrypt: cipher.encrypt,
+        decrypt: cipher.decrypt,
+      });
+      const taskReadiness = new TaskResultReadinessRepository(client.database, {
+        decrypt: cipher.decrypt,
+      });
+      const taskLifecycle = new TaskLifecycleAdapter({
+        operations: taskOperations,
+        readiness: taskReadiness,
+        taskPublisher: publisher,
+        wakePublisher: {
+          publish: async (payload) => {
+            await publisher.enqueueInteractionCoordinate(payload);
+          },
+        },
+      });
+      if (environment.CONVERSATION_ENGINE === "actor") {
+        if (conversationWriteRepository === undefined || chatgptSetup === undefined) {
+          throw new Error(
+            "Actor composition requires the sequenced conversation repository and shared Codex App Server supervisor.",
+          );
+        }
+        const secureInteractionGate = new SecureInteractionStartGate({
+          repository: new SecureInteractionAuthorizationRepository(
+            client.database,
+          ),
+          rateLimits: new InteractionActionRateLimits(
+            environment.MESSAGE_RATE_LIMIT_PER_MINUTE,
+            60_000,
+          ),
+          semaphore: new InteractionPermitSemaphore(
+            environment.MAX_EXECUTION_CONCURRENCY,
+            environment.MAX_OWNER_EXECUTION_CONCURRENCY,
+          ),
+        });
+        const actorRuntime = new CodexAppServerActorRuntime({
+          supervisor: chatgptSetup.supervisor,
+          gate: secureInteractionGate,
+          threads: new ConversationThreadRepository(client.database),
+          promptBundle,
+          workingDirectory: environment.AGENT_WORKSPACE_ROOT,
+        });
+        interactionPresence = new InteractionPresence({
+          transport: {
+            start: async () => undefined,
+            refresh: async () => undefined,
+            stop: async () => undefined,
+          },
+        });
+        const actorDelivery = new ActorDelivery({
+          repository: outboundDelivery,
+          coordinator: deliveryCoordinator,
+          publisher,
+          cipher,
+          onWakeFailure: ({ trigger }) => {
+            logger.warn(
+              {
+                component: "conversation_actor",
+                errorCode: "ACTOR_DELIVERY_WAKE_FAILED",
+                trigger,
+              },
+              "actor delivery wake failed; durable outbound recovery will retry the materialized batch",
+            );
+          },
+        });
+        const decisionReconciler = new DecisionReconciler({
+          repository: conversationWriteRepository,
+          tasks: taskLifecycle,
+          delivery: actorDelivery,
+          cipher,
+        });
+        const contextLoader = new DatabaseInteractionContextLoader(
+          conversationWriteRepository,
+          cipher,
+        );
+        const authorizationGate = new ConversationAuthorizationGate(
+          client.database,
+        );
+        const actorSemaphore = new InteractionSemaphore(
+          environment.MAX_EXECUTION_CONCURRENCY,
+        );
+        conversationActorRegistry = new ActorRegistry({
+          createActor: (spaceId) =>
+            new ConversationActor({
+              spaceId,
+              repository: conversationWriteRepository,
+              runtime: actorRuntime,
+              startGate: authorizationGate,
+              presence: interactionPresence!,
+              contextLoader,
+              interactionSemaphore: actorSemaphore,
+              decisionReconciler,
+              runDefaults: async () => {
+                const settings = await required(
+                  modelSettingsRepository,
+                  "Actor model selection",
+                ).read();
+                if (settings.effective === null) {
+                  throw new Error(
+                    "Actor interaction cannot start until an effective Codex model is available.",
+                  );
+                }
+                return {
+                  modelId: settings.effective.modelId,
+                  reasoningEffort: settings.effective.reasoningEffort,
+                  promptVersion: promptBundle.version,
+                  promptSha256:
+                    promptBundle.prompts["interaction.system.md"].sha256,
+                };
+              },
+            }),
+        });
+      }
+
+      const publishActorResultsReady = async (
+        chainId: string,
+      ): Promise<boolean> => {
+        const readiness =
+          await taskReadiness.findResultReadySignalForChain(chainId);
+        if (!readiness.actorOrigin) return false;
+        const signal = readiness.signal;
+        // Actor-origin approval work must never fall through to the legacy
+        // synthesis worker. Its approval worker will publish once the task is
+        // truly terminal.
+        if (signal === null) return true;
+        const registry = conversationActorRegistry;
+        if (registry !== undefined) {
+          void registry.wake(signal.spaceId, signal.reason).catch(() => {
+            logger.warn(
+              {
+                component: "conversation_actor",
+                errorCode: "TASK_RESULT_DIRECT_WAKE_FAILED",
+              },
+              "task result direct wake failed; durable coordination will retry",
+            );
+          });
+        }
+        try {
+          await publisher.enqueueInteractionCoordinate(signal);
+        } catch {
+          logger.warn(
+            {
+              component: "conversation_actor",
+              errorCode: "TASK_RESULT_DURABLE_WAKE_FAILED",
+            },
+            "task result wake publication failed; startup reconciliation will recreate it",
+          );
+        }
+        return true;
+      };
       const approvalCipher = createApprovalPayloadCipher(
         environment.APP_ENCRYPTION_KEY,
       );
@@ -789,11 +964,13 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
           ),
         );
         if (progression.shouldSynthesize) {
-          await publisher.enqueueTurnSynthesize({
-            chainId: progression.chainId,
-            expectedChainVersion: progression.expectedChainVersion,
-            expectedState: "executing",
-          });
+          if (!(await publishActorResultsReady(progression.chainId))) {
+            await publisher.enqueueTurnSynthesize({
+              chainId: progression.chainId,
+              expectedChainVersion: progression.expectedChainVersion,
+              expectedState: "executing",
+            });
+          }
         }
       };
       const expireApprovals = async (): Promise<void> => {
@@ -869,28 +1046,39 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         },
       });
       const pipeline = new DurablePipeline({
+        engine: environment.CONVERSATION_ENGINE,
         inbound,
         chains,
         outbound: outboundDelivery,
         orchestration,
         publisher,
         ...(conversationActorRegistry === undefined ||
-        conversationObservationRepository === undefined
+        (environment.CONVERSATION_ENGINE === "actor"
+          ? conversationWriteRepository
+          : conversationObservationRepository) === undefined
           ? {}
           : {
               conversationObservation: {
                 actorRegistry: conversationActorRegistry,
                 publisher,
-                recovery: conversationObservationRepository,
+                recovery:
+                  environment.CONVERSATION_ENGINE === "actor"
+                    ? conversationWriteRepository!
+                    : conversationObservationRepository!,
                 onWakeFailure: (failure) => {
                   logger.warn(
                     {
-                      component: "conversation_observe",
-                      errorCode: "CONVERSATION_OBSERVATION_WAKE_FAILED",
+                      component:
+                        environment.CONVERSATION_ENGINE === "actor"
+                          ? "conversation_actor"
+                          : "conversation_observe",
+                      errorCode: "CONVERSATION_COORDINATION_WAKE_FAILED",
                       trigger: failure.trigger,
                       reason: failure.reason,
                     },
-                    "conversation observation wake failed; the legacy reply path remains authoritative",
+                    environment.CONVERSATION_ENGINE === "actor"
+                      ? "conversation coordination wake failed; startup reconciliation will recreate durable work"
+                      : "conversation observation wake failed; the legacy reply path remains authoritative",
                   );
                 },
               },
@@ -937,7 +1125,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
             delegate: codex,
           }),
       );
-      const interaction = new InteractionRuntime(threadStore);
+      const legacyInteractionRuntime = new InteractionRuntime(threadStore);
       const execution = new ExecutionRuntime(threadStore);
       const commands = new CommandRepository(client.database, {
         decrypt: cipher.decrypt,
@@ -965,11 +1153,13 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
           chains,
           publisher,
           onChainsSuperseded: interruptSupersededChains,
+          deferredRetryMs: 30_000,
+          enabled: environment.CONVERSATION_ENGINE !== "actor",
         }),
       );
       const turnPlanHandler = createTurnPlanHandler({
         repository: orchestration,
-        interaction,
+        interaction: legacyInteractionRuntime,
         publisher,
         deliveryRouter,
         memoryPublisher: publisher,
@@ -1022,6 +1212,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         approvalPublisher: publisher,
         promptBundle,
         maximumRuntimeMs: environment.MAX_TASK_RUNTIME_MS,
+        publishActorResultsReady,
       });
       await queue.registerWorker(
         QUEUE_NAMES.taskExecute,
@@ -1033,7 +1224,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       );
       const synthesizeHandler = createTurnSynthesizeHandler({
         repository: orchestration,
-        interaction,
+        interaction: legacyInteractionRuntime,
         deliveryRouter,
         promptBundle,
         encrypt: cipher.encrypt,
@@ -1120,8 +1311,11 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
           cipher: approvalCipher,
           publisher: {
             enqueueNewlyRunnableTask: (task) => publisher.enqueueTaskExecute(task),
-            enqueueApprovalSynthesis: (input) =>
-              publisher.enqueueTurnSynthesize(input),
+            enqueueApprovalSynthesis: async (input) => {
+              if (!(await publishActorResultsReady(input.chainId))) {
+                await publisher.enqueueTurnSynthesize(input);
+              }
+            },
           },
         }),
       );
@@ -1148,6 +1342,9 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       );
 
       await pipeline.reconcile();
+      if (environment.CONVERSATION_ENGINE === "actor") {
+        await taskLifecycle.recoverResultReadyWakes();
+      }
       await memoryPublisher.reconcile(memoryCuration, {
         providerEnabled: memoryProvider !== undefined,
       });
@@ -1155,13 +1352,16 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       } catch (error) {
         const failedQueue = queue;
         const failedRegistry = conversationActorRegistry;
+        const failedPresence = interactionPresence;
         const failedObservationDatabase = conversationObservationDatabaseClient;
         queue = undefined;
         conversationActorRegistry = undefined;
+        interactionPresence = undefined;
         conversationObservationDatabaseClient = undefined;
         composition = undefined;
         const cleanup = await Promise.allSettled([
           stopQueueAndActorRegistry(failedQueue, failedRegistry),
+          failedPresence?.shutdown(),
           failedObservationDatabase?.close(),
         ]);
         if (cleanup.some((result) => result.status === "rejected")) {
@@ -1362,7 +1562,12 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       const runningRegistry = conversationActorRegistry;
       queue = undefined;
       conversationActorRegistry = undefined;
-      await stopQueueAndActorRegistry(runningQueue, runningRegistry);
+      const presence = interactionPresence;
+      interactionPresence = undefined;
+      await Promise.all([
+        stopQueueAndActorRegistry(runningQueue, runningRegistry),
+        presence?.shutdown(),
+      ]);
     },
 
     async closeDatabase() {

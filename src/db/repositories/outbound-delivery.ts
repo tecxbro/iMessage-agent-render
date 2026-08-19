@@ -4,6 +4,7 @@ import {
   and,
   asc,
   eq,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -141,6 +142,12 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
         sql`select pg_advisory_xact_lock(hashtextextended(${input.spaceId}, 0))`,
       );
       await transaction.execute(sql`
+        select space_id
+        from ${conversationStates}
+        where ${conversationStates.spaceId} = ${input.spaceId}
+        for update
+      `);
+      await transaction.execute(sql`
         select id
         from ${interactionRuns}
         where ${interactionRuns.id} = ${input.interactionRunId}
@@ -158,6 +165,8 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
           activeInteractionRunId: conversationStates.activeInteractionRunId,
           conversationAcceptedThroughSequence:
             conversationStates.acceptedThroughSequence,
+          conversationLatestInputSequence:
+            conversationStates.latestInputSequence,
           deploymentId: spaces.deploymentId,
         })
         .from(interactionRuns)
@@ -168,6 +177,23 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
         .innerJoin(spaces, eq(spaces.id, interactionRuns.spaceId))
         .where(eq(interactionRuns.id, input.interactionRunId))
         .limit(1);
+      const [existing] = await transaction
+        .select({ id: outboundBatches.id, spaceId: outboundBatches.spaceId })
+        .from(outboundBatches)
+        .where(
+          eq(outboundBatches.interactionRunId, input.interactionRunId),
+        )
+        .limit(1);
+      if (
+        existing !== undefined &&
+        existing.spaceId === input.spaceId &&
+        current !== undefined &&
+        current.runSpaceId === input.spaceId &&
+        current.runGeneration === input.generation &&
+        current.runState === "completed"
+      ) {
+        return existing.id;
+      }
       if (
         current === undefined ||
         current.runSpaceId !== input.spaceId ||
@@ -177,20 +203,11 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
         current.actorGeneration !== input.generation ||
         current.activeInteractionRunId !== input.interactionRunId ||
         current.conversationAcceptedThroughSequence !==
+          current.runAcceptedThroughSequence ||
+        current.conversationLatestInputSequence !==
           current.runAcceptedThroughSequence
       ) {
         throw new DeliveryError("DELIVERY_BATCH_INVALID", false);
-      }
-
-      const [existing] = await transaction
-        .select({ id: outboundBatches.id })
-        .from(outboundBatches)
-        .where(
-          eq(outboundBatches.interactionRunId, input.interactionRunId),
-        )
-        .limit(1);
-      if (existing !== undefined) {
-        return existing.id;
       }
 
       const outboundBatchId = randomUUID();
@@ -216,6 +233,68 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
           state: "pending" as const,
         })),
       );
+
+      const completedAt = await this.#databaseNow(transaction);
+      const updatedRuns = await transaction
+        .update(interactionRuns)
+        .set({ state: "completed", completedAt, updatedAt: completedAt })
+        .where(
+          and(
+            eq(interactionRuns.id, input.interactionRunId),
+            eq(interactionRuns.spaceId, input.spaceId),
+            eq(interactionRuns.generation, input.generation),
+            eq(interactionRuns.state, "finalizing"),
+            eq(
+              interactionRuns.acceptedThroughSequence,
+              current.runAcceptedThroughSequence,
+            ),
+          ),
+        )
+        .returning({ id: interactionRuns.id });
+      if (updatedRuns.length !== 1) {
+        throw new DeliveryError("DELIVERY_BATCH_INVALID", false);
+      }
+
+      const updatedConversations = await transaction
+        .update(conversationStates)
+        .set({
+          state: "idle",
+          activeInteractionRunId: null,
+          finalizedThroughSequence: current.runAcceptedThroughSequence,
+          updatedAt: completedAt,
+        })
+        .where(
+          and(
+            eq(conversationStates.spaceId, input.spaceId),
+            eq(conversationStates.state, "finalizing"),
+            eq(
+              conversationStates.activeInteractionRunId,
+              input.interactionRunId,
+            ),
+            eq(conversationStates.actorGeneration, input.generation),
+            eq(
+              conversationStates.acceptedThroughSequence,
+              current.runAcceptedThroughSequence,
+            ),
+            eq(
+              conversationStates.latestInputSequence,
+              current.runAcceptedThroughSequence,
+            ),
+          ),
+        )
+        .returning({ spaceId: conversationStates.spaceId });
+      if (updatedConversations.length !== 1) {
+        throw new DeliveryError("DELIVERY_BATCH_INVALID", false);
+      }
+      await transaction
+        .update(chains)
+        .set({ state: "complete", completedAt, updatedAt: completedAt })
+        .where(
+          and(
+            eq(chains.sourceInteractionRunId, input.interactionRunId),
+            inArray(chains.state, ["executing", "awaiting_approval"]),
+          ),
+        );
       return outboundBatchId;
     });
   }
@@ -563,20 +642,7 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
               isNull(outboundBatches.chainId),
               isNotNull(outboundBatches.interactionRunId),
               eq(interactionRuns.spaceId, outboundBatches.spaceId),
-              eq(interactionRuns.state, "finalizing"),
-              eq(conversationStates.state, "finalizing"),
-              eq(
-                conversationStates.activeInteractionRunId,
-                interactionRuns.id,
-              ),
-              eq(
-                conversationStates.actorGeneration,
-                interactionRuns.generation,
-              ),
-              eq(
-                conversationStates.acceptedThroughSequence,
-                interactionRuns.acceptedThroughSequence,
-              ),
+              eq(interactionRuns.state, "completed"),
             ),
           ),
           or(
@@ -726,14 +792,9 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
       batch.interactionRunId !== null &&
       batch.runId === batch.interactionRunId &&
       batch.runSpaceId === batch.spaceId &&
-      batch.runState === "finalizing" &&
-      batch.conversationState === "finalizing" &&
-      batch.activeInteractionRunId === batch.interactionRunId &&
+      batch.runState === "completed" &&
       batch.runGeneration !== null &&
-      batch.actorGeneration === batch.runGeneration &&
-      batch.runAcceptedThroughSequence !== null &&
-      batch.conversationAcceptedThroughSequence ===
-        batch.runAcceptedThroughSequence
+      batch.runAcceptedThroughSequence !== null
     ) {
       return {
         kind: "interaction",
@@ -789,53 +850,7 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
       }
       return;
     }
-
-    const updatedRuns = await transaction
-      .update(interactionRuns)
-      .set({ state: "completed", completedAt, updatedAt: completedAt })
-      .where(
-        and(
-          eq(interactionRuns.id, origin.interactionRunId),
-          eq(interactionRuns.spaceId, origin.spaceId),
-          eq(interactionRuns.generation, origin.generation),
-          eq(interactionRuns.state, "finalizing"),
-          eq(
-            interactionRuns.acceptedThroughSequence,
-            origin.acceptedThroughSequence,
-          ),
-        ),
-      )
-      .returning({ id: interactionRuns.id });
-    if (updatedRuns.length !== 1) {
-      throw new DeliveryError("DELIVERY_CLAIM_LOST", true);
-    }
-
-    const updatedConversations = await transaction
-      .update(conversationStates)
-      .set({
-        state: "idle",
-        activeInteractionRunId: null,
-        finalizedThroughSequence: origin.acceptedThroughSequence,
-        updatedAt: completedAt,
-      })
-      .where(
-        and(
-          eq(conversationStates.spaceId, origin.spaceId),
-          eq(conversationStates.state, "finalizing"),
-          eq(
-            conversationStates.activeInteractionRunId,
-            origin.interactionRunId,
-          ),
-          eq(conversationStates.actorGeneration, origin.generation),
-          eq(
-            conversationStates.acceptedThroughSequence,
-            origin.acceptedThroughSequence,
-          ),
-        ),
-      )
-      .returning({ spaceId: conversationStates.spaceId });
-    if (updatedConversations.length !== 1) {
-      throw new DeliveryError("DELIVERY_CLAIM_LOST", true);
-    }
+    // Interaction-origin runs and cursors complete atomically with batch
+    // materialization. Provider checkpoints only advance the durable batch.
   }
 }

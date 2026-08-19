@@ -51,7 +51,7 @@ describe("conversation actor boundaries", () => {
     );
   });
 
-  it("keeps observe coordination while cutting delivery over", async () => {
+  it("composes observe and active actor coordination over the delivery cutover", async () => {
     const production = await source("src/runtime/production-bootstrap.ts");
     const pipeline = await source("src/queue/pipeline.ts");
     const inbound = await source("src/db/repositories/inbound.ts");
@@ -60,13 +60,12 @@ describe("conversation actor boundaries", () => {
     expect(production).toContain("ConversationSequencedInboundAdapter");
     expect(inbound).toContain("ingestObservedInput");
     expect(production).toContain("ObserveConversationActor");
-    expect(production).not.toContain("new ConversationActor(");
+    expect(production).toContain("new ConversationActor(");
+    expect(production).toContain("new CodexAppServerActorRuntime(");
+    expect(production).toContain("new SecureInteractionStartGate(");
+    expect(production).toContain("new ConversationThreadRepository(");
     expect(production).toContain("stopQueueAndActorRegistry(");
-    expect(production).toContain(
-      "loadConversation: async (observedSpaceId, signal)",
-    );
-    expect(production).toContain("statementTimeoutMs: 1_500");
-    expect(production).toContain("maxConnections: 1");
+    expect(production).toContain("environment.CONVERSATION_ENGINE === \"actor\"");
     expect(production).toContain("observedThroughSequence:");
     expect(pipeline).toContain("conversationObservation");
     expect(pipeline).toContain("enqueueInteractionCoordinate");

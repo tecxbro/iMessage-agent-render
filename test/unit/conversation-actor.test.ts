@@ -14,7 +14,11 @@ import type {
   InteractionTaskPort,
 } from "../../src/conversation/contracts.js";
 import { ConversationCoordinator } from "../../src/conversation/coordinator.js";
-import { DecisionReconciler } from "../../src/conversation/decision-reconciler.js";
+import {
+  DecisionReconciler,
+  conversationCasPrecondition,
+  interactionRunCasPrecondition,
+} from "../../src/conversation/decision-reconciler.js";
 import { InteractionSemaphore } from "../../src/conversation/interaction-semaphore.js";
 import type {
   ConversationCasFailure,
@@ -540,7 +544,26 @@ function actorHarness(input: {
     reconcile: vi.fn(async () => ({ pendingCount: 0, terminalResults: [] })),
   };
   const delivery: InteractionDeliveryPort = {
-    prepare: vi.fn(async () => ({ outboundBatchId: ids.batch })),
+    prepare: vi.fn(async () => {
+      const snapshot = await repository.loadConversation();
+      if (snapshot.activeRun === null) {
+        throw new Error("Test delivery requires a finalizing interaction run.");
+      }
+      await repository.checkpointInteraction({
+        spaceId: repository.state.spaceId,
+        expectedConversation: conversationCasPrecondition(snapshot.state),
+        expectedRun: interactionRunCasPrecondition(snapshot.activeRun),
+        nextRunState: "completed",
+        nextConversation: {
+          state: "idle",
+          activeInteractionRunId: null,
+          acceptedThroughSequence: snapshot.activeRun.acceptedThroughSequence,
+          finalizedThroughSequence: snapshot.activeRun.acceptedThroughSequence,
+        },
+        completedAt: clock,
+      });
+      return { outboundBatchId: ids.batch };
+    }),
   };
   const cipher: DataCipher = {
     encrypt: vi.fn((plaintext) => `cipher:${plaintext}`),
@@ -912,6 +935,40 @@ describe("ConversationActor", () => {
     taskGate.resolve(undefined);
     await Promise.all([firstWake, secondWake]);
     expect(second.delivery.prepare).toHaveBeenCalledOnce();
+  });
+
+  it("reloads durable task results when recovery finds reactivated synthesis", async () => {
+    const repository = new FakeConversationRepository();
+    repository.installActiveRun({
+      ...activeRun(repository),
+      decisionMetadataJson: { mode: "delegate", tasks: [{ id: "task-1" }] },
+    });
+    const terminalResult = { taskId: "task-1", status: "succeeded" } as const;
+    const tasks: InteractionTaskPort = {
+      dispatch: vi.fn(async () => undefined),
+      reconcile: vi.fn(async () => ({
+        pendingCount: 0,
+        terminalResults: [terminalResult],
+      })),
+    };
+    const fixture = actorHarness({
+      repository,
+      tasks,
+      completion: runtimeCompletion("synthesized answer", { mode: "direct" }),
+    });
+
+    await fixture.actor.wake("task_results_ready");
+
+    expect(tasks.dispatch).not.toHaveBeenCalled();
+    expect(fixture.runtime.resume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ taskResults: [terminalResult] }),
+      }),
+    );
+    expect(fixture.delivery.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ draftOutput: "synthesized answer" }),
+    );
+    expect(repository.state.finalizedThroughSequence).toBe(1);
   });
 
   it("forwards identifier-only wake hints through the coordinator", async () => {

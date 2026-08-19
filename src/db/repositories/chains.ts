@@ -5,16 +5,21 @@ import {
   asc,
   desc,
   eq,
+  gt,
   inArray,
   isNull,
   lte,
   max,
+  or,
   sql,
 } from "drizzle-orm";
 
 import type { Database, DatabaseTransaction } from "../client.js";
 import type { QueuedAuthorizationReference } from "../../security/queued-authorization.js";
 import type { ChainAuthorizationRepository } from "./chain-authorization.js";
+import {
+  conversationStates,
+} from "../schema-fragments/conversation-actors.js";
 import {
   carriedMessages,
   approvals,
@@ -57,6 +62,13 @@ export interface QueuedChain {
   version: number;
 }
 
+export class InboundFlushDeferredError extends Error {
+  public constructor(public readonly spaceId: string) {
+    super("Inbound suffix is waiting for the current legacy chain to finish.");
+    this.name = "InboundFlushDeferredError";
+  }
+}
+
 export class ChainRepository {
   public constructor(
     private readonly database: Database,
@@ -82,33 +94,35 @@ export class ChainRepository {
           senderIdentityId: messages.senderIdentityId,
         })
         .from(messages)
+        .leftJoin(
+          conversationStates,
+          eq(conversationStates.spaceId, messages.spaceId),
+        )
         .where(
           and(
             eq(messages.spaceId, spaceId),
             eq(messages.direction, "inbound"),
             isNull(messages.drainedChainId),
+            or(
+              isNull(messages.inputSequence),
+              isNull(conversationStates.spaceId),
+              gt(
+                messages.inputSequence,
+                conversationStates.finalizedThroughSequence,
+              ),
+            ),
           ),
         )
-        .orderBy(asc(messages.receivedAt), asc(messages.id));
-
-      const newestUndrained = undrained.at(-1);
-      let canceledChainIds: string[] = [];
-      if (newestUndrained !== undefined) {
-        if (newestUndrained.receivedAt === null) {
-          throw new Error(
-            "Cannot flush an inbound message without received_at. Repair the invalid row before retrying.",
-          );
-        }
-        // This repeats the ingest-time guard under the same per-space lock so a
-        // crash or concurrent flush cannot leave two live chains.
-        const superseded = await this.supersedeWithinTransaction(
-          transaction,
-          spaceId,
-          newestUndrained.id,
-          newestUndrained.receivedAt,
+        // A rollback from actor mode must preserve the durable input sequence
+        // even when provider timestamps arrive out of order. PostgreSQL sorts
+        // legacy NULL sequences last, where timestamp/ID remain the fallback.
+        .orderBy(
+          asc(messages.inputSequence),
+          asc(messages.receivedAt),
+          asc(messages.id),
         );
-        canceledChainIds = superseded.canceledChainIds;
-      }
+
+      const canceledChainIds: string[] = [];
 
       const pendingCarry = await transaction
         .select({
@@ -119,16 +133,43 @@ export class ChainRepository {
         })
         .from(carriedMessages)
         .innerJoin(messages, eq(messages.id, carriedMessages.sourceMessageId))
+        .leftJoin(
+          conversationStates,
+          eq(conversationStates.spaceId, carriedMessages.spaceId),
+        )
         .where(
           and(
             eq(carriedMessages.spaceId, spaceId),
             isNull(carriedMessages.consumedByChainId),
+            or(
+              isNull(messages.inputSequence),
+              isNull(conversationStates.spaceId),
+              gt(
+                messages.inputSequence,
+                conversationStates.finalizedThroughSequence,
+              ),
+            ),
           ),
         )
         .orderBy(asc(carriedMessages.createdAt), asc(carriedMessages.position));
 
       if (pendingCarry.length === 0 && undrained.length === 0) {
         return null;
+      }
+
+      const [activeLegacyChain] = await transaction
+        .select({ id: chains.id })
+        .from(chains)
+        .where(
+          and(
+            eq(chains.spaceId, spaceId),
+            inArray(chains.state, ACTIVE_CHAIN_STATES),
+            isNull(chains.sourceInteractionRunId),
+          ),
+        )
+        .limit(1);
+      if (activeLegacyChain !== undefined) {
+        throw new InboundFlushDeferredError(spaceId);
       }
 
       const [versionRow] = await transaction

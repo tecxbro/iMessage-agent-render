@@ -52,7 +52,9 @@ export interface ConversationActorOptions {
   contextLoader: InteractionContextLoaderPort;
   interactionSemaphore: InteractionSemaphore;
   decisionReconciler: DecisionReconciler;
-  runDefaults: InteractionRunDefaults;
+  runDefaults:
+    | InteractionRunDefaults
+    | (() => Promise<InteractionRunDefaults> | InteractionRunDefaults);
   createId?: () => string;
   now?: () => Date;
 }
@@ -60,9 +62,16 @@ export interface ConversationActorOptions {
 interface ContinuationDirective {
   draftOutputCiphertext: string;
   fromSequence: number;
+  threadId: string | null;
 }
 
 type DriveResult = "continue" | "stop";
+
+function isDelegatedDecision(
+  metadata: InteractionRunRecord["decisionMetadataJson"],
+): boolean {
+  return metadata?.["mode"] === "delegate" || metadata?.["route"] === "delegate";
+}
 
 /**
  * One in-memory actor per Spectrum space. The mailbox only schedules work; all
@@ -79,7 +88,7 @@ export class ConversationActor {
   readonly #contextLoader: InteractionContextLoaderPort;
   readonly #interactionSemaphore: InteractionSemaphore;
   readonly #decisionReconciler: DecisionReconciler;
-  readonly #runDefaults: InteractionRunDefaults;
+  readonly #runDefaults: ConversationActorOptions["runDefaults"];
   readonly #createId: () => string;
   readonly #now: () => Date;
 
@@ -257,7 +266,9 @@ export class ConversationActor {
             acceptedThroughSequence: initialState.acceptedThroughSequence,
             finalizedThroughSequence: initialState.finalizedThroughSequence,
           },
-          ...this.#runDefaults,
+          ...(typeof this.#runDefaults === "function"
+            ? await this.#runDefaults()
+            : this.#runDefaults),
           authorization: refreshedAuthorization,
         };
         const begun = await this.#repository.beginInteraction(beginInput);
@@ -306,6 +317,7 @@ export class ConversationActor {
                 current.state.finalizedThroughSequence,
             },
             draftOutputCiphertext: continuation.draftOutputCiphertext,
+            threadId: continuation.threadId,
           });
           if (persisted.status !== "applied") {
             return;
@@ -748,9 +760,104 @@ export class ConversationActor {
       this.#continuation = {
         draftOutputCiphertext: result.draftOutputCiphertext,
         fromSequence: result.fromSequence,
+        threadId: result.threadId,
       };
+      return "continue";
+    }
+    if (result.status === "synthesize_tasks") {
+      return await this.#synthesizeTaskResults(run, result.terminalResults);
+    }
+    if (result.status === "awaiting_tasks") {
+      return "stop";
+    }
+    if (result.status === "completed" && result.effect === "delivery") {
+      return "stop";
     }
     return "continue";
+  }
+
+  async #synthesizeTaskResults(
+    run: InteractionRunRecord,
+    taskResults: readonly InteractionContext["taskResults"][number][],
+  ): Promise<DriveResult> {
+    const snapshot = await this.#loadAuthoritativeRun(run.id, run.generation);
+    if (snapshot === null || snapshot.activeRun.state !== "finalizing") {
+      return "continue";
+    }
+    const reactivated = await this.#repository.checkpointInteraction({
+      spaceId: this.#spaceId,
+      expectedConversation: conversationPrecondition(snapshot.state),
+      expectedRun: runPrecondition(snapshot.activeRun),
+      nextRunState: "active",
+      nextConversation: {
+        state: "active",
+        activeInteractionRunId: run.id,
+        acceptedThroughSequence: run.acceptedThroughSequence,
+        finalizedThroughSequence: snapshot.state.finalizedThroughSequence,
+      },
+    });
+    if (reactivated.status !== "applied") {
+      return "continue";
+    }
+
+    let finalizingRun: InteractionRunRecord | null = null;
+    await this.#interactionSemaphore.runExclusive(async () => {
+      let presenceLease: InteractionPresenceLease | null = null;
+      try {
+        presenceLease = await this.#presence.start({
+          spaceId: this.#spaceId,
+          interactionRunId: run.id,
+          signal: this.#abortController.signal,
+        });
+        const context = await this.#contextLoader.load({
+          spaceId: this.#spaceId,
+          interactionRunId: run.id,
+          fromSequence: snapshot.state.finalizedThroughSequence + 1,
+          throughSequence: run.acceptedThroughSequence,
+        });
+        const session = await this.#runtime.resume({
+          run: reactivated.run,
+          context: { ...context, taskResults },
+          signal: this.#abortController.signal,
+        });
+        const current = await this.#loadAuthoritativeRun(run.id, run.generation);
+        if (current === null || current.activeRun.state !== "active") {
+          await this.#runtime.cancel({ interactionRunId: run.id, session });
+          return;
+        }
+        const identified = await this.#repository.checkpointInteraction({
+          spaceId: this.#spaceId,
+          expectedConversation: conversationPrecondition(current.state),
+          expectedRun: runPrecondition(current.activeRun),
+          nextRunState: "active",
+          nextConversation: {
+            state: "active",
+            activeInteractionRunId: run.id,
+            acceptedThroughSequence: current.activeRun.acceptedThroughSequence,
+            finalizedThroughSequence: current.state.finalizedThroughSequence,
+          },
+          threadId: session.threadId,
+          turnId: session.turnId,
+        });
+        if (identified.status !== "applied") {
+          await this.#runtime.cancel({ interactionRunId: run.id, session });
+          return;
+        }
+        const completion = await this.#runActive(run.id, run.generation, session);
+        if (completion !== null) {
+          finalizingRun = await this.#checkpointCompletion(
+            run.id,
+            run.generation,
+            completion,
+          );
+        }
+      } finally {
+        await presenceLease?.stop();
+      }
+    }, this.#abortController.signal);
+    return finalizingRun === null
+      ? "continue"
+      : await this.#reconcileDecision(finalizingRun);
   }
 
   async #recover(snapshot: ConversationSnapshot): Promise<DriveResult> {
@@ -758,6 +865,27 @@ export class ConversationActor {
       throw new ConversationActorError("INTERACTION_RUN_NOT_FOUND", true);
     }
     const activeRun = snapshot.activeRun;
+    if (activeRun.state === "active" && isDelegatedDecision(activeRun.decisionMetadataJson)) {
+      // A crash can occur after task-result synthesis reactivates the source
+      // run but before the new App Server turn is durably identified. Restore
+      // the finalizing checkpoint so reconciliation reloads the durable task
+      // results instead of resuming without them.
+      const restored = await this.#repository.checkpointInteraction({
+        spaceId: this.#spaceId,
+        expectedConversation: conversationPrecondition(snapshot.state),
+        expectedRun: runPrecondition(activeRun),
+        nextRunState: "finalizing",
+        nextConversation: {
+          state: "finalizing",
+          activeInteractionRunId: activeRun.id,
+          acceptedThroughSequence: activeRun.acceptedThroughSequence,
+          finalizedThroughSequence: snapshot.state.finalizedThroughSequence,
+        },
+      });
+      return restored.status === "applied"
+        ? await this.#reconcileDecision(restored.run)
+        : "continue";
+    }
     const plan = classifyInteractionRecovery({
       conversation: snapshot.state,
       run: activeRun,

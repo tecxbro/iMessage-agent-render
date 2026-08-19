@@ -176,6 +176,25 @@ Roll back application and schema independently.
 
 If compatibility is uncertain, roll forward with a fix or restore the application and database together to a matched recovery point. The initial migration rollback is destructive and must not be used on a live database without an explicit data-loss decision.
 
+### Conversation engine activation and rollback
+
+1. Deploy with `CONVERSATION_ENGINE=observe` and verify sequenced-ingest,
+   reconciliation, and direct/durable wake metrics without changing the legacy
+   reply path.
+2. Enable the delivery coordinator and verify a chain-origin batch completes
+   through `outbound.coordinate`.
+3. Set `CONVERSATION_ENGINE=actor` and restart. Verify one direct actor answer,
+   one delegated task result returning through `interaction.coordinate`, and
+   restart recovery for both interaction and delivery wakes.
+4. Keep legacy workers registered and retain the `legacy` configuration value
+   as the application rollback until the reliability suite passes.
+
+Do not down-migrate actor tables during an application rollback. Switching to
+`legacy` reloads only undrained input whose `input_sequence` is greater than
+`finalized_through_sequence`; already finalized actor messages must not be
+replayed. Before switching, let any interaction-origin outbound batch finish or
+record its exact batch/run state for coordinator recovery.
+
 ## Auth transfer and re-enrollment
 
 When ownership changes or a credential may be exposed:
@@ -204,7 +223,7 @@ Escalate and keep execution paused when:
 
 - authorization or outbound routing cannot be proven;
 - PostgreSQL state is unavailable or inconsistent;
-- a stale/canceled chain sends;
+- a stale draft or canceled chain sends;
 - an outbound retry changes client GUID;
 - credentials appear in logs or health responses;
 - the old application/schema compatibility is unknown; or

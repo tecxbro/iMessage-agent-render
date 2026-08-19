@@ -153,6 +153,67 @@ describe("Step 5 task execution handler", () => {
     });
   });
 
+  it("wakes actor-origin synthesis without enqueueing the legacy synthesis worker", async () => {
+    const task = executionTaskSchema.parse({
+      id: "actor-final-check",
+      agentName: "runtime-reviewer",
+      purpose: "Finish actor-origin delegated work.",
+      instructions: "Return the terminal evidence to the conversation actor.",
+      workspaceBinding: "primary-repo",
+      permissionProfile: "read",
+      dependsOn: [],
+    });
+    const result = executionResultSchema.parse({
+      taskId: task.id,
+      status: "succeeded",
+      userSafeSummary: "The actor-origin delegated work completed.",
+      artifacts: [],
+      proposedActions: [],
+      memoryCandidates: [],
+      error: null,
+    });
+    const enqueueTurnSynthesize = vi.fn(async () => undefined);
+    const publishActorResultsReady = vi.fn(async () => true);
+    const handler = createTaskExecuteHandler({
+      repository: {
+        claimTask: async () => ({
+          chainId: payload.chainId,
+          ownerId: "40000000-0000-4000-8000-000000000005",
+          task,
+          modelSelection: DEFAULT_MODEL_SELECTION,
+          authorizedPermissionProfiles: ["read"],
+          resolvedWorkspacePath: "/tmp/workspaces/primary-repo",
+          relevantContext: [],
+        }),
+        completeTask: async () => ({
+          accepted: true,
+          readyTasks: [],
+          shouldSynthesize: true,
+        }),
+        failTaskAttempt: vi.fn(),
+      },
+      execution: {
+        run: async () => ({
+          result,
+          promptSha256: "c".repeat(64),
+          usage: null,
+          recovered: false,
+        }),
+      },
+      publisher: {
+        enqueueTaskExecute: vi.fn(),
+        enqueueTurnSynthesize,
+      },
+      publishActorResultsReady,
+      promptBundle: await loadPromptBundle(),
+    });
+
+    await handler(payload);
+
+    expect(publishActorResultsReady).toHaveBeenCalledWith(chainId);
+    expect(enqueueTurnSynthesize).not.toHaveBeenCalled();
+  });
+
   it("terminalizes a claim-time authorization denial without starting Codex", async () => {
     const executionRun = vi.fn();
     const denyTaskCodexStart = vi.fn(async () => ({

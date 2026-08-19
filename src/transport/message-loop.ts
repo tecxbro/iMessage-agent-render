@@ -13,9 +13,13 @@ import {
   type SpectrumFailureCode,
 } from "../http/readiness.js";
 import {
+  DEFAULT_READ_RECEIPT_DELAY_MS,
+  DEFAULT_TYPING_START_DELAY_MS,
   ReadReceiptDispatcher,
   type ReadReceiptDispatcherPort,
 } from "./read-receipts.js";
+import { InboundPresenceDispatcher } from "./inbound-presence.js";
+import type { InboundConversationPresencePort } from "./conversation-presence.js";
 import {
   SenderIdentityError,
   normalizeIMessageSender,
@@ -60,7 +64,10 @@ export type IngestDisposition = (typeof INGEST_DISPOSITIONS)[number];
 export interface AuthorizeAndIngest {
   authorizeAndIngest(
     inbound: InboundTextForAuthorization,
-    context: { signal?: AbortSignal },
+    context: {
+      signal?: AbortSignal;
+      onHandledWithoutAgentPresence?: () => void;
+    },
   ): Promise<IngestDisposition>;
 }
 
@@ -81,9 +88,12 @@ export interface SpectrumMessageLoopOptions {
   messages: () => AsyncIterable<readonly [Space, Message]>;
   readiness: SpectrumReadiness;
   onIgnored?: (reason: IgnoredSpectrumEventReason) => void;
+  conversationPresence?: InboundConversationPresencePort;
   readReceiptDispatcher?: ReadReceiptDispatcherPort;
+  readDelayMs?: number;
   restartPolicy?: RestartPolicy;
   signal?: AbortSignal;
+  typingStartDelayMs?: number;
   wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
 
@@ -214,9 +224,13 @@ export async function handleSpectrumMessage(
   options: Pick<
     SpectrumMessageLoopOptions,
     | "authorizeAndIngest"
+    | "conversationPresence"
     | "onIgnored"
+    | "readDelayMs"
     | "readReceiptDispatcher"
     | "signal"
+    | "typingStartDelayMs"
+    | "wait"
   >,
 ): Promise<IngestDisposition | IgnoredSpectrumEventReason> {
   const normalized = normalizeInboundText(space, message);
@@ -225,18 +239,50 @@ export async function handleSpectrumMessage(
     return normalized.ignored;
   }
 
+  let handledWithoutAgentPresence = false;
   const disposition = await options.authorizeAndIngest.authorizeAndIngest(
     normalized.inbound,
-    options.signal === undefined ? {} : { signal: options.signal },
+    {
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.conversationPresence === undefined
+        ? {}
+        : {
+            onHandledWithoutAgentPresence: () => {
+              handledWithoutAgentPresence = true;
+            },
+          }),
+    },
   );
 
   if (disposition !== "unauthorized") {
-    // A receipt is best-effort provider work. Schedule it only after the
-    // authorization and durable-ingest boundary, but never return its promise
-    // to message handling or the supervised stream catch block.
-    (options.readReceiptDispatcher ?? directHandleReadReceiptDispatcher).dispatch(
-      () => message.read(),
-    );
+    const presenceGeneration = handledWithoutAgentPresence
+      ? undefined
+      : options.conversationPresence?.reserve(normalized.inbound.space);
+    const dispatcher = new InboundPresenceDispatcher({
+      readDelayMs: options.readDelayMs ?? DEFAULT_READ_RECEIPT_DELAY_MS,
+      readReceiptDispatcher:
+        options.readReceiptDispatcher ?? directHandleReadReceiptDispatcher,
+      typingStartDelayMs:
+        options.typingStartDelayMs ?? DEFAULT_TYPING_START_DELAY_MS,
+      wait: options.wait ?? defaultWait,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    const scheduled = dispatcher.dispatch({
+      read: () => message.read(),
+      beginTyping: async () => {
+        if (presenceGeneration !== undefined) {
+          await options.conversationPresence?.beginRoute(
+            normalized.inbound.space,
+            presenceGeneration,
+          );
+        }
+      },
+    });
+    if (!scheduled && presenceGeneration !== undefined) {
+      void options.conversationPresence
+        ?.endRoute(normalized.inbound.space, presenceGeneration)
+        .catch(() => undefined);
+    }
   }
 
   return disposition;
@@ -266,11 +312,18 @@ export async function runSpectrumMessageLoop(
 
           await handleSpectrumMessage(space, message, {
             authorizeAndIngest: options.authorizeAndIngest,
+            ...(options.conversationPresence === undefined
+              ? {}
+              : { conversationPresence: options.conversationPresence }),
             ...(options.onIgnored === undefined
               ? {}
               : { onIgnored: options.onIgnored }),
+            readDelayMs: options.readDelayMs ?? DEFAULT_READ_RECEIPT_DELAY_MS,
             readReceiptDispatcher,
             ...(options.signal === undefined ? {} : { signal: options.signal }),
+            typingStartDelayMs:
+              options.typingStartDelayMs ?? DEFAULT_TYPING_START_DELAY_MS,
+            wait,
           });
           // Receiving and handling an event proves that the restarted stream
           // is healthy; future disconnects begin a new consecutive-failure
@@ -287,6 +340,10 @@ export async function runSpectrumMessageLoop(
         if (isAborted(options.signal)) {
           break;
         }
+
+        // A disconnected provider cannot retain trustworthy presence state.
+        // Cleanup stays detached from stream supervision and retry health.
+        void options.conversationPresence?.reset().catch(() => undefined);
 
         restartAttempt += 1;
         const exhausted = restartAttempt > policy.maxRestarts;
@@ -316,6 +373,7 @@ export async function runSpectrumMessageLoop(
 
     options.readiness.markStopped();
   } finally {
+    await options.conversationPresence?.close().catch(() => undefined);
     await readReceiptDispatcher.close().catch(() => undefined);
   }
 }

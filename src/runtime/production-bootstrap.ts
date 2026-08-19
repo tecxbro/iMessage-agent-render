@@ -118,6 +118,10 @@ import {
   DurableInboundConsumer,
   NativeSpectrumOutboundTransport,
 } from "../transport/operational.js";
+import {
+  ConversationPresenceCoordinator,
+  DEFAULT_TYPING_RUNTIME_BUFFER_MS,
+} from "../transport/conversation-presence.js";
 import { createSpectrumSpaceResolver } from "../transport/space-resolver.js";
 import {
   createSpectrumApp,
@@ -228,7 +232,12 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     }
   };
   const inFlightChains = new InFlightChainRegistry();
+  let activeConversationPresence: ConversationPresenceCoordinator | undefined;
+  const endChainPresence = (chainId: string): void => {
+    void activeConversationPresence?.endChain(chainId);
+  };
   const interruptSupersededChains = (chainIds: readonly string[]): void => {
+    void activeConversationPresence?.endChains(chainIds);
     const abortedWorkCount = inFlightChains.cancel(chainIds);
     if (abortedWorkCount > 0) {
       logger.info(
@@ -239,6 +248,18 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         },
         "superseded in-flight work aborted",
       );
+    }
+  };
+  const runChainWithPresence = async (
+    chainId: string,
+    signal: AbortSignal,
+    operation: (chainSignal: AbortSignal) => Promise<void>,
+  ): Promise<void> => {
+    try {
+      await inFlightChains.run(chainId, signal, operation);
+    } catch (error) {
+      endChainPresence(chainId);
+      throw error;
     }
   };
   const promptBundle = await loadPromptBundle();
@@ -807,6 +828,9 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
           chains,
           publisher,
           onChainsSuperseded: interruptSupersededChains,
+          onChainCreated: (chainId, spaceId) => {
+            activeConversationPresence?.bindChain(chainId, spaceId);
+          },
         }),
       );
       const turnPlanHandler = createTurnPlanHandler({
@@ -850,11 +874,14 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
             "optional progress status could not be delivered",
           );
         },
+        onPresenceEnd: endChainPresence,
       });
-      await queue.registerWorker(QUEUE_NAMES.turnPlan, async (payload, signal) =>
-        inFlightChains.run(payload.chainId, signal, (chainSignal) =>
-          turnPlanHandler(payload, chainSignal),
-        ),
+      await queue.registerWorker(
+        QUEUE_NAMES.turnPlan,
+        async (payload, signal) =>
+          runChainWithPresence(payload.chainId, signal, (chainSignal) =>
+            turnPlanHandler(payload, chainSignal),
+          ),
       );
       const taskExecuteHandler = createTaskExecuteHandler({
         repository: orchestration,
@@ -863,11 +890,12 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         approvalPublisher: publisher,
         promptBundle,
         maximumRuntimeMs: environment.MAX_TASK_RUNTIME_MS,
+        onPresenceEnd: endChainPresence,
       });
       await queue.registerWorker(
         QUEUE_NAMES.taskExecute,
         async (payload, signal) =>
-          inFlightChains.run(payload.chainId, signal, (chainSignal) =>
+          runChainWithPresence(payload.chainId, signal, (chainSignal) =>
             taskExecuteHandler(payload, chainSignal),
           ),
         environment.MAX_EXECUTION_CONCURRENCY,
@@ -878,11 +906,14 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         publisher,
         promptBundle,
         encrypt: cipher.encrypt,
+        onPresenceEnd: endChainPresence,
       });
-      await queue.registerWorker(QUEUE_NAMES.turnSynthesize, async (payload, signal) =>
-        inFlightChains.run(payload.chainId, signal, (chainSignal) =>
-          synthesizeHandler(payload, chainSignal),
-        ),
+      await queue.registerWorker(
+        QUEUE_NAMES.turnSynthesize,
+        async (payload, signal) =>
+          runChainWithPresence(payload.chainId, signal, (chainSignal) =>
+            synthesizeHandler(payload, chainSignal),
+          ),
       );
       const outboundHandler = createOutboundSendHandler({
         outbound,
@@ -896,13 +927,19 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
           });
         },
       });
-      await queue.registerWorker(QUEUE_NAMES.outboundSend, async (payload, signal) => {
-        const chainId = await outbound.findChainIdForBatch(payload.outboundBatchId);
-        if (chainId === undefined) return await outboundHandler(payload, signal);
-        await inFlightChains.run(chainId, signal, (chainSignal) =>
-          outboundHandler(payload, chainSignal),
-        );
-      });
+      await queue.registerWorker(
+        QUEUE_NAMES.outboundSend,
+        async (payload, signal) => {
+          const chainId = await outbound.findChainIdForBatch(
+            payload.outboundBatchId,
+          );
+          if (chainId === undefined)
+            return await outboundHandler(payload, signal);
+          await runChainWithPresence(chainId, signal, (chainSignal) =>
+            outboundHandler(payload, chainSignal),
+          );
+        },
+      );
       await queue.registerWorker(
         QUEUE_NAMES.approvalRequest,
         async (payload) => {
@@ -1038,14 +1075,23 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       const state = required(composition, "Spectrum startup");
       const app = await createSpectrumApp(credentials);
       const resolver = createSpectrumSpaceResolver(app);
+      const conversationPresence = new ConversationPresenceCoordinator({
+        operational: state.operational,
+        resolver:
+          resolver as unknown as import("../transport/space-resolver.js").SpaceResolver<Space>,
+        maximumTypingDurationMs:
+          environment.MAX_TASK_RUNTIME_MS + DEFAULT_TYPING_RUNTIME_BUFFER_MS,
+      });
       const nativeOutbound = new NativeSpectrumOutboundTransport({
         operational: state.operational,
         resolver:
           resolver as unknown as import("../transport/space-resolver.js").SpaceResolver<Space>,
+        conversationPresence,
       });
       const runId = `spectrum-${++nextSpectrumRun}`;
       const controller = new AbortController();
       outboundTransport.attach(runId, nativeOutbound);
+      activeConversationPresence = conversationPresence;
 
       const authorizer = new DeterministicSenderAuthorizer({
         deploymentId: environment.DEPLOYMENT_ID,
@@ -1069,6 +1115,9 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         cipher,
         contentHashKey: environment.APP_ENCRYPTION_KEY,
         rawMessageRetentionDays: environment.RAW_MESSAGE_RETENTION_DAYS,
+        onSpacePersisted: (spaceId, route) => {
+          conversationPresence.associateSpace(spaceId, route);
+        },
       });
       const commandInterceptor = new AuthorizedInboundCommandInterceptor({
         deploymentId: environment.DEPLOYMENT_ID,
@@ -1101,6 +1150,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         authorizeAndIngest: boundary,
         messages: () => app.messages,
         readiness: new SpectrumReadiness(),
+        conversationPresence,
         signal: controller.signal,
         onIgnored: (reason) => {
           logger.debug({ component: "spectrum", reason }, "ignored message event");
@@ -1120,6 +1170,9 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         })
         .finally(() => {
           outboundTransport.detach(runId);
+          if (activeConversationPresence === conversationPresence) {
+            activeConversationPresence = undefined;
+          }
           activeSpectrumRuns.delete(runId);
         });
       activeSpectrumRuns.set(runId, { controller, done });

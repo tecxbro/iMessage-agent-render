@@ -123,6 +123,7 @@ export interface TurnPlanDependencies {
     signal: AbortSignal;
   }): Promise<void>;
   onStatusFailure?(error: unknown, chainId: string): void;
+  onPresenceEnd?(chainId: string): void;
   maximumBubbleCharacters?: number;
 }
 
@@ -262,6 +263,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
           expectedState: "queued",
           errorCode: error.code,
         });
+        dependencies.onPresenceEnd?.(payload.chainId);
         return;
       }
       throw error;
@@ -335,6 +337,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
           expectedState: "queued",
           errorCode: error.code,
         });
+        dependencies.onPresenceEnd?.(context.chainId);
         return;
       }
       throw error;
@@ -375,6 +378,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
         expectedChainVersion: context.chainVersion,
         expectedState: "complete",
       });
+      dependencies.onPresenceEnd?.(context.chainId);
       return;
     }
 

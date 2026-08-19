@@ -18,10 +18,12 @@ describe("queue contracts", () => {
   it("freezes the documented queue names", () => {
     expect(QUEUE_NAME_VALUES).toEqual([
       "inbound.flush",
+      "interaction.coordinate",
       "turn.plan",
       "task.execute",
       "turn.synthesize",
       "outbound.send",
+      "outbound.coordinate",
       "approval.request",
       "approval.execute",
       "memory.curate",

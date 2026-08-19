@@ -33,6 +33,7 @@ Production-oriented private iMessage agent starter. Keep every module justified 
 
 | Worktree | Owned implementation files |
 |---|---|
+| Conversation actor contracts | `src/conversation/*`, `src/delivery/contracts.ts`, shared actor schema and queue contracts |
 | Contracts/integration | shared schemas, queue payloads, final composition, E2E |
 | Spectrum transport | `src/transport/*`, Spectrum readiness |
 | PostgreSQL pipeline | `src/db/*`, `src/queue/*`, migration/recovery tests |
@@ -42,6 +43,9 @@ Production-oriented private iMessage agent starter. Keep every module justified 
 | Deploy/docs | `render.yaml`, setup docs, health HTTP composition |
 
 - Shared contract changes require a focused integration PR or prior coordination.
+- After the conversation actor contract PR merges, leaf worktrees implement its
+  ports without changing them. Any required signature, state, payload, or
+  schema change returns to a focused contract PR before dependent work merges.
 
 ## Implementation rules
 

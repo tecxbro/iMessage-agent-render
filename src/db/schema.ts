@@ -231,6 +231,7 @@ export const messages = pgTable(
       .references(() => spaces.id, { onDelete: "cascade" }),
     externalMessageId: text("external_message_id"),
     direction: messageDirection("direction").notNull(),
+    inputSequence: bigint("input_sequence", { mode: "number" }),
     senderIdentityId: uuid("sender_identity_id").references(
       () => channelIdentities.id,
       { onDelete: "set null" },
@@ -253,6 +254,9 @@ export const messages = pgTable(
     uniqueIndex("messages_external_identity_unique")
       .on(table.spaceId, table.externalMessageId)
       .where(sql`${table.externalMessageId} is not null`),
+    uniqueIndex("messages_inbound_sequence_unique")
+      .on(table.spaceId, table.inputSequence)
+      .where(sql`${table.direction} = 'inbound'`),
     index("messages_undrained_inbound_idx")
       .on(table.spaceId, table.receivedAt, table.id)
       .where(
@@ -288,6 +292,9 @@ export const chains = pgTable(
     promptVersion: varchar("prompt_version", { length: 128 }),
     decisionJson: jsonb("decision_json").$type<Record<string, unknown>>(),
     terminalErrorCode: varchar("terminal_error_code", { length: 128 }),
+    // The FK lives in migration 0011 so the central schema and its additive
+    // conversation fragment do not form a runtime import cycle.
+    sourceInteractionRunId: uuid("source_interaction_run_id"),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     ...timestamps,
   },
@@ -515,6 +522,9 @@ export const outboundBatches = pgTable(
     state: outboundBatchState("state").default("queued").notNull(),
     startIndex: integer("start_index").default(0).notNull(),
     partCount: integer("part_count").notNull(),
+    claimOwner: varchar("claim_owner", { length: 128 }),
+    claimToken: uuid("claim_token"),
+    claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

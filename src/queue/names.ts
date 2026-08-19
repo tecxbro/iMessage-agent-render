@@ -2,10 +2,12 @@ import { z } from "zod";
 
 export const QUEUE_NAMES = {
   inboundFlush: "inbound.flush",
+  interactionCoordinate: "interaction.coordinate",
   turnPlan: "turn.plan",
   taskExecute: "task.execute",
   turnSynthesize: "turn.synthesize",
   outboundSend: "outbound.send",
+  outboundCoordinate: "outbound.coordinate",
   approvalRequest: "approval.request",
   approvalExecute: "approval.execute",
   memoryCurate: "memory.curate",
@@ -15,10 +17,12 @@ export const QUEUE_NAMES = {
 
 export const QUEUE_NAME_VALUES = [
   QUEUE_NAMES.inboundFlush,
+  QUEUE_NAMES.interactionCoordinate,
   QUEUE_NAMES.turnPlan,
   QUEUE_NAMES.taskExecute,
   QUEUE_NAMES.turnSynthesize,
   QUEUE_NAMES.outboundSend,
+  QUEUE_NAMES.outboundCoordinate,
   QUEUE_NAMES.approvalRequest,
   QUEUE_NAMES.approvalExecute,
   QUEUE_NAMES.memoryCurate,

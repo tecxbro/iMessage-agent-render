@@ -8,10 +8,12 @@ import {
 
 const QUEUE_POLICIES: Readonly<Record<QueueName, QueuePolicy>> = {
   [QUEUE_NAMES.inboundFlush]: "stately",
+  [QUEUE_NAMES.interactionCoordinate]: "stately",
   [QUEUE_NAMES.turnPlan]: "exclusive",
   [QUEUE_NAMES.taskExecute]: "exclusive",
   [QUEUE_NAMES.turnSynthesize]: "exclusive",
   [QUEUE_NAMES.outboundSend]: "exclusive",
+  [QUEUE_NAMES.outboundCoordinate]: "exclusive",
   [QUEUE_NAMES.approvalRequest]: "exclusive",
   [QUEUE_NAMES.approvalExecute]: "exclusive",
   [QUEUE_NAMES.memoryCurate]: "exclusive",

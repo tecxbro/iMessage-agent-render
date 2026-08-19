@@ -11,6 +11,20 @@ export const inboundFlushPayloadSchema = z
   })
   .strict();
 
+export const interactionCoordinateReasonSchema = z.enum([
+  "inbound",
+  "task_results_ready",
+  "recovery",
+  "late_input",
+]);
+
+export const interactionCoordinatePayloadSchema = z
+  .object({
+    spaceId: idSchema,
+    reason: interactionCoordinateReasonSchema,
+  })
+  .strict();
+
 export const turnPlanPayloadSchema = z
   .object({
     chainId: idSchema,
@@ -43,6 +57,12 @@ export const outboundSendPayloadSchema = z
   })
   .strict();
 
+export const outboundCoordinatePayloadSchema = z
+  .object({
+    outboundBatchId: idSchema,
+  })
+  .strict();
+
 export const approvalRequestPayloadSchema = z
   .object({ executionTaskId: idSchema })
   .strict();
@@ -64,10 +84,12 @@ export const maintenanceHealthPayloadSchema = z.object({}).strict();
 
 export const QUEUE_PAYLOAD_SCHEMAS = {
   [QUEUE_NAMES.inboundFlush]: inboundFlushPayloadSchema,
+  [QUEUE_NAMES.interactionCoordinate]: interactionCoordinatePayloadSchema,
   [QUEUE_NAMES.turnPlan]: turnPlanPayloadSchema,
   [QUEUE_NAMES.taskExecute]: taskExecutePayloadSchema,
   [QUEUE_NAMES.turnSynthesize]: turnSynthesizePayloadSchema,
   [QUEUE_NAMES.outboundSend]: outboundSendPayloadSchema,
+  [QUEUE_NAMES.outboundCoordinate]: outboundCoordinatePayloadSchema,
   [QUEUE_NAMES.approvalRequest]: approvalRequestPayloadSchema,
   [QUEUE_NAMES.approvalExecute]: approvalExecutePayloadSchema,
   [QUEUE_NAMES.memoryCurate]: memoryCuratePayloadSchema,
@@ -76,10 +98,19 @@ export const QUEUE_PAYLOAD_SCHEMAS = {
 } as const satisfies Record<QueueName, z.ZodType>;
 
 export type InboundFlushPayload = z.infer<typeof inboundFlushPayloadSchema>;
+export type InteractionCoordinateReason = z.infer<
+  typeof interactionCoordinateReasonSchema
+>;
+export type InteractionCoordinatePayload = z.infer<
+  typeof interactionCoordinatePayloadSchema
+>;
 export type TurnPlanPayload = z.infer<typeof turnPlanPayloadSchema>;
 export type TaskExecutePayload = z.infer<typeof taskExecutePayloadSchema>;
 export type TurnSynthesizePayload = z.infer<typeof turnSynthesizePayloadSchema>;
 export type OutboundSendPayload = z.infer<typeof outboundSendPayloadSchema>;
+export type OutboundCoordinatePayload = z.infer<
+  typeof outboundCoordinatePayloadSchema
+>;
 export type ApprovalRequestPayload = z.infer<typeof approvalRequestPayloadSchema>;
 export type ApprovalExecutePayload = z.infer<typeof approvalExecutePayloadSchema>;
 export type MemoryCuratePayload = z.infer<typeof memoryCuratePayloadSchema>;
@@ -92,10 +123,12 @@ export type MaintenanceHealthPayload = z.infer<
 
 export interface QueuePayloadByName {
   [QUEUE_NAMES.inboundFlush]: InboundFlushPayload;
+  [QUEUE_NAMES.interactionCoordinate]: InteractionCoordinatePayload;
   [QUEUE_NAMES.turnPlan]: TurnPlanPayload;
   [QUEUE_NAMES.taskExecute]: TaskExecutePayload;
   [QUEUE_NAMES.turnSynthesize]: TurnSynthesizePayload;
   [QUEUE_NAMES.outboundSend]: OutboundSendPayload;
+  [QUEUE_NAMES.outboundCoordinate]: OutboundCoordinatePayload;
   [QUEUE_NAMES.approvalRequest]: ApprovalRequestPayload;
   [QUEUE_NAMES.approvalExecute]: ApprovalExecutePayload;
   [QUEUE_NAMES.memoryCurate]: MemoryCuratePayload;

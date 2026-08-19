@@ -378,6 +378,7 @@ describe("conversation actor contracts", () => {
     );
     expect(batchConfig.columns.map((column) => column.name)).toEqual(
       expect.arrayContaining([
+        "interaction_run_id",
         "claim_owner",
         "claim_token",
         "claim_expires_at",

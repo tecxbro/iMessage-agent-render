@@ -51,16 +51,19 @@ describe("conversation actor boundaries", () => {
     );
   });
 
-  it("does not register conversation or delivery coordinator workers yet", async () => {
+  it("cuts delivery over without activating the conversation coordinator", async () => {
     const production = await source("src/runtime/production-bootstrap.ts");
     const pipeline = await source("src/queue/pipeline.ts");
 
     for (const legacyRuntime of [production, pipeline]) {
       expect(legacyRuntime).not.toContain("interactionCoordinate");
-      expect(legacyRuntime).not.toContain("outboundCoordinate");
       expect(legacyRuntime).not.toContain("conversation/contracts");
-      expect(legacyRuntime).not.toContain("delivery/contracts");
     }
+    expect(production).toContain("new DeliveryCoordinator");
+    expect(production).toContain("QUEUE_NAMES.outboundCoordinate");
+    expect(production).toContain("QUEUE_NAMES.outboundSend");
+    expect(pipeline).toContain("enqueueOutboundCoordinate");
+    expect(pipeline).not.toContain("enqueueOutboundSend");
   });
 
   it("requires atomic encrypted ingest and typed CAS results", async () => {

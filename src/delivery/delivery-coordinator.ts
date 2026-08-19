@@ -27,6 +27,12 @@ export interface DeliveryCoordinatorOptions {
   claimOwner?: string;
   leaseDurationMs?: number;
   now?: () => Date;
+  afterBatchComplete?: (outboundBatchId: string) => Promise<void> | void;
+  onFailure?: (input: {
+    outboundBatchId: string;
+    error: unknown;
+    signal: AbortSignal;
+  }) => Promise<void> | void;
 }
 
 type DeliveryStage = "decrypt" | "send" | "checkpoint";
@@ -40,6 +46,10 @@ export class DeliveryCoordinator implements DeliveryCoordinatorPort {
   readonly #claimOwner: string;
   readonly #leaseDurationMs: number;
   readonly #now: () => Date;
+  readonly #afterBatchComplete:
+    | ((outboundBatchId: string) => Promise<void> | void)
+    | undefined;
+  readonly #onFailure: DeliveryCoordinatorOptions["onFailure"];
 
   public constructor(options: DeliveryCoordinatorOptions) {
     const leaseDurationMs = options.leaseDurationMs ?? 60_000;
@@ -54,6 +64,8 @@ export class DeliveryCoordinator implements DeliveryCoordinatorPort {
     this.#claimOwner = options.claimOwner ?? `delivery:${randomUUID()}`;
     this.#leaseDurationMs = leaseDurationMs;
     this.#now = options.now ?? (() => new Date());
+    this.#afterBatchComplete = options.afterBatchComplete;
+    this.#onFailure = options.onFailure;
   }
 
   public coordinate(
@@ -73,22 +85,33 @@ export class DeliveryCoordinator implements DeliveryCoordinatorPort {
   }
 
   async #run(outboundBatchId: string, signal: AbortSignal): Promise<void> {
-    while (true) {
-      signal.throwIfAborted();
-      const claim = await this.#repository.claimNext({
-        outboundBatchId,
-        claimOwner: this.#claimOwner,
-        leaseDurationMs: this.#leaseDurationMs,
-        now: this.#now(),
-      });
-      if (claim === null) {
-        return;
-      }
+    try {
+      while (true) {
+        signal.throwIfAborted();
+        const claim = await this.#repository.claimNext({
+          outboundBatchId,
+          claimOwner: this.#claimOwner,
+          leaseDurationMs: this.#leaseDurationMs,
+          now: this.#now(),
+        });
+        if (claim === null) {
+          await this.#afterBatchComplete?.(outboundBatchId);
+          return;
+        }
 
-      const checkpoint = await this.#deliverClaim(claim, signal);
-      if (checkpoint.batchComplete) {
-        return;
+        const checkpoint = await this.#deliverClaim(claim, signal);
+        if (checkpoint.batchComplete) {
+          await this.#afterBatchComplete?.(outboundBatchId);
+          return;
+        }
       }
+    } catch (error) {
+      try {
+        await this.#onFailure?.({ outboundBatchId, error, signal });
+      } catch {
+        // Failure diagnostics are fail-safe and never replace delivery errors.
+      }
+      throw error;
     }
   }
 

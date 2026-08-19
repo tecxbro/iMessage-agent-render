@@ -3,12 +3,12 @@ import { createHmac } from "node:crypto";
 import { text, type Message, type Space } from "spectrum-ts";
 
 import type { OperationalRepository } from "../db/repositories/operational.js";
+import type { NativeSpectrumDeliverySender } from "../delivery/spectrum-delivery-transport.js";
 import type { DataCipher } from "../security/data-cipher.js";
 import type {
   AuthorizedInboundConsumer,
   AuthorizedSenderContext,
 } from "../security/authorize-sender.js";
-import type { OutboundTransport } from "../queue/handlers/outbound-send.js";
 import type { DurablePipeline } from "../queue/pipeline.js";
 import type { InboundTextForAuthorization } from "./message-loop.js";
 import type { SpaceResolver } from "./space-resolver.js";
@@ -68,7 +68,9 @@ export interface NativeSpectrumOutboundOptions {
  * outbox still supplies a stable logical GUID, although spectrum-ts 12.7 does
  * not yet accept that GUID as a caller-provided delivery parameter.
  */
-export class NativeSpectrumOutboundTransport implements OutboundTransport {
+export class NativeSpectrumOutboundTransport
+  implements NativeSpectrumDeliverySender
+{
   public constructor(private readonly options: NativeSpectrumOutboundOptions) {}
 
   public async send(request: {

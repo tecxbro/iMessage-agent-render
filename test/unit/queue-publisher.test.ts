@@ -46,6 +46,9 @@ describe("pg-boss publisher", () => {
       expectedChainVersion: 3,
       expectedState: "executing",
     });
+    await publisher.enqueueOutboundCoordinate({
+      outboundBatchId: batchId,
+    });
     await publisher.enqueueOutboundSend({
       outboundBatchId: batchId,
       expectedState: "queued",
@@ -60,5 +63,10 @@ describe("pg-boss publisher", () => {
     expect(send.mock.calls[2]?.[2]).toMatchObject({
       singletonKey: `outbound:${batchId}`,
     });
+    expect(send.mock.calls[2]?.[0]).toBe(QUEUE_NAMES.outboundCoordinate);
+    expect(send.mock.calls[3]?.[2]).toMatchObject({
+      singletonKey: `outbound:${batchId}`,
+    });
+    expect(send.mock.calls[3]?.[0]).toBe(QUEUE_NAMES.outboundSend);
   });
 });

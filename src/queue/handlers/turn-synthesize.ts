@@ -12,9 +12,9 @@ import {
   type InteractionDecision,
 } from "../../agent/schemas.js";
 import type { PromptBundle } from "../../config/prompt-bundle.js";
+import type { CompatibilityDeliveryRouter } from "../../delivery/compatibility-router.js";
 import { splitMessageBubbles } from "../../messaging/bubble-splitter.js";
 import { assertUserFacingMessageSafe } from "../../messaging/user-visible-policy.js";
-import type { QueuePublisher } from "../publisher.js";
 import type { TurnSynthesizePayload } from "../payloads.js";
 import { CodexStartDeniedError } from "../../security/queued-authorization.js";
 
@@ -107,7 +107,7 @@ export interface TurnSynthesisRepository {
 export interface TurnSynthesizeDependencies {
   repository: TurnSynthesisRepository;
   interaction: Pick<InteractionRuntime, "run">;
-  publisher: Pick<QueuePublisher, "enqueueOutboundSend">;
+  deliveryRouter: Pick<CompatibilityDeliveryRouter, "route">;
   promptBundle: PromptBundle;
   encrypt(plaintext: string): Promise<string> | string;
   maximumBubbleCharacters?: number;
@@ -299,9 +299,6 @@ export function createTurnSynthesizeHandler(
       promptSha256: run.promptSha256,
       encryptedParts,
     });
-    await dependencies.publisher.enqueueOutboundSend({
-      outboundBatchId: committed.outboundBatchId,
-      expectedState: "queued",
-    });
+    await dependencies.deliveryRouter.route(committed.outboundBatchId, signal);
   };
 }

@@ -15,7 +15,6 @@ import {
   type TurnSynthesisContext,
   type TurnSynthesisRepository,
 } from "../../src/queue/handlers/turn-synthesize.js";
-import type { QueuePublisher } from "../../src/queue/publisher.js";
 
 const payload = {
   chainId: "00000000-0000-4000-8000-000000000001",
@@ -108,13 +107,11 @@ describe("Step 5 final synthesis handler", () => {
         });
       }),
     };
-    const publisher: Pick<QueuePublisher, "enqueueOutboundSend"> = {
-      enqueueOutboundSend: vi.fn(async () => undefined),
-    };
+    const deliveryRouter = { route: vi.fn(async () => undefined) };
     const handler = createTurnSynthesizeHandler({
       repository,
       interaction,
-      publisher,
+      deliveryRouter,
       promptBundle: await loadPromptBundle(),
       encrypt: (plaintext) => `encrypted:${plaintext}`,
     });
@@ -142,10 +139,10 @@ describe("Step 5 final synthesis handler", () => {
         ],
       }),
     );
-    expect(publisher.enqueueOutboundSend).toHaveBeenCalledWith({
-      outboundBatchId: "batch-final",
-      expectedState: "queued",
-    });
+    expect(deliveryRouter.route).toHaveBeenCalledWith(
+      "batch-final",
+      expect.any(AbortSignal),
+    );
   });
 
   it("rejects a second delegation loop instead of starting unbounded work", async () => {
@@ -175,19 +172,17 @@ describe("Step 5 final synthesis handler", () => {
         }),
       ),
     };
-    const publisher: Pick<QueuePublisher, "enqueueOutboundSend"> = {
-      enqueueOutboundSend: vi.fn(async () => undefined),
-    };
+    const deliveryRouter = { route: vi.fn(async () => undefined) };
     const handler = createTurnSynthesizeHandler({
       repository,
       interaction,
-      publisher,
+      deliveryRouter,
       promptBundle: await loadPromptBundle(),
       encrypt: (plaintext) => plaintext,
     });
 
     await expect(handler(payload)).rejects.toThrow(/delegation.*loop/i);
     expect(repository.commitFinal).not.toHaveBeenCalled();
-    expect(publisher.enqueueOutboundSend).not.toHaveBeenCalled();
+    expect(deliveryRouter.route).not.toHaveBeenCalled();
   });
 });

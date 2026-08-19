@@ -38,6 +38,9 @@ describe("database schema invariants", () => {
     expect(carryIndexes).toContain("carried_messages_source_unique");
     expect(taskIndexes).toContain("execution_tasks_chain_name_unique");
     expect(batchIndexes).toContain("outbound_batches_chain_unique");
+    expect(batchIndexes).toContain(
+      "outbound_batches_interaction_run_unique",
+    );
     expect(partIndexes).toEqual(
       expect.arrayContaining([
         "outbound_parts_batch_position_unique",
@@ -46,7 +49,12 @@ describe("database schema invariants", () => {
     );
     expect(
       getTableConfig(outboundBatches).checks.map((constraint) => constraint.name),
-    ).toContain("outbound_batches_cursor_bounds");
+    ).toEqual(
+      expect.arrayContaining([
+        "outbound_batches_cursor_bounds",
+        "outbound_batches_origin_union",
+      ]),
+    );
     expect(getTableConfig(approvals).indexes.map((index) => index.config.name)).toContain(
       "approvals_active_task_unique",
     );

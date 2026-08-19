@@ -51,7 +51,7 @@ export class OutboundRepository {
       .from(outboundBatches)
       .where(eq(outboundBatches.id, batchId))
       .limit(1);
-    return batch?.chainId;
+    return batch?.chainId ?? undefined;
   }
 
   public async materializeBatch(input: MaterializeOutboundInput): Promise<string> {
@@ -148,6 +148,11 @@ export class OutboundRepository {
       if (batch === undefined) {
         throw new Error(
           "Outbound batch was not found. Reconcile queue jobs with materialized database batches before retrying.",
+        );
+      }
+      if (batch.chainId === null) {
+        throw new Error(
+          "The legacy outbound repository cannot send an interaction-origin batch. Wake the delivery coordinator instead.",
         );
       }
       if (batch.state === "sent") {
@@ -249,6 +254,11 @@ export class OutboundRepository {
       if (batch === undefined) {
         throw new Error(
           "Cannot checkpoint a missing outbound batch. Reconcile the job payload with database state.",
+        );
+      }
+      if (batch.chainId === null) {
+        throw new Error(
+          "The legacy outbound repository cannot checkpoint an interaction-origin batch. Wake the delivery coordinator instead.",
         );
       }
       if (batch.startIndex > position) {

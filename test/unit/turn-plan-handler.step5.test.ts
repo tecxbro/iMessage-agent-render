@@ -94,19 +94,16 @@ function fakes(context: TurnPlanContext, decision: InteractionDecision) {
       async (_request: InteractionRuntimeRequest) => interactionResult(decision),
     ),
   };
-  const publisher: Pick<
-    QueuePublisher,
-    "enqueueTaskExecute" | "enqueueOutboundSend"
-  > = {
+  const publisher: Pick<QueuePublisher, "enqueueTaskExecute"> = {
     enqueueTaskExecute: vi.fn(async () => undefined),
-    enqueueOutboundSend: vi.fn(async () => undefined),
   };
+  const deliveryRouter = { route: vi.fn(async () => undefined) };
   const recallMemory = vi.fn(async () => ({
     available: true,
     ownerProfile: [],
     recalledMemories: [],
   }));
-  return { repository, interaction, publisher, recallMemory };
+  return { repository, interaction, publisher, deliveryRouter, recallMemory };
 }
 
 describe("Step 5 turn-plan handler", () => {
@@ -145,10 +142,10 @@ describe("Step 5 turn-plan handler", () => {
     );
     expect(fake.repository.commitDelegation).not.toHaveBeenCalled();
     expect(fake.publisher.enqueueTaskExecute).not.toHaveBeenCalled();
-    expect(fake.publisher.enqueueOutboundSend).toHaveBeenCalledWith({
-      outboundBatchId: "batch-direct",
-      expectedState: "queued",
-    });
+    expect(fake.deliveryRouter.route).toHaveBeenCalledWith(
+      "batch-direct",
+      expect.any(AbortSignal),
+    );
   });
 
   it("commits a bounded DAG and enqueues both independent roots together", async () => {
@@ -219,7 +216,7 @@ describe("Step 5 turn-plan handler", () => {
       expectedChainVersion: 3,
       expectedState: "queued",
     });
-    expect(fake.publisher.enqueueOutboundSend).not.toHaveBeenCalled();
+    expect(fake.deliveryRouter.route).not.toHaveBeenCalled();
     expect(sendStatus).toHaveBeenCalledTimes(1);
   });
 
@@ -245,7 +242,7 @@ describe("Step 5 turn-plan handler", () => {
     expect(fake.recallMemory).not.toHaveBeenCalled();
     expect(fake.interaction.run).not.toHaveBeenCalled();
     expect(fake.repository.commitFinal).toHaveBeenCalledTimes(1);
-    expect(fake.publisher.enqueueOutboundSend).toHaveBeenCalledTimes(1);
+    expect(fake.deliveryRouter.route).toHaveBeenCalledTimes(1);
   });
 
   it("terminalizes a load-time queued authorization denial", async () => {

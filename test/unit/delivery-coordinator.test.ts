@@ -6,10 +6,12 @@ import type {
   DeliveryClaim,
   DeliveryRepositoryPort,
 } from "../../src/delivery/contracts.js";
+import { CompatibilityDeliveryRouter } from "../../src/delivery/compatibility-router.js";
 import { DeliveryCoordinator } from "../../src/delivery/delivery-coordinator.js";
 import { DeliveryRegistry } from "../../src/delivery/delivery-registry.js";
 import { SpectrumDeliveryTransport } from "../../src/delivery/spectrum-delivery-transport.js";
 import { createOutboundCoordinateHandler } from "../../src/queue/handlers/outbound-coordinate.js";
+import { createOutboundSendHandler } from "../../src/queue/handlers/outbound-send.js";
 
 const batch1 = "00000000-0000-4000-8000-000000000010";
 const batch2 = "00000000-0000-4000-8000-000000000011";
@@ -132,7 +134,7 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
 }
 
 describe("DeliveryCoordinator", () => {
-  it("coalesces duplicate direct and queue wakes into one send loop", async () => {
+  it("coalesces direct, new-queue, and legacy-queue wakes into one send loop", async () => {
     const repository = new MemoryDeliveryRepository();
     repository.addBatch(batch1, ["cipher:one", "cipher:two"]);
     const firstSend = deferred();
@@ -171,22 +173,53 @@ describe("DeliveryCoordinator", () => {
       now: () => baseTime,
     });
     const queueHandler = createOutboundCoordinateHandler({ coordinator });
+    const compatibilityHandler = createOutboundSendHandler({ coordinator });
+    const router = new CompatibilityDeliveryRouter({
+      coordinator,
+      publisher: {
+        publish: async (payload) => {
+          await queueHandler(payload, new AbortController().signal);
+        },
+      },
+    });
 
-    const directWake = coordinator.wake(batch1);
-    const queueWake = queueHandler(
-      { outboundBatchId: batch1 },
+    const directAndQueueWake = router.route(
+      batch1,
       new AbortController().signal,
     );
+    const legacyQueueWake = compatibilityHandler({
+      outboundBatchId: batch1,
+      expectedState: "sending",
+    });
     await vi.waitFor(() => expect(transport.send).toHaveBeenCalledTimes(1));
     expect(repository.claimAttempts).toEqual([batch1]);
 
     firstSend.resolve();
-    await Promise.all([directWake, queueWake]);
+    await Promise.all([directAndQueueWake, legacyQueueWake]);
 
     expect(sent.map((attempt) => attempt.text)).toEqual(["one", "two"]);
     expect(new Set(sent.map((attempt) => attempt.token)).size).toBe(2);
     expect(repository.batches.get(batch1)?.cursor).toBe(2);
     expect(maximumActiveSends).toBe(1);
+  });
+
+  it("starts the direct coordinator wake before durable queue pickup", async () => {
+    const queueRelease = deferred();
+    const wake = vi.fn(async () => undefined);
+    const router = new CompatibilityDeliveryRouter({
+      coordinator: { wake },
+      publisher: {
+        async publish() {
+          await queueRelease.promise;
+        },
+      },
+    });
+
+    const routed = router.route(batch1, new AbortController().signal);
+    expect(wake).toHaveBeenCalledWith(batch1, expect.any(AbortSignal));
+
+    queueRelease.resolve();
+    await routed;
   });
 
   it("serializes different batches for the same space", async () => {
@@ -230,6 +263,7 @@ describe("DeliveryCoordinator", () => {
     repository.addBatch(batch1, ["cipher:one"]);
     let fail = true;
     const attempts: string[] = [];
+    const onFailure = vi.fn(async () => undefined);
     const coordinator = new DeliveryCoordinator({
       repository,
       transport: {
@@ -248,6 +282,7 @@ describe("DeliveryCoordinator", () => {
       decrypt: (ciphertext) => ciphertext,
       claimOwner: "delivery-process-1",
       now: () => baseTime,
+      onFailure,
     });
 
     await expect(coordinator.wake(batch1)).rejects.toMatchObject({
@@ -256,6 +291,14 @@ describe("DeliveryCoordinator", () => {
     });
     expect(repository.batches.get(batch1)?.cursor).toBe(0);
     expect(repository.releases).toHaveLength(1);
+    expect(onFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outboundBatchId: batch1,
+        error: expect.objectContaining({
+          code: "DELIVERY_TRANSPORT_FAILED",
+        }),
+      }),
+    );
 
     await coordinator.wake(batch1);
     expect(attempts).toEqual([`${batch1}:0`, `${batch1}:0`]);

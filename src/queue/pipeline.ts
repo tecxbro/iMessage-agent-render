@@ -4,7 +4,7 @@ import type {
   IngestResult,
 } from "../db/repositories/inbound.js";
 import type { ChainRepository } from "../db/repositories/chains.js";
-import type { OutboundRepository } from "../db/repositories/outbound.js";
+import type { OutboundDeliveryRepository } from "../db/repositories/outbound-delivery.js";
 import type { OrchestrationRepository } from "../db/repositories/orchestration.js";
 import type { QueuePublisher } from "./publisher.js";
 
@@ -17,7 +17,7 @@ export interface DurableInboundPipelineDependencies {
     ChainRepository,
     "supersedeActiveChain" | "findQueuedChains"
   >;
-  outbound: Pick<OutboundRepository, "findResumableBatchIds">;
+  outbound: Pick<OutboundDeliveryRepository, "findRecoverableBatchIds">;
   orchestration?: Pick<
     OrchestrationRepository,
     | "requeueStaleRunningTasks"
@@ -122,11 +122,13 @@ export class DurablePipeline {
       await this.dependencies.publisher.enqueueTurnSynthesize(synthesis);
     }
 
-    const batchIds = await this.dependencies.outbound.findResumableBatchIds(limit);
+    const batchIds = await this.dependencies.outbound.findRecoverableBatchIds({
+      now,
+      limit,
+    });
     for (const outboundBatchId of batchIds) {
-      await this.dependencies.publisher.enqueueOutboundSend({
+      await this.dependencies.publisher.enqueueOutboundCoordinate({
         outboundBatchId,
-        expectedState: "sending",
       });
     }
 

@@ -513,9 +513,12 @@ export const outboundBatches = pgTable(
   "outbound_batches",
   {
     id: uuid("id").primaryKey(),
-    chainId: uuid("chain_id")
-      .notNull()
-      .references(() => chains.id, { onDelete: "cascade" }),
+    chainId: uuid("chain_id").references(() => chains.id, {
+      onDelete: "cascade",
+    }),
+    // The FK lives in migration 0012 so the central schema and its additive
+    // conversation fragment do not form a runtime import cycle.
+    interactionRunId: uuid("interaction_run_id"),
     spaceId: uuid("space_id")
       .notNull()
       .references(() => spaces.id, { onDelete: "cascade" }),
@@ -531,7 +534,14 @@ export const outboundBatches = pgTable(
   },
   (table) => [
     uniqueIndex("outbound_batches_chain_unique").on(table.chainId),
+    uniqueIndex("outbound_batches_interaction_run_unique").on(
+      table.interactionRunId,
+    ),
     index("outbound_batches_resume_idx").on(table.state, table.updatedAt),
+    check(
+      "outbound_batches_origin_union",
+      sql`(${table.chainId} is not null and ${table.interactionRunId} is null) or (${table.chainId} is null and ${table.interactionRunId} is not null)`,
+    ),
     check(
       "outbound_batches_cursor_bounds",
       sql`${table.startIndex} >= 0 and ${table.partCount} >= 0 and ${table.startIndex} <= ${table.partCount}`,

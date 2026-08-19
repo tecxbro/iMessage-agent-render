@@ -20,10 +20,16 @@ import type {
 } from "../../delivery/contracts.js";
 import type { Database, DatabaseTransaction } from "../client.js";
 import {
+  conversationStates,
+  interactionRuns,
+} from "../schema-fragments/conversation-actors.js";
+import {
   chains,
   outboundBatches,
   outboundParts,
+  spaces,
 } from "../schema.js";
+import { stableClientGuid } from "./outbound.js";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -33,11 +39,28 @@ export interface OutboundDeliveryRepositoryOptions {
   createClaimToken?: () => string;
 }
 
+export interface MaterializeInteractionOutboundInput {
+  interactionRunId: string;
+  spaceId: string;
+  generation: number;
+  encryptedParts: readonly string[];
+}
+
 type LeaseTuple = {
   claimOwner: string | null;
   claimToken: string | null;
   claimExpiresAt: Date | null;
 };
+
+type SendableOrigin =
+  | { kind: "chain"; chainId: string }
+  | {
+      kind: "interaction";
+      interactionRunId: string;
+      generation: number;
+      acceptedThroughSequence: number;
+      spaceId: string;
+    };
 
 function completeLease(lease: LeaseTuple): lease is {
   claimOwner: string;
@@ -87,6 +110,116 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
     this.#createClaimToken = options.createClaimToken ?? randomUUID;
   }
 
+  public async findChainIdForBatch(
+    outboundBatchId: string,
+  ): Promise<string | undefined> {
+    assertUuid(outboundBatchId);
+    const [batch] = await this.database
+      .select({ chainId: outboundBatches.chainId })
+      .from(outboundBatches)
+      .where(eq(outboundBatches.id, outboundBatchId))
+      .limit(1);
+    return batch?.chainId ?? undefined;
+  }
+
+  public async materializeInteractionBatch(
+    input: MaterializeInteractionOutboundInput,
+  ): Promise<string> {
+    assertUuid(input.interactionRunId);
+    assertUuid(input.spaceId);
+    if (
+      !Number.isInteger(input.generation) ||
+      input.generation < 0 ||
+      input.encryptedParts.length === 0 ||
+      input.encryptedParts.some((part) => part.length === 0)
+    ) {
+      throw new DeliveryError("DELIVERY_BATCH_INVALID", false);
+    }
+
+    return await this.database.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${input.spaceId}, 0))`,
+      );
+      await transaction.execute(sql`
+        select id
+        from ${interactionRuns}
+        where ${interactionRuns.id} = ${input.interactionRunId}
+        for update
+      `);
+      const [current] = await transaction
+        .select({
+          runId: interactionRuns.id,
+          runSpaceId: interactionRuns.spaceId,
+          runGeneration: interactionRuns.generation,
+          runState: interactionRuns.state,
+          runAcceptedThroughSequence: interactionRuns.acceptedThroughSequence,
+          conversationState: conversationStates.state,
+          actorGeneration: conversationStates.actorGeneration,
+          activeInteractionRunId: conversationStates.activeInteractionRunId,
+          conversationAcceptedThroughSequence:
+            conversationStates.acceptedThroughSequence,
+          deploymentId: spaces.deploymentId,
+        })
+        .from(interactionRuns)
+        .innerJoin(
+          conversationStates,
+          eq(conversationStates.spaceId, interactionRuns.spaceId),
+        )
+        .innerJoin(spaces, eq(spaces.id, interactionRuns.spaceId))
+        .where(eq(interactionRuns.id, input.interactionRunId))
+        .limit(1);
+      if (
+        current === undefined ||
+        current.runSpaceId !== input.spaceId ||
+        current.runGeneration !== input.generation ||
+        current.runState !== "finalizing" ||
+        current.conversationState !== "finalizing" ||
+        current.actorGeneration !== input.generation ||
+        current.activeInteractionRunId !== input.interactionRunId ||
+        current.conversationAcceptedThroughSequence !==
+          current.runAcceptedThroughSequence
+      ) {
+        throw new DeliveryError("DELIVERY_BATCH_INVALID", false);
+      }
+
+      const [existing] = await transaction
+        .select({ id: outboundBatches.id })
+        .from(outboundBatches)
+        .where(
+          eq(outboundBatches.interactionRunId, input.interactionRunId),
+        )
+        .limit(1);
+      if (existing !== undefined) {
+        return existing.id;
+      }
+
+      const outboundBatchId = randomUUID();
+      await transaction.insert(outboundBatches).values({
+        id: outboundBatchId,
+        interactionRunId: input.interactionRunId,
+        spaceId: input.spaceId,
+        state: "queued",
+        startIndex: 0,
+        partCount: input.encryptedParts.length,
+      });
+      await transaction.insert(outboundParts).values(
+        input.encryptedParts.map((contentCiphertext, position) => ({
+          id: randomUUID(),
+          batchId: outboundBatchId,
+          position,
+          clientGuid: stableClientGuid(
+            current.deploymentId,
+            outboundBatchId,
+            position,
+          ),
+          contentCiphertext,
+          state: "pending" as const,
+        })),
+      );
+      return outboundBatchId;
+    });
+  }
+
   public async claimNext(input: {
     outboundBatchId: string;
     claimOwner: string;
@@ -119,6 +252,7 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
         .select({
           id: outboundBatches.id,
           chainId: outboundBatches.chainId,
+          interactionRunId: outboundBatches.interactionRunId,
           spaceId: outboundBatches.spaceId,
           state: outboundBatches.state,
           startIndex: outboundBatches.startIndex,
@@ -128,9 +262,27 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
           claimExpiresAt: outboundBatches.claimExpiresAt,
           chainState: chains.state,
           canceledAt: chains.canceledAt,
+          runId: interactionRuns.id,
+          runSpaceId: interactionRuns.spaceId,
+          runGeneration: interactionRuns.generation,
+          runState: interactionRuns.state,
+          runAcceptedThroughSequence: interactionRuns.acceptedThroughSequence,
+          conversationState: conversationStates.state,
+          actorGeneration: conversationStates.actorGeneration,
+          activeInteractionRunId: conversationStates.activeInteractionRunId,
+          conversationAcceptedThroughSequence:
+            conversationStates.acceptedThroughSequence,
         })
         .from(outboundBatches)
-        .innerJoin(chains, eq(chains.id, outboundBatches.chainId))
+        .leftJoin(chains, eq(chains.id, outboundBatches.chainId))
+        .leftJoin(
+          interactionRuns,
+          eq(interactionRuns.id, outboundBatches.interactionRunId),
+        )
+        .leftJoin(
+          conversationStates,
+          eq(conversationStates.spaceId, outboundBatches.spaceId),
+        )
         .where(eq(outboundBatches.id, input.outboundBatchId))
         .limit(1);
 
@@ -140,7 +292,7 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
       if (batch.state === "sent") {
         return null;
       }
-      this.#assertBatchCanSend(batch);
+      const origin = this.#assertBatchCanSend(batch);
 
       const lease: LeaseTuple = batch;
       if (!emptyLease(lease) && !completeLease(lease)) {
@@ -167,7 +319,7 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
         await this.#completeEmptyBatch(
           transaction,
           batch.id,
-          batch.chainId,
+          origin,
           databaseNow,
         );
         return null;
@@ -243,6 +395,8 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
         .select({
           id: outboundBatches.id,
           chainId: outboundBatches.chainId,
+          interactionRunId: outboundBatches.interactionRunId,
+          spaceId: outboundBatches.spaceId,
           state: outboundBatches.state,
           startIndex: outboundBatches.startIndex,
           partCount: outboundBatches.partCount,
@@ -251,15 +405,33 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
           claimExpiresAt: outboundBatches.claimExpiresAt,
           chainState: chains.state,
           canceledAt: chains.canceledAt,
+          runId: interactionRuns.id,
+          runSpaceId: interactionRuns.spaceId,
+          runGeneration: interactionRuns.generation,
+          runState: interactionRuns.state,
+          runAcceptedThroughSequence: interactionRuns.acceptedThroughSequence,
+          conversationState: conversationStates.state,
+          actorGeneration: conversationStates.actorGeneration,
+          activeInteractionRunId: conversationStates.activeInteractionRunId,
+          conversationAcceptedThroughSequence:
+            conversationStates.acceptedThroughSequence,
         })
         .from(outboundBatches)
-        .innerJoin(chains, eq(chains.id, outboundBatches.chainId))
+        .leftJoin(chains, eq(chains.id, outboundBatches.chainId))
+        .leftJoin(
+          interactionRuns,
+          eq(interactionRuns.id, outboundBatches.interactionRunId),
+        )
+        .leftJoin(
+          conversationStates,
+          eq(conversationStates.spaceId, outboundBatches.spaceId),
+        )
         .where(eq(outboundBatches.id, input.outboundBatchId))
         .limit(1);
       if (batch === undefined) {
         throw new DeliveryError("DELIVERY_BATCH_NOT_FOUND", false);
       }
-      this.#assertBatchCanSend(batch);
+      const origin = this.#assertBatchCanSend(batch);
 
       const lease: LeaseTuple = batch;
       if (
@@ -324,24 +496,7 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
       }
 
       if (batchComplete) {
-        const updatedChains = await transaction
-          .update(chains)
-          .set({
-            state: "complete",
-            completedAt: input.sentAt,
-            updatedAt: input.sentAt,
-          })
-          .where(
-            and(
-              eq(chains.id, batch.chainId),
-              eq(chains.state, "sending"),
-              isNull(chains.canceledAt),
-            ),
-          )
-          .returning({ id: chains.id });
-        if (updatedChains.length !== 1) {
-          throw new DeliveryError("DELIVERY_CLAIM_LOST", true);
-        }
+        await this.#completeOrigin(transaction, origin, input.sentAt);
       }
 
       return { batchComplete, nextIndex };
@@ -385,12 +540,45 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
     const rows = await this.database
       .select({ id: outboundBatches.id })
       .from(outboundBatches)
-      .innerJoin(chains, eq(chains.id, outboundBatches.chainId))
+      .leftJoin(chains, eq(chains.id, outboundBatches.chainId))
+      .leftJoin(
+        interactionRuns,
+        eq(interactionRuns.id, outboundBatches.interactionRunId),
+      )
+      .leftJoin(
+        conversationStates,
+        eq(conversationStates.spaceId, outboundBatches.spaceId),
+      )
       .where(
         and(
           sql`${outboundBatches.state} in ('queued', 'sending')`,
-          eq(chains.state, "sending"),
-          isNull(chains.canceledAt),
+          or(
+            and(
+              isNotNull(outboundBatches.chainId),
+              isNull(outboundBatches.interactionRunId),
+              eq(chains.state, "sending"),
+              isNull(chains.canceledAt),
+            ),
+            and(
+              isNull(outboundBatches.chainId),
+              isNotNull(outboundBatches.interactionRunId),
+              eq(interactionRuns.spaceId, outboundBatches.spaceId),
+              eq(interactionRuns.state, "finalizing"),
+              eq(conversationStates.state, "finalizing"),
+              eq(
+                conversationStates.activeInteractionRunId,
+                interactionRuns.id,
+              ),
+              eq(
+                conversationStates.actorGeneration,
+                interactionRuns.generation,
+              ),
+              eq(
+                conversationStates.acceptedThroughSequence,
+                interactionRuns.acceptedThroughSequence,
+              ),
+            ),
+          ),
           or(
             and(
               isNull(outboundBatches.claimOwner),
@@ -482,6 +670,9 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
 
   #assertBatchCanSend(batch: {
     state: "queued" | "sending" | "sent" | "failed" | "canceled";
+    chainId: string | null;
+    interactionRunId: string | null;
+    spaceId: string;
     chainState:
       | "queued"
       | "planning"
@@ -491,22 +682,75 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
       | "sending"
       | "complete"
       | "failed"
-      | "canceled";
+      | "canceled"
+      | null;
     canceledAt: Date | null;
-  }): void {
-    if (
-      (batch.state !== "queued" && batch.state !== "sending") ||
-      batch.chainState !== "sending" ||
-      batch.canceledAt !== null
-    ) {
+    runId: string | null;
+    runSpaceId: string | null;
+    runGeneration: number | null;
+    runState:
+      | "starting"
+      | "active"
+      | "finalizing"
+      | "completed"
+      | "failed"
+      | "canceled"
+      | "interrupted"
+      | "orphaned"
+      | null;
+    runAcceptedThroughSequence: number | null;
+    conversationState:
+      | "idle"
+      | "starting"
+      | "active"
+      | "finalizing"
+      | "recovering"
+      | null;
+    actorGeneration: number | null;
+    activeInteractionRunId: string | null;
+    conversationAcceptedThroughSequence: number | null;
+  }): SendableOrigin {
+    if (batch.state !== "queued" && batch.state !== "sending") {
       throw new DeliveryError("DELIVERY_BATCH_INVALID", false);
     }
+
+    if (batch.chainId !== null && batch.interactionRunId === null) {
+      if (batch.chainState !== "sending" || batch.canceledAt !== null) {
+        throw new DeliveryError("DELIVERY_BATCH_INVALID", false);
+      }
+      return { kind: "chain", chainId: batch.chainId };
+    }
+
+    if (
+      batch.chainId === null &&
+      batch.interactionRunId !== null &&
+      batch.runId === batch.interactionRunId &&
+      batch.runSpaceId === batch.spaceId &&
+      batch.runState === "finalizing" &&
+      batch.conversationState === "finalizing" &&
+      batch.activeInteractionRunId === batch.interactionRunId &&
+      batch.runGeneration !== null &&
+      batch.actorGeneration === batch.runGeneration &&
+      batch.runAcceptedThroughSequence !== null &&
+      batch.conversationAcceptedThroughSequence ===
+        batch.runAcceptedThroughSequence
+    ) {
+      return {
+        kind: "interaction",
+        interactionRunId: batch.interactionRunId,
+        generation: batch.runGeneration,
+        acceptedThroughSequence: batch.runAcceptedThroughSequence,
+        spaceId: batch.spaceId,
+      };
+    }
+
+    throw new DeliveryError("DELIVERY_BATCH_INVALID", false);
   }
 
   async #completeEmptyBatch(
     transaction: DatabaseTransaction,
     outboundBatchId: string,
-    chainId: string,
+    origin: SendableOrigin,
     completedAt: Date,
   ): Promise<void> {
     await transaction
@@ -520,15 +764,78 @@ export class OutboundDeliveryRepository implements DeliveryRepositoryPort {
         updatedAt: completedAt,
       })
       .where(eq(outboundBatches.id, outboundBatchId));
-    await transaction
-      .update(chains)
-      .set({ state: "complete", completedAt, updatedAt: completedAt })
+    await this.#completeOrigin(transaction, origin, completedAt);
+  }
+
+  async #completeOrigin(
+    transaction: DatabaseTransaction,
+    origin: SendableOrigin,
+    completedAt: Date,
+  ): Promise<void> {
+    if (origin.kind === "chain") {
+      const updatedChains = await transaction
+        .update(chains)
+        .set({ state: "complete", completedAt, updatedAt: completedAt })
+        .where(
+          and(
+            eq(chains.id, origin.chainId),
+            eq(chains.state, "sending"),
+            isNull(chains.canceledAt),
+          ),
+        )
+        .returning({ id: chains.id });
+      if (updatedChains.length !== 1) {
+        throw new DeliveryError("DELIVERY_CLAIM_LOST", true);
+      }
+      return;
+    }
+
+    const updatedRuns = await transaction
+      .update(interactionRuns)
+      .set({ state: "completed", completedAt, updatedAt: completedAt })
       .where(
         and(
-          eq(chains.id, chainId),
-          eq(chains.state, "sending"),
-          isNull(chains.canceledAt),
+          eq(interactionRuns.id, origin.interactionRunId),
+          eq(interactionRuns.spaceId, origin.spaceId),
+          eq(interactionRuns.generation, origin.generation),
+          eq(interactionRuns.state, "finalizing"),
+          eq(
+            interactionRuns.acceptedThroughSequence,
+            origin.acceptedThroughSequence,
+          ),
         ),
-      );
+      )
+      .returning({ id: interactionRuns.id });
+    if (updatedRuns.length !== 1) {
+      throw new DeliveryError("DELIVERY_CLAIM_LOST", true);
+    }
+
+    const updatedConversations = await transaction
+      .update(conversationStates)
+      .set({
+        state: "idle",
+        activeInteractionRunId: null,
+        finalizedThroughSequence: origin.acceptedThroughSequence,
+        updatedAt: completedAt,
+      })
+      .where(
+        and(
+          eq(conversationStates.spaceId, origin.spaceId),
+          eq(conversationStates.state, "finalizing"),
+          eq(
+            conversationStates.activeInteractionRunId,
+            origin.interactionRunId,
+          ),
+          eq(conversationStates.actorGeneration, origin.generation),
+          eq(
+            conversationStates.acceptedThroughSequence,
+            origin.acceptedThroughSequence,
+          ),
+        ),
+      )
+      .returning({ spaceId: conversationStates.spaceId });
+    if (updatedConversations.length !== 1) {
+      throw new DeliveryError("DELIVERY_CLAIM_LOST", true);
+    }
   }
 }

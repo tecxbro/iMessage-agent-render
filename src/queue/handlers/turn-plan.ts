@@ -18,6 +18,7 @@ import {
 } from "../../commands/handlers.js";
 import { parseSlashCommand } from "../../commands/parse.js";
 import type { PromptBundle } from "../../config/prompt-bundle.js";
+import type { CompatibilityDeliveryRouter } from "../../delivery/compatibility-router.js";
 import { splitMessageBubbles } from "../../messaging/bubble-splitter.js";
 import { assertUserFacingMessageSafe } from "../../messaging/user-visible-policy.js";
 import {
@@ -102,10 +103,8 @@ export interface TurnPlanRepository {
 export interface TurnPlanDependencies {
   repository: TurnPlanRepository;
   interaction: Pick<InteractionRuntime, "run">;
-  publisher: Pick<
-    QueuePublisher,
-    "enqueueTaskExecute" | "enqueueOutboundSend"
-  >;
+  publisher: Pick<QueuePublisher, "enqueueTaskExecute">;
+  deliveryRouter: Pick<CompatibilityDeliveryRouter, "route">;
   memoryPublisher?: Pick<QueuePublisher, "enqueueMemoryCurate">;
   reconcileMemory?: () => Promise<void>;
   commandHandlers: CommandHandlersDependencies;
@@ -298,10 +297,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
         promptVersion: dependencies.promptBundle.version,
         encryptedParts: await encryptedBubbles(command.message, dependencies),
       });
-      await dependencies.publisher.enqueueOutboundSend({
-        outboundBatchId: committed.outboundBatchId,
-        expectedState: "queued",
-      });
+      await dependencies.deliveryRouter.route(committed.outboundBatchId, signal);
       return;
     }
 
@@ -361,10 +357,7 @@ export function createTurnPlanHandler(dependencies: TurnPlanDependencies) {
         ...base,
         encryptedParts: await encryptedBubbles(message, dependencies),
       });
-      await dependencies.publisher.enqueueOutboundSend({
-        outboundBatchId: committed.outboundBatchId,
-        expectedState: "queued",
-      });
+      await dependencies.deliveryRouter.route(committed.outboundBatchId, signal);
       return;
     }
 

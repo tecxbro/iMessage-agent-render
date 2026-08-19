@@ -1,14 +1,13 @@
 import type { InteractionCoordinateReason } from "../queue/payloads.js";
-import type {
-  ConversationRepositoryPort,
-  ConversationSnapshot,
-} from "./contracts.js";
+import type { ConversationSnapshot } from "./contracts.js";
 import { CoalescingMailbox } from "./coalescing-mailbox.js";
 
-export type ConversationObservationRepository = Pick<
-  ConversationRepositoryPort,
-  "loadConversation"
->;
+export interface ConversationObservationRepository {
+  loadConversation(
+    spaceId: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationSnapshot | null>;
+}
 
 export interface ConversationObservation {
   spaceId: string;
@@ -83,10 +82,12 @@ export class ConversationObservationMetrics {
     }
     this.#observations.set(state.spaceId, observation);
     const recorded = structuredClone(observation);
-    try {
-      this.#onRecord?.(recorded);
-    } catch {
-      // Telemetry consumers cannot interrupt passive observation.
+    if (cursorChanged) {
+      try {
+        this.#onRecord?.(recorded);
+      } catch {
+        // Telemetry consumers cannot interrupt passive observation.
+      }
     }
     return recorded;
   }
@@ -198,13 +199,14 @@ export class ObserveConversationActor {
   }
 
   async #loadConversation(): Promise<ConversationSnapshot | null> {
-    const signal = this.#disposeController.signal;
-    if (signal.aborted) {
-      throw signal.reason;
+    const disposeSignal = this.#disposeController.signal;
+    if (disposeSignal.aborted) {
+      throw disposeSignal.reason;
     }
 
     return await new Promise<ConversationSnapshot | null>((resolve, reject) => {
       let settled = false;
+      const loadController = new AbortController();
       const finish = (
         outcome: "resolve" | "reject",
         value: ConversationSnapshot | null | unknown,
@@ -214,26 +216,34 @@ export class ObserveConversationActor {
         }
         settled = true;
         clearTimeout(timeout);
-        signal.removeEventListener("abort", onAbort);
+        disposeSignal.removeEventListener("abort", onDispose);
         if (outcome === "resolve") {
           resolve(value as ConversationSnapshot | null);
         } else {
           reject(value);
         }
       };
-      const onAbort = (): void => finish("reject", signal.reason);
+      const onDispose = (): void => {
+        loadController.abort(disposeSignal.reason);
+        finish("reject", disposeSignal.reason);
+      };
       const timeout = setTimeout(() => {
+        const timeoutError = new Error(
+          `Observe conversation snapshot read exceeded ${this.#readTimeoutMs}ms. Check PostgreSQL health before retrying.`,
+        );
+        loadController.abort(timeoutError);
         finish(
           "reject",
-          new Error(
-            `Observe conversation snapshot read exceeded ${this.#readTimeoutMs}ms. Check PostgreSQL health before retrying.`,
-          ),
+          timeoutError,
         );
       }, this.#readTimeoutMs);
       timeout.unref?.();
-      signal.addEventListener("abort", onAbort, { once: true });
+      disposeSignal.addEventListener("abort", onDispose, { once: true });
 
-      void this.#repository.loadConversation(this.#spaceId).then(
+      void this.#repository.loadConversation(
+        this.#spaceId,
+        loadController.signal,
+      ).then(
         (snapshot) => finish("resolve", snapshot),
         (error: unknown) => finish("reject", error),
       );

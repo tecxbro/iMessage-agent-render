@@ -63,6 +63,18 @@ describe("conversation actor boundaries", () => {
     }
   });
 
+  it("requires atomic encrypted ingest and typed CAS results", async () => {
+    const contracts = await source("src/conversation/contracts.ts");
+
+    expect(contracts).toContain("ingestInput(");
+    expect(contracts).toContain("input: EncryptedConversationInput");
+    expect(contracts).not.toContain("assignInputSequence(");
+    expect(contracts).toContain("expectedConversation: ConversationCasPrecondition");
+    expect(contracts).toContain("expectedRun: InteractionRunCasPrecondition");
+    expect(contracts).toContain("Promise<InteractionRunMutationResult>");
+    expect(contracts).toContain("recoverInteraction(");
+  });
+
   it("keeps the new schema fragment independent of queue and runtime code", async () => {
     const contents = await source(
       "src/db/schema-fragments/conversation-actors.ts",

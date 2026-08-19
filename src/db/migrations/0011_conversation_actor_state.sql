@@ -1,5 +1,5 @@
 CREATE TYPE "public"."conversation_actor_state" AS ENUM('idle', 'starting', 'active', 'finalizing', 'recovering');--> statement-breakpoint
-CREATE TYPE "public"."interaction_run_state" AS ENUM('starting', 'active', 'finalizing', 'completed', 'failed', 'canceled');--> statement-breakpoint
+CREATE TYPE "public"."interaction_run_state" AS ENUM('starting', 'active', 'finalizing', 'completed', 'failed', 'canceled', 'interrupted', 'orphaned');--> statement-breakpoint
 CREATE TYPE "public"."interaction_steer_state" AS ENUM('pending', 'submitting', 'accepted', 'superseded', 'failed');--> statement-breakpoint
 CREATE TABLE "conversation_states" (
 	"space_id" uuid PRIMARY KEY NOT NULL,
@@ -44,7 +44,11 @@ CREATE TABLE "interaction_runs" (
 	"last_observed_event_json" jsonb,
 	"started_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"completed_at" timestamp with time zone,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "interaction_runs_generation_nonnegative" CHECK ("interaction_runs"."generation" >= 0),
+	CONSTRAINT "interaction_runs_sequence_order" CHECK ("interaction_runs"."started_through_sequence" <= "interaction_runs"."accepted_through_sequence"),
+	CONSTRAINT "interaction_runs_completion_consistent" CHECK (("interaction_runs"."state" in ('completed', 'failed', 'canceled', 'interrupted', 'orphaned') and "interaction_runs"."completed_at" is not null) or ("interaction_runs"."state" in ('starting', 'active', 'finalizing') and "interaction_runs"."completed_at" is null)),
+	CONSTRAINT "interaction_runs_terminal_reason_consistent" CHECK ("interaction_runs"."state" not in ('failed', 'canceled', 'interrupted', 'orphaned') or "interaction_runs"."terminal_reason" is not null)
 );
 --> statement-breakpoint
 CREATE TABLE "interaction_steers" (
@@ -66,6 +70,43 @@ CREATE TABLE "interaction_steers" (
 --> statement-breakpoint
 ALTER TABLE "chains" ADD COLUMN "source_interaction_run_id" uuid;--> statement-breakpoint
 ALTER TABLE "messages" ADD COLUMN "input_sequence" bigint;--> statement-breakpoint
+WITH "ranked_inbound" AS (
+	SELECT
+		"id",
+		row_number() OVER (
+			PARTITION BY "space_id"
+			ORDER BY "received_at" ASC NULLS LAST, "created_at" ASC, "id" ASC
+		) AS "input_sequence"
+	FROM "messages"
+	WHERE "direction" = 'inbound'
+)
+UPDATE "messages" AS "message"
+SET "input_sequence" = "ranked_inbound"."input_sequence"
+FROM "ranked_inbound"
+WHERE "message"."id" = "ranked_inbound"."id";--> statement-breakpoint
+INSERT INTO "conversation_states" (
+	"space_id",
+	"latest_input_sequence",
+	"accepted_through_sequence",
+	"finalized_through_sequence",
+	"actor_generation",
+	"active_interaction_run_id",
+	"state"
+)
+SELECT
+	"space"."id",
+	coalesce(max("message"."input_sequence"), 0),
+	coalesce(max("message"."input_sequence"), 0),
+	coalesce(max("message"."input_sequence"), 0),
+	0,
+	NULL,
+	'idle'
+FROM "spaces" AS "space"
+LEFT JOIN "messages" AS "message"
+	ON "message"."space_id" = "space"."id"
+	AND "message"."direction" = 'inbound'
+GROUP BY "space"."id"
+ON CONFLICT ("space_id") DO NOTHING;--> statement-breakpoint
 ALTER TABLE "outbound_batches" ADD COLUMN "claim_owner" varchar(128);--> statement-breakpoint
 ALTER TABLE "outbound_batches" ADD COLUMN "claim_token" uuid;--> statement-breakpoint
 ALTER TABLE "outbound_batches" ADD COLUMN "claim_expires_at" timestamp with time zone;--> statement-breakpoint

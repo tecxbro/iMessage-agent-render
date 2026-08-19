@@ -5,10 +5,21 @@
 - Apply after `0010_memory_curation_pipeline`. Every table and column in this
   migration is additive; the existing spaces, chain pipeline, queue handlers,
   and outbound sender remain valid after the migration.
-- Existing message rows keep `input_sequence = NULL`. The conversation actor
-  repository may assign sequences only to newly accepted inbound messages or
-  through a separately reviewed backfill. The partial unique index does not
-  reject multiple legacy `NULL` values.
+- Existing inbound rows are backfilled deterministically per space by
+  `received_at`, `created_at`, then `id`. Migration-created conversation state
+  initializes `latest`, `accepted`, and `finalized` through that historical
+  maximum so activating the new actor cannot repeat user-visible work already
+  owned by the legacy runtime.
+- `messages.input_sequence` remains nullable for rolling compatibility because
+  the legacy runtime can still insert rows without a sequence. Before actor
+  activation, `ConversationRepositoryPort.initializeConversation()` must lock
+  the space, sequence every remaining `NULL` inbound row in the same order,
+  advance all three historical cursors, and return the initialized state.
+  `ingestInput()` performs that initialization under the same transaction as
+  encrypted message insertion and next-sequence assignment. This legacy
+  finalization is allowed only while `actor_generation = 0`, actor state is
+  `idle`, and no run is active. A later `NULL` sequence is an invariant failure
+  that requires operator repair rather than silent finalization.
 - `spaces.interaction_thread_id` and `spaces.interaction_summary` remain in
   place for the legacy runtime. A later integration migration may move their
   ownership only after the conversation coordinator is implemented and
@@ -22,6 +33,16 @@
 - `decision_metadata_json` is for routing and task metadata only. User-visible
   draft output must be encrypted into `draft_output_ciphertext` before it is
   persisted.
+- `interrupted` and `orphaned` are terminal run states. `interrupted` records a
+  run that was still authoritative when its runtime stopped; `orphaned`
+  records a nonterminal run that no longer matches the conversation's active
+  run/generation during reconciliation. Both require `completed_at` and a
+  bounded `terminal_reason`, and neither may be resumed in place.
+- Every actor mutation compares the complete frozen conversation precondition
+  plus the relevant run/steer precondition. A generation mismatch returns the
+  typed `stale_generation` result; another compare-and-set miss returns
+  `precondition_failed`. Callers reload instead of inferring success from a
+  nullable row.
 - Deploy this migration before publishing `interaction.coordinate` or
   `outbound.coordinate` jobs. The queues may be created before their workers
   are registered.

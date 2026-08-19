@@ -1,29 +1,44 @@
 import type { JsonValue } from "../security/action-schema.js";
 import type { InteractionCoordinatePayload } from "../queue/payloads.js";
 import type {
+  BeginInteractionConversationPrecondition,
   ConversationActorState,
+  ConversationCasPrecondition,
+  ConversationInitializationResult,
+  ConversationInputIngestResult,
   ConversationStateRecord,
   InteractionAuthorizationReference,
+  InteractionRunCasPrecondition,
+  InteractionRunMutationResult,
   InteractionRunRecord,
+  InteractionRunRecoveryState,
   InteractionRunState,
-  InteractionSteerRecord,
+  InteractionSteerCasPrecondition,
+  InteractionSteerClaimResult,
+  InteractionSteerMutationResult,
   InteractionSteerState,
 } from "./state.js";
 
-export interface AssignedConversationInput {
+export interface EncryptedConversationInput {
   messageId: string;
   spaceId: string;
-  inputSequence: number;
-  actorGeneration: number;
+  externalMessageId: string;
+  senderIdentityId: string;
+  contentCiphertext: string;
+  contentHash: string;
+  receivedAt: Date;
+  retentionExpiresAt: Date;
 }
 
 export interface BeginInteractionInput {
   interactionRunId: string;
   spaceId: string;
-  expectedActorGeneration: number;
-  generation: number;
-  startedThroughSequence: number;
-  acceptedThroughSequence: number;
+  /**
+   * The run generation is actorGeneration + 1, and both initial run cursors
+   * equal latestInputSequence. The precondition permits only idle/recovering,
+   * a null active pointer, and at least one unfinalized input.
+   */
+  expectedConversation: BeginInteractionConversationPrecondition;
   modelId: string;
   reasoningEffort: string;
   promptVersion: string;
@@ -34,14 +49,19 @@ export interface BeginInteractionInput {
   >;
 }
 
+export interface ConversationCheckpointUpdate {
+  state: ConversationActorState;
+  activeInteractionRunId: string | null;
+  acceptedThroughSequence: number;
+  finalizedThroughSequence: number;
+}
+
 export interface InteractionRunCheckpoint {
-  interactionRunId: string;
   spaceId: string;
-  generation: number;
-  expectedRunState: InteractionRunState;
+  expectedConversation: ConversationCasPrecondition;
+  expectedRun: InteractionRunCasPrecondition;
   nextRunState: InteractionRunState;
-  nextConversationState: ConversationActorState;
-  acceptedThroughSequence?: number;
+  nextConversation: ConversationCheckpointUpdate;
   threadId?: string | null;
   turnId?: string | null;
   /** Routing/task metadata only. User-visible draft text belongs in the encrypted field. */
@@ -54,9 +74,9 @@ export interface InteractionRunCheckpoint {
 
 export interface CreateInteractionSteerInput {
   id: string;
-  interactionRunId: string;
   spaceId: string;
-  generation: number;
+  expectedConversation: ConversationCasPrecondition;
+  expectedRun: InteractionRunCasPrecondition;
   clientUserMessageId: string;
   fromSequence: number;
   throughSequence: number;
@@ -65,10 +85,10 @@ export interface CreateInteractionSteerInput {
 }
 
 export interface InteractionSteerCheckpoint {
-  interactionSteerId: string;
-  interactionRunId: string;
-  generation: number;
-  expectedState: InteractionSteerState;
+  spaceId: string;
+  expectedConversation: ConversationCasPrecondition;
+  expectedRun: InteractionRunCasPrecondition;
+  expectedSteer: InteractionSteerCasPrecondition;
   nextState: InteractionSteerState;
   submittedAt?: Date | null;
   acceptedAt?: Date | null;
@@ -79,11 +99,34 @@ export interface ConversationSnapshot {
   activeRun: InteractionRunRecord | null;
 }
 
+export interface RecoverInteractionInput {
+  spaceId: string;
+  expectedConversation: ConversationCasPrecondition;
+  expectedRun: InteractionRunCasPrecondition;
+  terminalState: InteractionRunRecoveryState;
+  terminalReason: string;
+  recoveredAt: Date;
+}
+
 export interface ConversationRepositoryPort {
-  assignInputSequence(input: {
+  /**
+   * Idempotently creates conversation state and sequences any legacy inbound
+   * rows in one transaction. Legacy rows are treated as finalized history so
+   * activating the actor cannot emit duplicate user-visible replies. This is
+   * permitted only before generation 1; a later NULL sequence is an invariant
+   * failure, not history that may be silently finalized.
+   */
+  initializeConversation(input: {
     spaceId: string;
-    messageId: string;
-  }): Promise<AssignedConversationInput>;
+  }): Promise<ConversationInitializationResult>;
+  /**
+   * Atomically initializes/locks the conversation, inserts the encrypted
+   * inbound row, assigns its next sequence, and advances latestInputSequence.
+   * A provider duplicate returns the original message ID and sequence.
+   */
+  ingestInput(
+    input: EncryptedConversationInput,
+  ): Promise<ConversationInputIngestResult>;
   loadConversation(spaceId: string): Promise<ConversationSnapshot | null>;
   loadInteractionRun(
     interactionRunId: string,
@@ -93,20 +136,29 @@ export interface ConversationRepositoryPort {
   ): Promise<InteractionAuthorizationReference | null>;
   beginInteraction(
     input: BeginInteractionInput,
-  ): Promise<InteractionRunRecord | null>;
+  ): Promise<InteractionRunMutationResult>;
   checkpointInteraction(
     input: InteractionRunCheckpoint,
-  ): Promise<InteractionRunRecord | null>;
+  ): Promise<InteractionRunMutationResult>;
+  /**
+   * Terminalizes a run before recovery. Interrupted runs were still active
+   * when their runtime ended; orphaned runs no longer match the authoritative
+   * active pointer/generation. Neither state may be resumed in place.
+   */
+  recoverInteraction(
+    input: RecoverInteractionInput,
+  ): Promise<InteractionRunMutationResult>;
   createSteer(
     input: CreateInteractionSteerInput,
-  ): Promise<InteractionSteerRecord>;
+  ): Promise<InteractionSteerMutationResult>;
   claimPendingSteer(input: {
-    interactionRunId: string;
-    generation: number;
-  }): Promise<InteractionSteerRecord | null>;
+    spaceId: string;
+    expectedConversation: ConversationCasPrecondition;
+    expectedRun: InteractionRunCasPrecondition;
+  }): Promise<InteractionSteerClaimResult>;
   checkpointSteer(
     input: InteractionSteerCheckpoint,
-  ): Promise<InteractionSteerRecord | null>;
+  ): Promise<InteractionSteerMutationResult>;
 }
 
 export interface InteractionContextMessage {

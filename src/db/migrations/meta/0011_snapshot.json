@@ -3371,7 +3371,24 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "interaction_runs_generation_nonnegative": {
+          "name": "interaction_runs_generation_nonnegative",
+          "value": "\"interaction_runs\".\"generation\" >= 0"
+        },
+        "interaction_runs_sequence_order": {
+          "name": "interaction_runs_sequence_order",
+          "value": "\"interaction_runs\".\"started_through_sequence\" <= \"interaction_runs\".\"accepted_through_sequence\""
+        },
+        "interaction_runs_completion_consistent": {
+          "name": "interaction_runs_completion_consistent",
+          "value": "(\"interaction_runs\".\"state\" in ('completed', 'failed', 'canceled', 'interrupted', 'orphaned') and \"interaction_runs\".\"completed_at\" is not null) or (\"interaction_runs\".\"state\" in ('starting', 'active', 'finalizing') and \"interaction_runs\".\"completed_at\" is null)"
+        },
+        "interaction_runs_terminal_reason_consistent": {
+          "name": "interaction_runs_terminal_reason_consistent",
+          "value": "\"interaction_runs\".\"state\" not in ('failed', 'canceled', 'interrupted', 'orphaned') or \"interaction_runs\".\"terminal_reason\" is not null"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.interaction_steers": {
@@ -4434,7 +4451,9 @@
         "finalizing",
         "completed",
         "failed",
-        "canceled"
+        "canceled",
+        "interrupted",
+        "orphaned"
       ]
     },
     "public.interaction_steer_state": {

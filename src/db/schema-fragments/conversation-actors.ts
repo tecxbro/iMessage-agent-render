@@ -81,6 +81,22 @@ export const interactionRuns = pgTable(
       table.generation,
     ),
     index("interaction_runs_space_state_idx").on(table.spaceId, table.state),
+    check(
+      "interaction_runs_generation_nonnegative",
+      sql`${table.generation} >= 0`,
+    ),
+    check(
+      "interaction_runs_sequence_order",
+      sql`${table.startedThroughSequence} <= ${table.acceptedThroughSequence}`,
+    ),
+    check(
+      "interaction_runs_completion_consistent",
+      sql`(${table.state} in ('completed', 'failed', 'canceled', 'interrupted', 'orphaned') and ${table.completedAt} is not null) or (${table.state} in ('starting', 'active', 'finalizing') and ${table.completedAt} is null)`,
+    ),
+    check(
+      "interaction_runs_terminal_reason_consistent",
+      sql`${table.state} not in ('failed', 'canceled', 'interrupted', 'orphaned') or ${table.terminalReason} is not null`,
+    ),
   ],
 );
 

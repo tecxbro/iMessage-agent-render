@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
@@ -8,13 +11,24 @@ import {
   deliveryErrorCodeSchema,
 } from "../../src/conversation/errors.js";
 import {
+  BEGIN_INTERACTION_CONVERSATION_STATES,
   CONVERSATION_ACTOR_STATES,
+  CONVERSATION_CAS_FAILURE_REASONS,
+  INTERACTION_RUN_RECOVERY_STATES,
   INTERACTION_RUN_STATES,
   INTERACTION_STEER_STATES,
+  beginInteractionConversationPreconditionSchema,
+  conversationCasFailureSchema,
+  conversationCasPreconditionSchema,
+  conversationInputIngestResultSchema,
   conversationStateRecordSchema,
   interactionAuthorizationReferenceSchema,
   interactionDecisionMetadataSchema,
+  interactionRunCasPreconditionSchema,
+  interactionRunMutationResultSchema,
   interactionRunRecordSchema,
+  interactionSteerCasPreconditionSchema,
+  interactionSteerClaimResultSchema,
   interactionSteerRecordSchema,
 } from "../../src/conversation/state.js";
 import {
@@ -65,6 +79,12 @@ describe("conversation actor contracts", () => {
       "completed",
       "failed",
       "canceled",
+      "interrupted",
+      "orphaned",
+    ]);
+    expect(INTERACTION_RUN_RECOVERY_STATES).toEqual([
+      "interrupted",
+      "orphaned",
     ]);
     expect(INTERACTION_STEER_STATES).toEqual([
       "pending",
@@ -123,6 +143,52 @@ describe("conversation actor contracts", () => {
         updatedAt: now,
       }).success,
     ).toBe(true);
+    expect(
+      interactionRunRecordSchema.safeParse({
+        id: ids.run,
+        spaceId: ids.space,
+        generation: 1,
+        state: "orphaned",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        startedThroughSequence: 1,
+        acceptedThroughSequence: 2,
+        modelId: "gpt-5.6-luna",
+        reasoningEffort: "high",
+        promptVersion: "conversation-v1",
+        promptSha256: "a".repeat(64),
+        decisionMetadataJson: { route: "direct" },
+        draftOutputCiphertext: "cipher:draft",
+        terminalReason: "active_pointer_mismatch",
+        lastObservedEventJson: { type: "turn_started" },
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+      }).success,
+    ).toBe(true);
+    expect(
+      interactionRunRecordSchema.safeParse({
+        id: ids.run,
+        spaceId: ids.space,
+        generation: 1,
+        state: "interrupted",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        startedThroughSequence: 1,
+        acceptedThroughSequence: 2,
+        modelId: "gpt-5.6-luna",
+        reasoningEffort: "high",
+        promptVersion: "conversation-v1",
+        promptSha256: "a".repeat(64),
+        decisionMetadataJson: { route: "direct" },
+        draftOutputCiphertext: null,
+        terminalReason: null,
+        lastObservedEventJson: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      }).success,
+    ).toBe(false);
 
     expect(
       interactionSteerRecordSchema.safeParse({
@@ -158,6 +224,91 @@ describe("conversation actor contracts", () => {
         answer: "plaintext user-visible output",
       }).success,
     ).toBe(false);
+  });
+
+  it("runtime-validates atomic ingest and exact compare-and-set outcomes", () => {
+    const expectedConversation = {
+      actorGeneration: 4,
+      state: "active" as const,
+      activeInteractionRunId: ids.run,
+      latestInputSequence: 9,
+      acceptedThroughSequence: 8,
+      finalizedThroughSequence: 7,
+    };
+    expect(
+      conversationCasPreconditionSchema.safeParse(expectedConversation).success,
+    ).toBe(true);
+    expect(BEGIN_INTERACTION_CONVERSATION_STATES).toEqual([
+      "idle",
+      "recovering",
+    ]);
+    expect(
+      beginInteractionConversationPreconditionSchema.safeParse({
+        actorGeneration: 3,
+        state: "recovering",
+        activeInteractionRunId: null,
+        latestInputSequence: 9,
+        acceptedThroughSequence: 8,
+        finalizedThroughSequence: 7,
+      }).success,
+    ).toBe(true);
+    expect(
+      beginInteractionConversationPreconditionSchema.safeParse({
+        actorGeneration: 3,
+        state: "active",
+        activeInteractionRunId: ids.run,
+        latestInputSequence: 9,
+        acceptedThroughSequence: 8,
+        finalizedThroughSequence: 7,
+      }).success,
+    ).toBe(false);
+    expect(
+      interactionRunCasPreconditionSchema.safeParse({
+        interactionRunId: ids.run,
+        generation: 4,
+        state: "active",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        acceptedThroughSequence: 8,
+      }).success,
+    ).toBe(true);
+    expect(
+      interactionSteerCasPreconditionSchema.safeParse({
+        interactionSteerId: ids.steer,
+        state: "submitting",
+        expectedTurnId: "turn-1",
+        submissionGeneration: 2,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      conversationInputIngestResultSchema.safeParse({
+        status: "inserted",
+        input: {
+          messageId: ids.message,
+          spaceId: ids.space,
+          inputSequence: 9,
+          actorGeneration: 4,
+        },
+      }).success,
+    ).toBe(true);
+    const stale = {
+      status: "stale_generation" as const,
+      spaceId: ids.space,
+      expectedActorGeneration: 3,
+      actualActorGeneration: 4,
+    };
+    expect(conversationCasFailureSchema.parse(stale)).toEqual(stale);
+    expect(interactionRunMutationResultSchema.parse(stale)).toEqual(stale);
+    expect(interactionSteerClaimResultSchema.parse(stale)).toEqual(stale);
+    expect(
+      interactionRunMutationResultSchema.safeParse(null).success,
+    ).toBe(false);
+    expect(CONVERSATION_CAS_FAILURE_REASONS).toEqual([
+      "conversation_precondition",
+      "run_precondition",
+      "steer_precondition",
+    ]);
   });
 
   it("runtime-validates identifier-only coordinator payloads", () => {
@@ -243,6 +394,14 @@ describe("conversation actor contracts", () => {
     expect(runConfig.indexes.map((index) => index.config.name)).toContain(
       "interaction_runs_space_generation_unique",
     );
+    expect(runConfig.checks.map((constraint) => constraint.name)).toEqual(
+      expect.arrayContaining([
+        "interaction_runs_generation_nonnegative",
+        "interaction_runs_sequence_order",
+        "interaction_runs_completion_consistent",
+        "interaction_runs_terminal_reason_consistent",
+      ]),
+    );
     expect(steerConfig.indexes.map((index) => index.config.name)).toEqual(
       expect.arrayContaining([
         "interaction_steers_run_message_unique",
@@ -261,5 +420,21 @@ describe("conversation actor contracts", () => {
         "authorization_revision",
       ]),
     );
+  });
+
+  it("backfills and initializes legacy input history in migration 0011", async () => {
+    const migration = await readFile(
+      resolve("src/db/migrations/0011_conversation_actor_state.sql"),
+      "utf8",
+    );
+
+    expect(migration).toContain('row_number() OVER (');
+    expect(migration).toContain('PARTITION BY "space_id"');
+    expect(migration).toContain(
+      'ORDER BY "received_at" ASC NULLS LAST, "created_at" ASC, "id" ASC',
+    );
+    expect(migration).toContain('INSERT INTO "conversation_states"');
+    expect(migration.match(/coalesce\(max\("message"\."input_sequence"\), 0\)/gu))
+      .toHaveLength(3);
   });
 });

@@ -197,6 +197,52 @@ describeDatabase("conversation actor schema migration", () => {
       decisionMetadataJson: { route: "direct" },
       draftOutputCiphertext: "cipher:user-visible-draft",
     });
+    await expect(
+      client.database.insert(interactionRuns).values({
+        id: "11000000-0000-4000-8000-000000000020",
+        spaceId: ids.space,
+        generation: 2,
+        state: "interrupted",
+        startedThroughSequence: 1,
+        acceptedThroughSequence: 3,
+        modelId: "gpt-5.6-luna",
+        reasoningEffort: "high",
+        promptVersion: "conversation-v1",
+        promptSha256: "b".repeat(64),
+        terminalReason: "coordinator_shutdown",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      client.database.insert(interactionRuns).values({
+        id: "11000000-0000-4000-8000-000000000020",
+        spaceId: ids.space,
+        generation: 2,
+        state: "interrupted",
+        startedThroughSequence: 1,
+        acceptedThroughSequence: 3,
+        modelId: "gpt-5.6-luna",
+        reasoningEffort: "high",
+        promptVersion: "conversation-v1",
+        promptSha256: "b".repeat(64),
+        terminalReason: "coordinator_shutdown",
+        completedAt: new Date("2026-08-18T00:00:03Z"),
+      }),
+    ).resolves.toBeDefined();
+    await expect(
+      client.database.insert(interactionRuns).values({
+        id: "11000000-0000-4000-8000-000000000021",
+        spaceId: ids.space,
+        generation: 3,
+        state: "orphaned",
+        startedThroughSequence: 1,
+        acceptedThroughSequence: 3,
+        modelId: "gpt-5.6-luna",
+        reasoningEffort: "high",
+        promptVersion: "conversation-v1",
+        promptSha256: "c".repeat(64),
+        completedAt: new Date("2026-08-18T00:00:04Z"),
+      }),
+    ).rejects.toThrow();
     await client.database.insert(interactionAuthorizationReferences).values({
       interactionRunId: ids.run,
       deploymentId: ids.deployment,

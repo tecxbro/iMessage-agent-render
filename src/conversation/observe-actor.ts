@@ -21,8 +21,26 @@ export interface ConversationObservation {
   observedAt: Date;
 }
 
+export interface ConversationObservationMetricsOptions {
+  maximumTrackedSpaces?: number;
+  onRecord?: (observation: ConversationObservation) => void;
+}
+
 export class ConversationObservationMetrics {
   readonly #observations = new Map<string, ConversationObservation>();
+  readonly #maximumTrackedSpaces: number;
+  readonly #onRecord: ((observation: ConversationObservation) => void) | undefined;
+
+  public constructor(options: ConversationObservationMetricsOptions = {}) {
+    const maximumTrackedSpaces = options.maximumTrackedSpaces ?? 1_000;
+    if (!Number.isSafeInteger(maximumTrackedSpaces) || maximumTrackedSpaces < 1) {
+      throw new Error(
+        "Conversation observation metric capacity must be a positive integer.",
+      );
+    }
+    this.#maximumTrackedSpaces = maximumTrackedSpaces;
+    this.#onRecord = options.onRecord;
+  }
 
   public record(input: {
     snapshot: ConversationSnapshot;
@@ -55,8 +73,22 @@ export class ConversationObservationMetrics {
           : current.observationCount + (cursorChanged ? 1 : 0),
       observedAt: input.observedAt,
     };
+    if (current !== undefined) {
+      this.#observations.delete(state.spaceId);
+    } else if (this.#observations.size >= this.#maximumTrackedSpaces) {
+      const oldestSpaceId = this.#observations.keys().next().value;
+      if (oldestSpaceId !== undefined) {
+        this.#observations.delete(oldestSpaceId);
+      }
+    }
     this.#observations.set(state.spaceId, observation);
-    return structuredClone(observation);
+    const recorded = structuredClone(observation);
+    try {
+      this.#onRecord?.(recorded);
+    } catch {
+      // Telemetry consumers cannot interrupt passive observation.
+    }
+    return recorded;
   }
 
   public get(spaceId: string): ConversationObservation | undefined {
@@ -78,6 +110,7 @@ export interface ObserveConversationActorOptions {
   repository: ConversationObservationRepository;
   metrics: ConversationObservationMetrics;
   now?: () => Date;
+  readTimeoutMs?: number;
 }
 
 /**
@@ -91,6 +124,8 @@ export class ObserveConversationActor {
   readonly #repository: ConversationObservationRepository;
   readonly #metrics: ConversationObservationMetrics;
   readonly #now: () => Date;
+  readonly #readTimeoutMs: number;
+  readonly #disposeController = new AbortController();
   #loopPromise: Promise<void> | null = null;
   #disposed = false;
 
@@ -99,6 +134,10 @@ export class ObserveConversationActor {
     this.#repository = options.repository;
     this.#metrics = options.metrics;
     this.#now = options.now ?? (() => new Date());
+    this.#readTimeoutMs = options.readTimeoutMs ?? 2_000;
+    if (!Number.isSafeInteger(this.#readTimeoutMs) || this.#readTimeoutMs < 1) {
+      throw new Error("Observe conversation actor read timeout must be positive.");
+    }
   }
 
   public wake(reason: InteractionCoordinateReason): Promise<void> {
@@ -113,6 +152,9 @@ export class ObserveConversationActor {
 
   public dispose(): void {
     this.#disposed = true;
+    this.#disposeController.abort(
+      new DOMException("Observe conversation actor was disposed.", "AbortError"),
+    );
   }
 
   #ensureLoop(): Promise<void> {
@@ -135,8 +177,8 @@ export class ObserveConversationActor {
       if (reasons.size === 0) {
         return;
       }
-      const snapshot = await this.#repository.loadConversation(this.#spaceId);
-      if (snapshot !== null) {
+      const snapshot = await this.#loadConversation();
+      if (!this.#disposed && snapshot !== null) {
         this.#metrics.record({
           snapshot,
           reasons,
@@ -153,5 +195,48 @@ export class ObserveConversationActor {
         return;
       }
     }
+  }
+
+  async #loadConversation(): Promise<ConversationSnapshot | null> {
+    const signal = this.#disposeController.signal;
+    if (signal.aborted) {
+      throw signal.reason;
+    }
+
+    return await new Promise<ConversationSnapshot | null>((resolve, reject) => {
+      let settled = false;
+      const finish = (
+        outcome: "resolve" | "reject",
+        value: ConversationSnapshot | null | unknown,
+      ): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", onAbort);
+        if (outcome === "resolve") {
+          resolve(value as ConversationSnapshot | null);
+        } else {
+          reject(value);
+        }
+      };
+      const onAbort = (): void => finish("reject", signal.reason);
+      const timeout = setTimeout(() => {
+        finish(
+          "reject",
+          new Error(
+            `Observe conversation snapshot read exceeded ${this.#readTimeoutMs}ms. Check PostgreSQL health before retrying.`,
+          ),
+        );
+      }, this.#readTimeoutMs);
+      timeout.unref?.();
+      signal.addEventListener("abort", onAbort, { once: true });
+
+      void this.#repository.loadConversation(this.#spaceId).then(
+        (snapshot) => finish("resolve", snapshot),
+        (error: unknown) => finish("reject", error),
+      );
+    });
   }
 }

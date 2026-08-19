@@ -21,6 +21,8 @@ export interface DatabaseClientOptions {
   maxConnections?: number;
   connectionTimeoutMs?: number;
   idleTimeoutMs?: number;
+  statementTimeoutMs?: number;
+  queryTimeoutMs?: number;
   ssl?: PoolConfig["ssl"];
 }
 
@@ -31,6 +33,12 @@ export function createDatabaseClient(options: DatabaseClientOptions): DatabaseCl
     max: options.maxConnections ?? 10,
     connectionTimeoutMillis: options.connectionTimeoutMs ?? 10_000,
     idleTimeoutMillis: options.idleTimeoutMs ?? 30_000,
+    ...(options.statementTimeoutMs === undefined
+      ? {}
+      : { statement_timeout: options.statementTimeoutMs }),
+    ...(options.queryTimeoutMs === undefined
+      ? {}
+      : { query_timeout: options.queryTimeoutMs }),
     ...(options.ssl === undefined ? {} : { ssl: options.ssl }),
   });
   const database = drizzle({ client: pool, schema });

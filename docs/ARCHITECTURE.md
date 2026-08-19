@@ -183,6 +183,31 @@ For each accepted text:
 
 If queue scheduling fails after insert, the message remains durable. Reconciliation finds spaces with undrained input and re-creates the singleton flush.
 
+#### Observe-mode cutover
+
+`CONVERSATION_ENGINE=legacy` remains the default. In `observe`, the authorized
+inbound transaction also assigns the per-space input sequence and advances
+`latest_input_sequence`. Only after that commit completes, production starts a
+direct actor-registry wake and publishes the identifier-only
+`interaction.coordinate` wake. Both are bounded, best-effort hints and cannot
+hold the legacy receive loop. The observer can only load the conversation
+snapshot and update a bounded `observedThroughSequence` metric; it has no
+runtime, task, delivery, or mutation port. Each cursor observation is exported
+as structured, content-free operational telemetry only when its cursor changes.
+Observer reads use a dedicated one-connection PostgreSQL pool with client and
+server timeouts, so passive work cannot consume the legacy runtime's pool.
+
+The legacy `inbound.flush`, `turn.plan`, `turn.synthesize`, and `outbound.send`
+workers remain the sole model and output path. Startup scans the exact
+`latest_input_sequence > finalized_through_sequence` predicate with keyset
+pagination and emits both recovery wakes sequentially. The scan is detached
+from authoritative startup readiness, and duplicate provider delivery
+republishes both idempotent hints. Observe ingestion advances only
+`latest_input_sequence`; it preserves both accepted and finalized cursors.
+Ongoing finalization remains reserved for the later actor cutover.
+`CONVERSATION_ENGINE=actor` is rejected by this release rather than silently
+downgraded.
+
 ### 5.3 Flush
 
 The flush transaction drains undrained and carried messages in order, creates a versioned chain with the deployment's current effective model/effort snapshot, captures the principal and every authorized contributor identity reference, cancels the stale chain, and enqueues one `turn.plan` job. Queue payloads contain identifiers and expected versions/states, not raw personal content. A later dashboard change affects the next chain and cannot change running work.

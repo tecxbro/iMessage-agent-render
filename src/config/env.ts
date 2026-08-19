@@ -175,6 +175,9 @@ const rawEnvironmentSchema = z
       ),
 
     // Operational limits, retention, and logging
+    CONVERSATION_ENGINE: z
+      .enum(["legacy", "observe", "actor"])
+      .default("legacy"),
     INBOUND_DEBOUNCE_MS: integerFromEnvironment(
       "INBOUND_DEBOUNCE_MS",
       3_000,

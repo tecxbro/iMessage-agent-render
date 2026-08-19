@@ -147,6 +147,354 @@ describe("durable receive, debounce, planning, and synthesis recovery", () => {
     expect(scheduleInboundFlush).toHaveBeenNthCalledWith(2, { spaceId }, 4_000);
   });
 
+  it("starts the direct observation wake before durable publication settles", async () => {
+    let releaseDurable!: () => void;
+    const durableSettled = new Promise<void>((resolve) => {
+      releaseDurable = resolve;
+    });
+    const events: string[] = [];
+    let ingestionSettled = false;
+    const pipeline = new DurablePipeline({
+      inbound: {
+        ingestAcceptedMessage: vi.fn(async () => {
+          events.push("sequenced-commit");
+          return { inserted: true, messageId };
+        }),
+        findSpacesWithUndrainedInbound: vi.fn(async () => []),
+      },
+      chains: {
+        supersedeActiveChain: vi.fn(async () => ({
+          canceledChainIds: [],
+          carriedMessageIds: [],
+        })),
+        findQueuedChains: vi.fn(async () => []),
+      },
+      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      publisher: {
+        scheduleInboundFlush: vi.fn(async () => {
+          events.push("legacy-flush-scheduled");
+        }),
+        enqueueTurnPlan: vi.fn(async () => undefined),
+        enqueueTaskExecute: vi.fn(async () => undefined),
+        enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundSend: vi.fn(async () => undefined),
+        enqueueApprovalRequest: vi.fn(async () => undefined),
+        enqueueApprovalExecute: vi.fn(async () => undefined),
+        enqueueMemoryCurate: vi.fn(async () => undefined),
+      },
+      conversationObservation: {
+        actorRegistry: {
+          wake: vi.fn(async () => {
+            events.push("direct-wake");
+          }),
+        },
+        publisher: {
+          enqueueInteractionCoordinate: vi.fn(async () => {
+            events.push("durable-wake-started");
+            await durableSettled;
+          }),
+        },
+        recovery: {
+          findSpacesWithUnfinalizedInput: vi.fn(async () => []),
+        },
+      },
+      debounceMs: 4_000,
+    });
+
+    const ingestion = pipeline
+      .ingestAndSchedule({
+        spaceId,
+        externalMessageId: "provider-observe-latency",
+        senderIdentityId: "00000000-0000-4000-8000-000000000105",
+        contentCiphertext: "encrypted",
+        contentHash: "hash",
+        receivedAt: new Date("2026-08-14T12:00:00.000Z"),
+        retentionExpiresAt: new Date("2026-09-13T12:00:00.000Z"),
+      })
+      .finally(() => {
+        ingestionSettled = true;
+      });
+
+    await vi.waitFor(() => {
+      expect(events).toContain("legacy-flush-scheduled");
+    });
+    expect(events).toEqual([
+      "sequenced-commit",
+      "direct-wake",
+      "durable-wake-started",
+      "legacy-flush-scheduled",
+    ]);
+    await ingestion;
+    expect(ingestionSettled).toBe(true);
+
+    releaseDurable();
+  });
+
+  it("paginates startup observation recovery and emits both wake paths", async () => {
+    const space2 = "00000000-0000-4000-8000-000000000108";
+    const space3 = "00000000-0000-4000-8000-000000000109";
+    const directWake = vi.fn(async () => undefined);
+    const durableWake = vi.fn(async () => undefined);
+    const findSpacesWithUnfinalizedInput = vi
+      .fn()
+      .mockResolvedValueOnce([spaceId, space2])
+      .mockResolvedValueOnce([space3]);
+    const pipeline = new DurablePipeline({
+      inbound: {
+        ingestAcceptedMessage: vi.fn(),
+        findSpacesWithUndrainedInbound: vi.fn(async () => []),
+      },
+      chains: {
+        supersedeActiveChain: vi.fn(),
+        findQueuedChains: vi.fn(async () => []),
+      },
+      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      publisher: {
+        scheduleInboundFlush: vi.fn(async () => undefined),
+        enqueueTurnPlan: vi.fn(async () => undefined),
+        enqueueTaskExecute: vi.fn(async () => undefined),
+        enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundSend: vi.fn(async () => undefined),
+        enqueueApprovalRequest: vi.fn(async () => undefined),
+        enqueueApprovalExecute: vi.fn(async () => undefined),
+        enqueueMemoryCurate: vi.fn(async () => undefined),
+      },
+      conversationObservation: {
+        actorRegistry: { wake: directWake },
+        publisher: { enqueueInteractionCoordinate: durableWake },
+        recovery: { findSpacesWithUnfinalizedInput },
+      },
+      debounceMs: 4_000,
+    });
+
+    await expect(pipeline.reconcile(2)).resolves.toMatchObject({
+      inboundFlushesScheduled: 0,
+    });
+    await vi.waitFor(() => {
+      expect(durableWake).toHaveBeenCalledTimes(3);
+    });
+    expect(findSpacesWithUnfinalizedInput).toHaveBeenNthCalledWith(1, {
+      limit: 2,
+    });
+    expect(findSpacesWithUnfinalizedInput).toHaveBeenNthCalledWith(2, {
+      limit: 2,
+      afterSpaceId: space2,
+    });
+    for (const recoveredSpaceId of [spaceId, space2, space3]) {
+      expect(directWake).toHaveBeenCalledWith(recoveredSpaceId, "recovery");
+      expect(durableWake).toHaveBeenCalledWith({
+        spaceId: recoveredSpaceId,
+        reason: "recovery",
+      });
+    }
+  });
+
+  it("keeps the legacy reply schedule authoritative when observation wakes fail", async () => {
+    const scheduleInboundFlush = vi.fn(async () => undefined);
+    const onWakeFailure = vi.fn(() => {
+      throw new Error("diagnostic sink unavailable");
+    });
+    const pipeline = new DurablePipeline({
+      inbound: {
+        ingestAcceptedMessage: vi.fn(async () => ({
+          inserted: true,
+          messageId,
+        })),
+        findSpacesWithUndrainedInbound: vi.fn(async () => []),
+      },
+      chains: {
+        supersedeActiveChain: vi.fn(async () => ({
+          canceledChainIds: [],
+          carriedMessageIds: [],
+        })),
+        findQueuedChains: vi.fn(async () => []),
+      },
+      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      publisher: {
+        scheduleInboundFlush,
+        enqueueTurnPlan: vi.fn(async () => undefined),
+        enqueueTaskExecute: vi.fn(async () => undefined),
+        enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundSend: vi.fn(async () => undefined),
+        enqueueApprovalRequest: vi.fn(async () => undefined),
+        enqueueApprovalExecute: vi.fn(async () => undefined),
+        enqueueMemoryCurate: vi.fn(async () => undefined),
+      },
+      conversationObservation: {
+        actorRegistry: {
+          wake: vi.fn(async () => {
+            throw new Error("direct observer unavailable");
+          }),
+        },
+        publisher: {
+          enqueueInteractionCoordinate: vi.fn(async () => {
+            throw new Error("coordinate queue unavailable");
+          }),
+        },
+        recovery: {
+          findSpacesWithUnfinalizedInput: vi.fn(async () => []),
+        },
+        onWakeFailure,
+      },
+      debounceMs: 4_000,
+    });
+
+    await expect(
+      pipeline.ingestAndSchedule({
+        spaceId,
+        externalMessageId: "provider-observe-failure",
+        senderIdentityId: "00000000-0000-4000-8000-000000000105",
+        contentCiphertext: "encrypted",
+        contentHash: "hash",
+        receivedAt: new Date("2026-08-14T12:00:00.000Z"),
+        retentionExpiresAt: new Date("2026-09-13T12:00:00.000Z"),
+      }),
+    ).resolves.toMatchObject({ inserted: true, messageId });
+    expect(scheduleInboundFlush).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(onWakeFailure).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("bounds a stalled startup observation scan without blocking legacy recovery", async () => {
+    const onWakeFailure = vi.fn();
+    const pipeline = new DurablePipeline({
+      inbound: {
+        ingestAcceptedMessage: vi.fn(),
+        findSpacesWithUndrainedInbound: vi.fn(async () => []),
+      },
+      chains: {
+        supersedeActiveChain: vi.fn(),
+        findQueuedChains: vi.fn(async () => []),
+      },
+      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      publisher: {
+        scheduleInboundFlush: vi.fn(async () => undefined),
+        enqueueTurnPlan: vi.fn(async () => undefined),
+        enqueueTaskExecute: vi.fn(async () => undefined),
+        enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundSend: vi.fn(async () => undefined),
+        enqueueApprovalRequest: vi.fn(async () => undefined),
+        enqueueApprovalExecute: vi.fn(async () => undefined),
+        enqueueMemoryCurate: vi.fn(async () => undefined),
+      },
+      conversationObservation: {
+        actorRegistry: { wake: vi.fn(async () => undefined) },
+        publisher: { enqueueInteractionCoordinate: vi.fn(async () => undefined) },
+        recovery: {
+          findSpacesWithUnfinalizedInput: vi.fn(
+            async () => await new Promise<string[]>(() => undefined),
+          ),
+        },
+        operationTimeoutMs: 10,
+        onWakeFailure,
+      },
+      debounceMs: 4_000,
+    });
+
+    await expect(pipeline.reconcile()).resolves.toMatchObject({
+      inboundFlushesScheduled: 0,
+    });
+    await vi.waitFor(() => {
+      expect(onWakeFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ trigger: "recovery_query" }),
+      );
+    });
+  });
+
+  it("stops startup scanning after the first durable publication failure", async () => {
+    const space2 = "00000000-0000-4000-8000-000000000108";
+    const durableWake = vi.fn(async () => {
+      throw new Error("coordinate queue unavailable");
+    });
+    const directWake = vi.fn(async () => undefined);
+    const pipeline = new DurablePipeline({
+      inbound: {
+        ingestAcceptedMessage: vi.fn(),
+        findSpacesWithUndrainedInbound: vi.fn(async () => []),
+      },
+      chains: {
+        supersedeActiveChain: vi.fn(),
+        findQueuedChains: vi.fn(async () => []),
+      },
+      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      publisher: {
+        scheduleInboundFlush: vi.fn(async () => undefined),
+        enqueueTurnPlan: vi.fn(async () => undefined),
+        enqueueTaskExecute: vi.fn(async () => undefined),
+        enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundSend: vi.fn(async () => undefined),
+        enqueueApprovalRequest: vi.fn(async () => undefined),
+        enqueueApprovalExecute: vi.fn(async () => undefined),
+        enqueueMemoryCurate: vi.fn(async () => undefined),
+      },
+      conversationObservation: {
+        actorRegistry: { wake: directWake },
+        publisher: { enqueueInteractionCoordinate: durableWake },
+        recovery: {
+          findSpacesWithUnfinalizedInput: vi.fn(async () => [spaceId, space2]),
+        },
+      },
+      debounceMs: 4_000,
+    });
+
+    await expect(pipeline.reconcileConversationObservations(2)).resolves.toEqual({
+      spacesScanned: 1,
+      directWakesCompleted: 1,
+      durableWakesPublished: 0,
+    });
+    expect(directWake).toHaveBeenCalledTimes(1);
+    expect(durableWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-publishes observation wakes for duplicate provider delivery", async () => {
+    const durableWake = vi.fn(async () => undefined);
+    const pipeline = new DurablePipeline({
+      inbound: {
+        ingestAcceptedMessage: vi.fn(async () => ({
+          inserted: false,
+          messageId,
+        })),
+        findSpacesWithUndrainedInbound: vi.fn(async () => []),
+      },
+      chains: {
+        supersedeActiveChain: vi.fn(),
+        findQueuedChains: vi.fn(async () => []),
+      },
+      outbound: { findResumableBatchIds: vi.fn(async () => []) },
+      publisher: {
+        scheduleInboundFlush: vi.fn(async () => undefined),
+        enqueueTurnPlan: vi.fn(async () => undefined),
+        enqueueTaskExecute: vi.fn(async () => undefined),
+        enqueueTurnSynthesize: vi.fn(async () => undefined),
+        enqueueOutboundSend: vi.fn(async () => undefined),
+        enqueueApprovalRequest: vi.fn(async () => undefined),
+        enqueueApprovalExecute: vi.fn(async () => undefined),
+        enqueueMemoryCurate: vi.fn(async () => undefined),
+      },
+      conversationObservation: {
+        actorRegistry: { wake: vi.fn(async () => undefined) },
+        publisher: { enqueueInteractionCoordinate: durableWake },
+        recovery: { findSpacesWithUnfinalizedInput: vi.fn(async () => []) },
+      },
+      debounceMs: 4_000,
+    });
+
+    await pipeline.ingestAndSchedule({
+      spaceId,
+      externalMessageId: "provider-observe-duplicate",
+      senderIdentityId: "00000000-0000-4000-8000-000000000105",
+      contentCiphertext: "encrypted",
+      contentHash: "hash",
+      receivedAt: new Date("2026-08-14T12:00:00.000Z"),
+      retentionExpiresAt: new Date("2026-09-13T12:00:00.000Z"),
+    });
+
+    await vi.waitFor(() => {
+      expect(durableWake).toHaveBeenCalledWith({ spaceId, reason: "inbound" });
+    });
+  });
+
   it("uses stable singleton keys when debounce, planning, synthesis, and send enqueue retry", async () => {
     const upsertSingletonKeys: string[] = [];
     const sendSingletonKeys: string[] = [];

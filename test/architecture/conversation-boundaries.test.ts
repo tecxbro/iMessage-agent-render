@@ -51,15 +51,44 @@ describe("conversation actor boundaries", () => {
     );
   });
 
-  it("does not register conversation or delivery coordinator workers yet", async () => {
+  it("registers observe coordination without cutting legacy handlers over", async () => {
     const production = await source("src/runtime/production-bootstrap.ts");
     const pipeline = await source("src/queue/pipeline.ts");
+    const inbound = await source("src/db/repositories/inbound.ts");
 
-    for (const legacyRuntime of [production, pipeline]) {
-      expect(legacyRuntime).not.toContain("interactionCoordinate");
-      expect(legacyRuntime).not.toContain("outboundCoordinate");
-      expect(legacyRuntime).not.toContain("conversation/contracts");
-      expect(legacyRuntime).not.toContain("delivery/contracts");
+    expect(production).toContain("createInteractionCoordinateHandler");
+    expect(production).toContain("ConversationSequencedInboundAdapter");
+    expect(inbound).toContain("ingestObservedInput");
+    expect(production).toContain("ObserveConversationActor");
+    expect(production).not.toContain("new ConversationActor(");
+    expect(production).toContain("stopQueueAndActorRegistry(");
+    expect(production).toContain(
+      "loadConversation: async (observedSpaceId, signal)",
+    );
+    expect(production).toContain("statementTimeoutMs: 1_500");
+    expect(production).toContain("maxConnections: 1");
+    expect(production).toContain("observedThroughSequence:");
+    expect(pipeline).toContain("conversationObservation");
+    expect(pipeline).toContain("enqueueInteractionCoordinate");
+    expect(production).toContain("createTurnPlanHandler");
+    expect(production).toContain("createTurnSynthesizeHandler");
+    expect(production).toContain("createOutboundSendHandler");
+    expect(production).not.toContain("outboundCoordinate");
+    expect(production).not.toContain(
+      "await pipeline.reconcileConversationObservations();",
+    );
+    for (const queueName of [
+      "interactionCoordinate",
+      "inboundFlush",
+      "turnPlan",
+      "turnSynthesize",
+      "outboundSend",
+    ]) {
+      expect(
+        production.match(
+          new RegExp(`registerWorker\\(\\s*QUEUE_NAMES\\.${queueName}`, "gu"),
+        ),
+      ).toHaveLength(1);
     }
   });
 

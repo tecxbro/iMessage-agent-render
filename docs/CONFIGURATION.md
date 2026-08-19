@@ -89,6 +89,23 @@ An existing chain keeps the pair it captured at creation.
 API-key mode has no account catalog or plan display. It uses the stored default
 only after the exact pair passes the bounded Codex capability probe.
 
+## Conversation engine cutover
+
+| Variable | Required | Default | Allowed values | Restart required |
+|---|---:|---|---|---:|
+| `CONVERSATION_ENGINE` | No | `legacy` | `legacy`, `observe`, `actor` | Yes |
+
+`observe` keeps the legacy queue path authoritative for model calls and
+delivery while a read-only conversation actor records bounded, structured
+cursor metrics. Observe ingestion advances only the latest input cursor and
+does not modify accepted or finalized cursors. Direct and durable observation
+wakes are bounded and best-effort, with a detached startup recovery scan and
+duplicate-delivery republish; they cannot close readiness or delay the
+authoritative legacy reply path. Passive reads use an isolated one-connection
+PostgreSQL pool with client and server timeouts.
+`actor` is reserved for the later production cutover. This release rejects it
+at startup rather than silently falling back to another engine.
+
 ## Concurrency and limits
 
 | Variable | Required | Default | Allowed range | Restart required |

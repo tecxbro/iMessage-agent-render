@@ -37,8 +37,20 @@ describe("loadEnvironment", () => {
       resolve(".agent-workspaces"),
     );
     expect(environment.INBOUND_DEBOUNCE_MS).toBe(4_000);
+    expect(environment.CONVERSATION_ENGINE).toBe("legacy");
     expect(environment.LOG_MESSAGE_CONTENT).toBe(false);
   });
+
+  it.each(["legacy", "observe", "actor"] as const)(
+    "accepts the %s conversation engine",
+    (conversationEngine) => {
+      expect(
+        loadEnvironment(
+          validEnvironment({ CONVERSATION_ENGINE: conversationEngine }),
+        ).CONVERSATION_ENGINE,
+      ).toBe(conversationEngine);
+    },
+  );
 
   it("reports all missing required variables in one actionable error", () => {
     let error: unknown;
@@ -110,6 +122,7 @@ describe("loadEnvironment", () => {
     ["duration", { MAX_TASK_RUNTIME_MS: "0" }],
     ["debounce", { INBOUND_DEBOUNCE_MS: "2500" }],
     ["boolean", { LOG_MESSAGE_CONTENT: "yes" }],
+    ["conversation engine", { CONVERSATION_ENGINE: "shadow" }],
   ])("rejects malformed %s configuration", (_label, override) => {
     expect(() => loadEnvironment(validEnvironment(override))).toThrow(
       EnvironmentValidationError,

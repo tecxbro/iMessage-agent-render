@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { and, asc, eq, isNull } from "drizzle-orm";
 
+import type { PostgresConversationRepository } from "./conversation-recovery.js";
 import type { Database } from "../client.js";
 import { messages } from "../schema.js";
 
@@ -81,5 +82,46 @@ export class InboundRepository {
       .limit(limit);
 
     return rows.map((row) => row.spaceId);
+  }
+}
+
+/**
+ * Cutover adapter that replaces the legacy insert with the actor repository's
+ * atomic sequence assignment while retaining legacy recovery queries. Calling
+ * both insert paths for one provider event is intentionally impossible here.
+ */
+export class ConversationSequencedInboundAdapter {
+  public constructor(
+    private readonly legacyQueries: Pick<
+      InboundRepository,
+      "findSpacesWithUndrainedInbound"
+    >,
+    private readonly conversations: Pick<
+      PostgresConversationRepository,
+      "ingestObservedInput"
+    >,
+  ) {}
+
+  public async ingestAcceptedMessage(
+    input: AcceptedInboundMessage,
+  ): Promise<IngestResult> {
+    const ingested = await this.conversations.ingestObservedInput({
+      messageId: input.id ?? randomUUID(),
+      spaceId: input.spaceId,
+      externalMessageId: input.externalMessageId,
+      senderIdentityId: input.senderIdentityId,
+      contentCiphertext: input.contentCiphertext,
+      contentHash: input.contentHash,
+      receivedAt: input.receivedAt,
+      retentionExpiresAt: input.retentionExpiresAt,
+    });
+    return {
+      messageId: ingested.input.messageId,
+      inserted: ingested.status === "inserted",
+    };
+  }
+
+  public async findSpacesWithUndrainedInbound(limit = 100): Promise<string[]> {
+    return this.legacyQueries.findSpacesWithUndrainedInbound(limit);
   }
 }

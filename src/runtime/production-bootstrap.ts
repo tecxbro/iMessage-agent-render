@@ -31,6 +31,12 @@ import {
 } from "../agent/model-capability-source.js";
 import { ModelSettingsService } from "../agent/model-settings-service.js";
 import { ThreadStore } from "../agent/thread-store.js";
+import { ActorRegistry } from "../conversation/actor-registry.js";
+import { InteractionSemaphore } from "../conversation/interaction-semaphore.js";
+import {
+  ConversationObservationMetrics,
+  ObserveConversationActor,
+} from "../conversation/observe-actor.js";
 import { createCodexPairRunner } from "../config/capabilities.js";
 import {
   loadEnvironment,
@@ -41,6 +47,7 @@ import { createDatabaseClient, type DatabaseClient } from "../db/client.js";
 import { runDatabaseMigrations } from "../db/migrate.js";
 import { ChainRepository } from "../db/repositories/chains.js";
 import { ChainAuthorizationRepository } from "../db/repositories/chain-authorization.js";
+import { PostgresConversationRepository } from "../db/repositories/conversation-recovery.js";
 import { CommandRepository } from "../db/repositories/commands.js";
 import { PostgresCodexThreadRepository } from "../db/repositories/codex-threads.js";
 import { FailureRepository } from "../db/repositories/failures.js";
@@ -49,7 +56,10 @@ import { ApprovalRepository } from "../db/repositories/approvals.js";
 import { ActionExecutionRepository } from "../db/repositories/action-executions.js";
 import { MemoryCurationRepository } from "../db/repositories/memory-curation.js";
 import { PostgresPhotonInstallationRepository } from "../db/repositories/photon-installations.js";
-import { InboundRepository } from "../db/repositories/inbound.js";
+import {
+  ConversationSequencedInboundAdapter,
+  InboundRepository,
+} from "../db/repositories/inbound.js";
 import { PostgresMemoryReceiptStore } from "../db/repositories/memory-receipts.js";
 import {
   ModelSettingsRepository,
@@ -70,6 +80,7 @@ import {
 import { createLogger } from "../observability/logger.js";
 import { DurableQueue } from "../queue/boss.js";
 import { createInboundFlushHandler } from "../queue/handlers/inbound-flush.js";
+import { createInteractionCoordinateHandler } from "../queue/handlers/interaction-coordinate.js";
 import { createOutboundSendHandler } from "../queue/handlers/outbound-send.js";
 import { createApprovalRequestHandler } from "../queue/handlers/approval-request.js";
 import { createApprovalExecuteHandler } from "../queue/handlers/approval-execute.js";
@@ -131,6 +142,7 @@ import { createOwnerBindingRevisionPort } from "./owner-binding-revision.js";
 import { RestartableOutboundTransport } from "./restartable-outbound-transport.js";
 import type { SpectrumRunHandle } from "./spectrum-run-handle.js";
 import { preparePersistentStorage } from "./persistent-storage.js";
+import { stopQueueAndActorRegistry } from "./observe-queue-lifecycle.js";
 import {
   createDeploymentIdentityController,
   initializeDeploymentIdentityController,
@@ -141,7 +153,6 @@ import {
 interface QueueComposition {
   operational: OperationalRepository;
   pipeline: DurablePipeline;
-  inbound: InboundRepository;
   chains: ChainRepository;
   outbound: OutboundRepository;
   orchestration: OrchestrationRepository;
@@ -168,6 +179,7 @@ export interface ProductionRuntime {
   photonSetup: PhotonSetupController;
   chatgptSetup?: ChatGptSetupController;
   modelSettings: ModelSettingsController;
+  conversationObservations: ConversationObservationMetrics;
 }
 
 function required<Value>(value: Value | undefined, stage: string): Value {
@@ -228,6 +240,25 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     }
   };
   const inFlightChains = new InFlightChainRegistry();
+  const conversationObservations = new ConversationObservationMetrics({
+    maximumTrackedSpaces: 1_000,
+    onRecord: (observation) => {
+      logger.info(
+        {
+          component: "conversation_observe",
+          spaceId: observation.spaceId,
+          observedThroughSequence: observation.observedThroughSequence,
+          legacyFinalizedThroughSequence:
+            observation.legacyFinalizedThroughSequence,
+          actorGeneration: observation.actorGeneration,
+          actorState: observation.actorState,
+          observationCount: observation.observationCount,
+          reasons: observation.reasons,
+        },
+        "conversation cursor observation recorded",
+      );
+    },
+  });
   const interruptSupersededChains = (chainIds: readonly string[]): void => {
     const abortedWorkCount = inFlightChains.cancel(chainIds);
     if (abortedWorkCount > 0) {
@@ -282,11 +313,13 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
 
   // Mutable provider lifecycle state
   let databaseClient: DatabaseClient | undefined;
+  let conversationObservationDatabaseClient: DatabaseClient | undefined;
   let operationalRepository: OperationalRepository | undefined;
   let modelSettingsRepository: ModelSettingsRepository | undefined;
   let modelSettingsService: ModelSettingsService | undefined;
   let photonInstallationService: PhotonInstallationService | undefined;
   let queue: DurableQueue | undefined;
+  let conversationActorRegistry: ActorRegistry | undefined;
   let composition: QueueComposition | undefined;
   const outboundTransport = new RestartableOutboundTransport();
   const activeSpectrumRuns = new Map<
@@ -332,6 +365,11 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       // Parsing the environment and prompt contract above is the configuration
       // stage. Construct the child allowlist here so unsafe inheritance fails
       // before any provider or database connection is opened.
+      if (environment.CONVERSATION_ENGINE === "actor") {
+        throw new Error(
+          "CONVERSATION_ENGINE=actor is reserved for the production cutover and is not composed in this release. Use observe or legacy before restarting.",
+        );
+      }
       buildCodexChildEnvironment({
         parentEnvironment: {
           PATH: environment.PATH,
@@ -510,6 +548,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         "Queue deployment identity startup",
       );
 
+      try {
       queue = new DurableQueue({
         connectionString: environment.DATABASE_URL,
         onError: () => {
@@ -521,7 +560,54 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       });
       await queue.start();
       const publisher = new PgBossPublisher(queue.boss);
-      const inbound = new InboundRepository(client.database);
+      const legacyInbound = new InboundRepository(client.database);
+      const conversationWriteRepository =
+        environment.CONVERSATION_ENGINE === "observe"
+          ? new PostgresConversationRepository(client.database)
+          : undefined;
+      const observationReadSemaphore = new InteractionSemaphore(1);
+      const conversationObservationRepository =
+        environment.CONVERSATION_ENGINE === "observe"
+          ? (() => {
+              conversationObservationDatabaseClient = createDatabaseClient({
+                connectionString: environment.DATABASE_URL,
+                applicationName: "imessage-codex-agent-conversation-observer",
+                maxConnections: 1,
+                connectionTimeoutMs: 1_500,
+                statementTimeoutMs: 1_500,
+                queryTimeoutMs: 1_800,
+              });
+              return new PostgresConversationRepository(
+                conversationObservationDatabaseClient.database,
+              );
+            })()
+          : undefined;
+      if (conversationObservationRepository !== undefined) {
+        conversationActorRegistry = new ActorRegistry({
+          createActor: (spaceId) =>
+            new ObserveConversationActor({
+              spaceId,
+              repository: {
+                loadConversation: async (observedSpaceId, signal) =>
+                  await observationReadSemaphore.runExclusive(
+                    async () =>
+                      await conversationObservationRepository.loadConversation(
+                        observedSpaceId,
+                      ),
+                    signal,
+                  ),
+              },
+              metrics: conversationObservations,
+            }),
+        });
+      }
+      const inbound =
+        conversationWriteRepository === undefined
+          ? legacyInbound
+          : new ConversationSequencedInboundAdapter(
+              legacyInbound,
+              conversationWriteRepository,
+            );
       const authorizationReferences = new ChainAuthorizationRepository(
         client.database,
       );
@@ -742,6 +828,27 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         outbound,
         orchestration,
         publisher,
+        ...(conversationActorRegistry === undefined ||
+        conversationObservationRepository === undefined
+          ? {}
+          : {
+              conversationObservation: {
+                actorRegistry: conversationActorRegistry,
+                publisher,
+                recovery: conversationObservationRepository,
+                onWakeFailure: (failure) => {
+                  logger.warn(
+                    {
+                      component: "conversation_observe",
+                      errorCode: "CONVERSATION_OBSERVATION_WAKE_FAILED",
+                      trigger: failure.trigger,
+                      reason: failure.reason,
+                    },
+                    "conversation observation wake failed; the legacy reply path remains authoritative",
+                  );
+                },
+              },
+            }),
         onChainsSuperseded: interruptSupersededChains,
         debounceMs: environment.INBOUND_DEBOUNCE_MS,
         taskRuntimeMs: environment.MAX_TASK_RUNTIME_MS,
@@ -749,7 +856,6 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
       composition = {
         operational,
         pipeline,
-        inbound,
         chains,
         outbound,
         orchestration,
@@ -800,6 +906,13 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
               : "ready",
         }),
       });
+
+      if (conversationActorRegistry !== undefined) {
+        await queue.registerWorker(
+          QUEUE_NAMES.interactionCoordinate,
+          createInteractionCoordinateHandler(conversationActorRegistry),
+        );
+      }
 
       await queue.registerWorker(
         QUEUE_NAMES.inboundFlush,
@@ -964,6 +1077,29 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
         providerEnabled: memoryProvider !== undefined,
       });
       await reconcileApprovalJobs(true);
+      } catch (error) {
+        const failedQueue = queue;
+        const failedRegistry = conversationActorRegistry;
+        const failedObservationDatabase = conversationObservationDatabaseClient;
+        queue = undefined;
+        conversationActorRegistry = undefined;
+        conversationObservationDatabaseClient = undefined;
+        composition = undefined;
+        const cleanup = await Promise.allSettled([
+          stopQueueAndActorRegistry(failedQueue, failedRegistry),
+          failedObservationDatabase?.close(),
+        ]);
+        if (cleanup.some((result) => result.status === "rejected")) {
+          logger.warn(
+            {
+              component: "conversation_observe",
+              errorCode: "QUEUE_PARTIAL_START_CLEANUP_FAILED",
+            },
+            "queue startup failed and one partial-start cleanup did not complete",
+          );
+        }
+        throw error;
+      }
     },
 
     // Codex capability check
@@ -1147,13 +1283,22 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     },
 
     async stopQueue() {
-      await queue?.stop();
+      const runningQueue = queue;
+      const runningRegistry = conversationActorRegistry;
       queue = undefined;
+      conversationActorRegistry = undefined;
+      await stopQueueAndActorRegistry(runningQueue, runningRegistry);
     },
 
     async closeDatabase() {
-      await databaseClient?.close();
+      const observationDatabase = conversationObservationDatabaseClient;
+      const operationalDatabase = databaseClient;
+      conversationObservationDatabaseClient = undefined;
       databaseClient = undefined;
+      await Promise.all([
+        observationDatabase?.close(),
+        operationalDatabase?.close(),
+      ]);
     },
   };
 
@@ -1188,6 +1333,7 @@ export async function createProductionRuntime(): Promise<ProductionRuntime> {
     deploymentIdentity,
     photonSetup,
     modelSettings,
+    conversationObservations,
     ...(chatgptSetup === undefined ? {} : { chatgptSetup }),
   };
 }

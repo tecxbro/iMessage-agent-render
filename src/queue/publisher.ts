@@ -5,6 +5,7 @@ import type {
   InboundFlushPayload,
   ApprovalExecutePayload,
   ApprovalRequestPayload,
+  InteractionCoordinatePayload,
   MemoryCuratePayload,
   OutboundSendPayload,
   TaskExecutePayload,
@@ -23,7 +24,15 @@ export interface QueuePublisher {
   enqueueMemoryCurate(payload: MemoryCuratePayload): Promise<void>;
 }
 
-export class PgBossPublisher implements QueuePublisher {
+export interface InteractionCoordinatePublisher {
+  enqueueInteractionCoordinate(
+    payload: InteractionCoordinatePayload,
+  ): Promise<void>;
+}
+
+export class PgBossPublisher
+  implements QueuePublisher, InteractionCoordinatePublisher
+{
   public constructor(
     private readonly boss: Pick<PgBoss, "send" | "upsert">,
     private readonly now: () => Date = () => new Date(),
@@ -45,6 +54,16 @@ export class PgBossPublisher implements QueuePublisher {
         retryBackoff: true,
         expireInSeconds: 60,
       },
+    );
+  }
+
+  public async enqueueInteractionCoordinate(
+    payload: InteractionCoordinatePayload,
+  ): Promise<void> {
+    await this.sendSingleton(
+      QUEUE_NAMES.interactionCoordinate,
+      payload,
+      `conversation:${payload.spaceId}`,
     );
   }
 
@@ -112,6 +131,7 @@ export class PgBossPublisher implements QueuePublisher {
 
   private async sendSingleton(
     name:
+      | typeof QUEUE_NAMES.interactionCoordinate
       | typeof QUEUE_NAMES.turnPlan
       | typeof QUEUE_NAMES.taskExecute
       | typeof QUEUE_NAMES.turnSynthesize
@@ -120,6 +140,7 @@ export class PgBossPublisher implements QueuePublisher {
       | typeof QUEUE_NAMES.approvalExecute
       | typeof QUEUE_NAMES.memoryCurate,
     payload:
+      | InteractionCoordinatePayload
       | TurnPlanPayload
       | TaskExecutePayload
       | TurnSynthesizePayload

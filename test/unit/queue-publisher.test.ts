@@ -9,6 +9,27 @@ const batchId = "00000000-0000-4000-8000-000000000003";
 const taskId = "00000000-0000-4000-8000-000000000004";
 
 describe("pg-boss publisher", () => {
+  it("coalesces durable conversation wakes by space", async () => {
+    const send = vi.fn().mockResolvedValue("job-id");
+    const publisher = new PgBossPublisher({ send, upsert: vi.fn() });
+
+    await publisher.enqueueInteractionCoordinate({
+      spaceId,
+      reason: "inbound",
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      QUEUE_NAMES.interactionCoordinate,
+      { spaceId, reason: "inbound" },
+      expect.objectContaining({
+        singletonKey: `conversation:${spaceId}`,
+        retryLimit: 5,
+        retryBackoff: true,
+      }),
+    );
+    expect(JSON.stringify(send.mock.calls)).not.toContain("text");
+  });
+
   it("debounces inbound flushes by space with an ID-only payload", async () => {
     const upsert = vi.fn().mockResolvedValue({ jobs: ["job-id"], updated: 0, inserted: 1 });
     const publisher = new PgBossPublisher(

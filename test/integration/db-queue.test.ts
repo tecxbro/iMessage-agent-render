@@ -23,6 +23,7 @@ describeDatabase("pg-boss durable queue", () => {
     await queue.boss.deleteAllJobs(QUEUE_NAMES.turnSynthesize);
     await queue.boss.deleteAllJobs(QUEUE_NAMES.inboundFlush);
     await queue.boss.deleteAllJobs(QUEUE_NAMES.turnPlan);
+    await queue.boss.deleteAllJobs(QUEUE_NAMES.interactionCoordinate);
   });
 
   afterAll(async () => {
@@ -94,6 +95,51 @@ describeDatabase("pg-boss durable queue", () => {
         (job) => (job.data as { chainId?: string }).chainId === chainId,
       ),
     ).toHaveLength(1);
+  });
+
+  it("keeps one durable coordinate wake per space", async () => {
+    const publisher = new PgBossPublisher(queue.boss);
+    const payload = { spaceId, reason: "recovery" as const };
+    await Promise.all([
+      publisher.enqueueInteractionCoordinate(payload),
+      publisher.enqueueInteractionCoordinate(payload),
+    ]);
+
+    const jobs = await queue.boss.findJobs(QUEUE_NAMES.interactionCoordinate, {
+      queued: true,
+    });
+    expect(
+      jobs.filter(
+        (job) =>
+          (job.data as { spaceId?: string }).spaceId === spaceId,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("recovers a coordinate wake after queue restart", async () => {
+    await queue.boss.deleteAllJobs(QUEUE_NAMES.interactionCoordinate);
+    const publisher = new PgBossPublisher(queue.boss);
+    await publisher.enqueueInteractionCoordinate({
+      spaceId,
+      reason: "recovery",
+    });
+    await queue.stop();
+
+    queue = new DurableQueue({ connectionString: databaseUrl! });
+    await queue.start();
+    const wake = vi.fn(
+      async (_spaceId: string, _reason: string) => undefined,
+    );
+    await queue.registerWorker(QUEUE_NAMES.interactionCoordinate, async (payload) => {
+      await wake(payload.spaceId, payload.reason);
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(wake).toHaveBeenCalledWith(spaceId, "recovery");
+      },
+      { timeout: 5_000, interval: 50 },
+    );
   });
 
   it("does not retry a worker error classified as non-retryable", async () => {

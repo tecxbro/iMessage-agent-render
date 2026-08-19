@@ -54,7 +54,7 @@ describe("deployment page characterization snapshots", () => {
           supermemoryConfigured: true,
         }),
       ),
-    ).toBe("ec87a6dece34666a121a7b6b1e4ea3763088ad73fec4daf0acb3ccf8986b3c8d");
+    ).toBe("814654973bfacd6a0bb8bf37f57c7277aff4153e85fe7f703f43d49d714a42c7");
   });
 
   it("preserves provider setup states and escaping byte for byte", () => {
@@ -94,7 +94,7 @@ describe("deployment page characterization snapshots", () => {
     ];
 
     expect(digest(pages.join("\n---PAGE---\n"))).toBe(
-      "93120906ff1c0789c5bc87823f1ca6445a98fc30ae6b465896a8f4780947bfa5",
+      "db9f92c0ed5ac180196daad6ff4dff8115e7356fc5f703fbc21cb96ddd832c45",
     );
   });
 
@@ -119,13 +119,13 @@ describe("deployment page characterization snapshots", () => {
     ];
 
     expect(digest(pages.join("\n---PAGE---\n"))).toBe(
-      "77ebc71e6af50738ff20ebdbd1ce09ab4289b6f09fa1a857301d4c2faf0ff7e2",
+      "3e968c763158c463e0fd2fcf2897cbe816cb938a662c8a9add5505c9a5846a81",
     );
   });
 
   it("preserves the dashboard client script byte for byte", () => {
     expect(digest(renderDashboardScript())).toBe(
-      "7d935e0047c8e1541da88d25fd7001938d60ee75b31b557bc2fb0f44c4c26862",
+      "8d17b1ddabc5cd0c5fcfc370a837068ccf195876261dee7b678c5ffb0680dd90",
     );
   });
 });

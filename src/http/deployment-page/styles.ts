@@ -112,6 +112,7 @@ export const DEPLOYMENT_PAGE_STYLES = `    @font-face {
     .secondary-button:hover, .secondary-button:focus-visible { background: var(--soft); }
     .copy-code-button { flex: 0 0 auto; }
     .copy-code-status { min-block-size: 1.5rem; margin: 0; color: var(--muted); }
+    .auth-link-status { min-block-size: 1.5rem; margin: 0; color: var(--muted); }
     #model-settings-status:empty, #model-fallback-explanation[hidden] { display: none; }
     .site-footer { border-block-start: 0.0625rem solid var(--line); background: var(--soft); }
     .footer-inner { display: flex; inline-size: min(100% - 2.5rem, 64rem); min-block-size: 5rem; margin-inline: auto; align-items: center; justify-content: space-between; gap: 1.5rem; padding-block: 1rem; }

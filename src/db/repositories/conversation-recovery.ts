@@ -309,6 +309,20 @@ export class PostgresConversationRepository
     input: EncryptedConversationInput,
   ): Promise<ConversationInputIngestResult> {
     const ingested = await this.inbound.ingestForActor(input);
+    return this.#parseIngestResult(ingested);
+  }
+
+  /** Concrete observe-mode API that cannot advance accepted/finalized cursors. */
+  public async ingestObservedInput(
+    input: EncryptedConversationInput,
+  ): Promise<ConversationInputIngestResult> {
+    const ingested = await this.inbound.ingestForObservation(input);
+    return this.#parseIngestResult(ingested);
+  }
+
+  #parseIngestResult(
+    ingested: Awaited<ReturnType<SequencedInboundRepository["ingestForActor"]>>,
+  ): ConversationInputIngestResult {
     return conversationInputIngestResultSchema.parse({
       status: ingested.result.inserted ? "inserted" : "duplicate",
       input: {

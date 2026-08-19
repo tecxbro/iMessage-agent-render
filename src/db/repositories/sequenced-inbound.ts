@@ -42,6 +42,7 @@ function requiredSequence(value: number | null, label: string): number {
 async function initializeInTransaction(
   transaction: DatabaseTransaction,
   spaceId: string,
+  cursorPolicy: "repair_completed_prefix" | "preserve_finalization",
 ): Promise<InitializedConversation> {
   const locked = await ensureAndLockConversationState(transaction, spaceId);
   const nullableRows = await transaction
@@ -166,8 +167,14 @@ async function initializeInTransaction(
     .update(conversationStates)
     .set({
       latestInputSequence,
-      acceptedThroughSequence: finalizedThroughSequence,
-      finalizedThroughSequence,
+      acceptedThroughSequence:
+        cursorPolicy === "preserve_finalization"
+          ? locked.acceptedThroughSequence
+          : finalizedThroughSequence,
+      finalizedThroughSequence:
+        cursorPolicy === "preserve_finalization"
+          ? locked.finalizedThroughSequence
+          : finalizedThroughSequence,
       updatedAt: new Date(),
     })
     .where(eq(conversationStates.spaceId, spaceId))
@@ -194,7 +201,13 @@ export class SequencedInboundRepository {
     spaceId: string;
   }): Promise<ConversationInitializationResult> {
     return this.database.transaction(async (transaction) =>
-      (await initializeInTransaction(transaction, input.spaceId)).result,
+      (
+        await initializeInTransaction(
+          transaction,
+          input.spaceId,
+          "repair_completed_prefix",
+        )
+      ).result,
     );
   }
 
@@ -209,10 +222,28 @@ export class SequencedInboundRepository {
   public async ingestForActor(
     input: EncryptedConversationInput,
   ): Promise<SequencedInboundActorResult> {
+    return await this.#ingest(input, "repair_completed_prefix");
+  }
+
+  /**
+   * Observe-mode ingestion sequences legacy rows and advances latest input,
+   * but deliberately leaves accepted/finalized ownership with the legacy path.
+   */
+  public async ingestForObservation(
+    input: EncryptedConversationInput,
+  ): Promise<SequencedInboundActorResult> {
+    return await this.#ingest(input, "preserve_finalization");
+  }
+
+  async #ingest(
+    input: EncryptedConversationInput,
+    cursorPolicy: "repair_completed_prefix" | "preserve_finalization",
+  ): Promise<SequencedInboundActorResult> {
     return this.database.transaction(async (transaction) => {
       const initialized = await initializeInTransaction(
         transaction,
         input.spaceId,
+        cursorPolicy,
       );
       const state = initialized.result.state;
       const [duplicate] = await transaction

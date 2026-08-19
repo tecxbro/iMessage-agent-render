@@ -332,6 +332,49 @@ describeDatabase("transactional conversation ingestion", () => {
     expect(after?.activeRun).toMatchObject({ acceptedThroughSequence: 1 });
   });
 
+  it("sequences observe-mode input without taking finalization ownership", async () => {
+    await client.database.insert(chains).values({
+      id: ids.chain1,
+      spaceId: ids.spaceA,
+      version: 1,
+      state: "complete",
+      chainStartedAt: new Date("2026-08-18T10:00:00Z"),
+      completedAt: new Date("2026-08-18T10:01:00Z"),
+    });
+    await client.database.insert(messages).values({
+      id: messageId(450),
+      spaceId: ids.spaceA,
+      externalMessageId: "legacy-complete-before-observe",
+      direction: "inbound",
+      inputSequence: null,
+      senderIdentityId: ids.identity,
+      contentCiphertext: "cipher:legacy-complete-before-observe",
+      contentHash: "hash:legacy-complete-before-observe",
+      receivedAt: new Date("2026-08-18T10:00:00Z"),
+      retentionExpiresAt: new Date("2026-09-18T10:00:00Z"),
+      drainedChainId: ids.chain1,
+    });
+
+    const ingested = await repository.ingestObservedInput(
+      inboundInput({
+        id: messageId(451),
+        externalMessageId: "first-observed-input",
+        receivedAt: new Date("2026-08-18T10:02:00Z"),
+      }),
+    );
+
+    expect(ingested).toMatchObject({
+      status: "inserted",
+      input: { inputSequence: 2 },
+    });
+    const snapshot = await repository.loadActorSnapshot(ids.spaceA);
+    expect(snapshot?.state).toMatchObject({
+      latestInputSequence: 2,
+      acceptedThroughSequence: 0,
+      finalizedThroughSequence: 0,
+    });
+  });
+
   it("initializes legacy rows by received_at and id and leaves an incomplete suffix outstanding", async () => {
     const receivedAt = new Date("2026-08-18T11:00:00Z");
     const legacyIds = [messageId(501), messageId(502), messageId(503), messageId(504)];

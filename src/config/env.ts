@@ -180,9 +180,9 @@ const rawEnvironmentSchema = z
       .default("legacy"),
     INBOUND_DEBOUNCE_MS: integerFromEnvironment(
       "INBOUND_DEBOUNCE_MS",
-      3_000,
+      0,
       5_000,
-      4_000,
+      0,
     ),
     MAX_EXECUTION_CONCURRENCY: integerFromEnvironment(
       "MAX_EXECUTION_CONCURRENCY",

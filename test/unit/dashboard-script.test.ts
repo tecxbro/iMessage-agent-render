@@ -5,32 +5,70 @@ import { describe, expect, it, vi } from "vitest";
 import { renderDashboardScript } from "../../src/http/deployment-page.js";
 
 interface DashboardHarnessOptions {
+  clipboardReject?: boolean;
+  openerAssignmentThrows?: boolean;
   provider?: "photon" | "chatgpt";
   photonState?: string;
   popupBlocked?: boolean;
+  userCode?: string;
 }
 
 function createDashboardHarness(options: DashboardHarnessOptions = {}) {
   const provider = options.provider ?? "photon";
+  type CopyControl = {
+    textContent: string;
+    dataset: { copyTarget: string; copyStatus: string };
+    addEventListener(
+      type: string,
+      listener: (event: { currentTarget: CopyControl }) => Promise<void> | void,
+    ): void;
+  };
   const authListeners: Array<
-    (event: { currentTarget: { href: string }; preventDefault(): void }) => void
+    (event: {
+      currentTarget: { href: string; dataset: { authStatus: string } };
+      preventDefault(): void;
+    }) => void
+  > = [];
+  const copyListeners: Array<
+    (event: { currentTarget: CopyControl }) => Promise<void> | void
   > = [];
   const scheduled: Array<() => void | Promise<void>> = [];
   const reload = vi.fn();
   const focus = vi.fn();
+  const popupFocus = vi.fn();
   const preventDefault = vi.fn();
-  const replace = vi.fn();
   const stateElement = { textContent: "Waiting for authentication" };
+  const authStatus = { textContent: "" };
+  const codeElement = {
+    textContent:
+      options.userCode ??
+      (provider === "photon" ? "ABCD-EFGH" : "WXYZ-1234"),
+  };
+  const copyStatus = { textContent: "" };
+  const copyButton: CopyControl = {
+    textContent: "Copy code",
+    dataset: {
+      copyTarget: `${provider}-device-code`,
+      copyStatus: `${provider}-copy-status`,
+    },
+    addEventListener(type, listener) {
+      if (type === "click") copyListeners.push(listener);
+    },
+  };
   const authLink = {
     href:
       provider === "photon"
         ? "https://app.photon.codes/device"
         : "https://auth.openai.com/codex/device",
+    dataset: { authStatus: `${provider}-auth-status` },
     addEventListener(
       type: string,
       listener: (
         event: {
-          currentTarget: { href: string };
+          currentTarget: {
+            href: string;
+            dataset: { authStatus: string };
+          };
           preventDefault(): void;
         },
       ) => void,
@@ -41,15 +79,28 @@ function createDashboardHarness(options: DashboardHarnessOptions = {}) {
   const popup = {
     closed: false,
     opener: {} as unknown,
-    location: { replace },
     close: vi.fn(),
+    focus: popupFocus,
   };
+  if (options.openerAssignmentThrows === true) {
+    Object.defineProperty(popup, "opener", {
+      configurable: true,
+      get: () => ({}),
+      set: () => {
+        throw new Error("Cross-origin opener access denied");
+      },
+    });
+  }
   popup.close.mockImplementation(() => {
     popup.closed = true;
   });
 
   const windowObject = {
     open: vi.fn(() => (options.popupBlocked === true ? null : popup)),
+    screenX: 100,
+    screenY: 50,
+    outerWidth: 1200,
+    outerHeight: 900,
     location: { reload },
     focus,
     setTimeout: vi.fn((callback: () => void | Promise<void>) => {
@@ -59,6 +110,11 @@ function createDashboardHarness(options: DashboardHarnessOptions = {}) {
     clearTimeout: vi.fn(),
     addEventListener: vi.fn(),
   };
+  const writeText = options.clipboardReject
+    ? vi.fn(async () => {
+        throw new Error("Clipboard access denied");
+      })
+    : vi.fn(async (_code: string) => undefined);
   const documentObject = {
     currentScript: { dataset: { polling: "true" } },
     querySelector: () => null,
@@ -72,10 +128,16 @@ function createDashboardHarness(options: DashboardHarnessOptions = {}) {
       },
     },
     getElementById(id: string) {
-      return id === "photon-state" ? stateElement : null;
+      if (id === "photon-state") return stateElement;
+      if (id === `${provider}-device-code`) return codeElement;
+      if (id === `${provider}-copy-status`) return copyStatus;
+      if (id === `${provider}-auth-status`) return authStatus;
+      return null;
     },
-    querySelectorAll() {
-      return [authLink];
+    querySelectorAll(selector: string) {
+      if (selector === "[data-auth-link]") return [authLink];
+      if (selector === "[data-copy-target]") return [copyButton];
+      return [];
     },
   };
   const fetchImplementation = vi.fn(async (url: string) => ({
@@ -96,21 +158,28 @@ function createDashboardHarness(options: DashboardHarnessOptions = {}) {
   runInNewContext(renderDashboardScript(), {
     document: documentObject,
     fetch: fetchImplementation,
+    navigator: { clipboard: { writeText } },
     window: windowObject,
   });
 
   return {
     authLink,
     authListeners,
+    authStatus,
+    codeElement,
+    copyButton,
+    copyListeners,
+    copyStatus,
     focus,
     fetchImplementation,
     popup,
+    popupFocus,
     preventDefault,
     reload,
-    replace,
     scheduled,
     stateElement,
     windowObject,
+    writeText,
   };
 }
 
@@ -357,6 +426,46 @@ function createModelSettingsHarness() {
   };
 }
 
+describe("dashboard authentication code copy", () => {
+  it.each([
+    { provider: "photon" as const, userCode: "ABCD-EFGH" },
+    { provider: "chatgpt" as const, userCode: "WXYZ-1234" },
+  ])("copies the exact $provider code locally", async ({ provider, userCode }) => {
+    const harness = createDashboardHarness({ provider, userCode });
+
+    await harness.copyListeners[0]!({ currentTarget: harness.copyButton });
+
+    expect(harness.writeText).toHaveBeenCalledOnce();
+    expect(harness.writeText).toHaveBeenCalledWith(userCode);
+    expect(harness.copyButton.textContent).toBe("Copied");
+    expect(harness.copyStatus.textContent).toBe(
+      "Authentication code copied.",
+    );
+    expect(harness.fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it("does not copy surrounding whitespace", async () => {
+    const harness = createDashboardHarness({ userCode: "ABCD-EFGH" });
+    harness.codeElement.textContent = "\n  ABCD-EFGH\t ";
+
+    await harness.copyListeners[0]!({ currentTarget: harness.copyButton });
+
+    expect(harness.writeText).toHaveBeenCalledWith("ABCD-EFGH");
+  });
+
+  it("shows manual-copy guidance when clipboard access fails", async () => {
+    const harness = createDashboardHarness({ clipboardReject: true });
+
+    await harness.copyListeners[0]!({ currentTarget: harness.copyButton });
+
+    expect(harness.copyButton.textContent).toBe("Copy code");
+    expect(harness.copyStatus.textContent).toBe(
+      "Could not copy. Select the code and copy it manually.",
+    );
+    expect(harness.fetchImplementation).not.toHaveBeenCalled();
+  });
+});
+
 describe("dashboard authentication popup", () => {
   it("loads account options, changes efforts with the model, and restores Luna High", async () => {
     const harness = createModelSettingsHarness();
@@ -507,7 +616,12 @@ describe("dashboard authentication popup", () => {
 
       expect(harness.preventDefault).toHaveBeenCalledOnce();
       expect(harness.popup.opener).toBeNull();
-      expect(harness.replace).toHaveBeenCalledWith(harness.authLink.href);
+      expect(harness.popupFocus).toHaveBeenCalledOnce();
+      expect(harness.windowObject.open).toHaveBeenCalledWith(
+        harness.authLink.href,
+        "_blank",
+        "popup=yes,width=560,height=760,left=420,top=120,resizable=yes,scrollbars=yes",
+      );
 
       await harness.scheduled.shift()!();
 
@@ -517,7 +631,7 @@ describe("dashboard authentication popup", () => {
     },
   );
 
-  it("keeps the normal external-link fallback when a popup is blocked", () => {
+  it("keeps the dashboard in place and explains when a popup is blocked", () => {
     const harness = createDashboardHarness({ popupBlocked: true });
 
     harness.authListeners[0]!({
@@ -526,7 +640,31 @@ describe("dashboard authentication popup", () => {
     });
 
     expect(harness.windowObject.open).toHaveBeenCalledOnce();
-    expect(harness.preventDefault).not.toHaveBeenCalled();
+    expect(harness.preventDefault).toHaveBeenCalledOnce();
+    expect(harness.authStatus.textContent).toBe(
+      "Pop-up blocked. Allow pop-ups for this site, then try again.",
+    );
+  });
+
+  it("keeps the click canceled when assigning the popup opener fails", () => {
+    const harness = createDashboardHarness({ openerAssignmentThrows: true });
+
+    harness.authListeners[0]!({
+      currentTarget: harness.authLink,
+      preventDefault: harness.preventDefault,
+    });
+
+    expect(harness.preventDefault).toHaveBeenCalledOnce();
+    expect(harness.windowObject.open).toHaveBeenCalledWith(
+      harness.authLink.href,
+      "_blank",
+      expect.stringContaining("width=560,height=760"),
+    );
+    expect(harness.popup.close).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate an about:blank popup after opening it", () => {
+    expect(renderDashboardScript()).not.toContain("popup.location.replace");
   });
 
   it("keeps polling through Photon provisioning without losing the popup", async () => {

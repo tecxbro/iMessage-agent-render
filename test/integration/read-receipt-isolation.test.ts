@@ -11,7 +11,12 @@ import {
   runSpectrumMessageLoop,
   type AuthorizeAndIngest,
 } from "../../src/transport/message-loop.js";
-import { ReadReceiptDispatcher } from "../../src/transport/read-receipts.js";
+import {
+  DEFAULT_READ_RECEIPT_DELAY_MS,
+  DEFAULT_TYPING_START_DELAY_MS,
+  ReadReceiptDispatcher,
+} from "../../src/transport/read-receipts.js";
+import type { InboundConversationPresencePort } from "../../src/transport/conversation-presence.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -69,8 +74,22 @@ async function flushPromises(): Promise<void> {
   }
 }
 
+function fakePresence(
+  beginRoute: InboundConversationPresencePort["beginRoute"] = async () =>
+    undefined,
+): InboundConversationPresencePort {
+  return {
+    beginRoute: vi.fn(beginRoute),
+    close: vi.fn(async () => undefined),
+    endRoute: vi.fn(async () => undefined),
+    reserve: vi.fn(() => 1),
+    reset: vi.fn(async () => undefined),
+  };
+}
+
 describe("read-receipt isolation from Spectrum stream health", () => {
-  it("does not reject message handling when message.read rejects", async () => {
+  it("keeps the delayed read-to-typing sequence after a read failure", async () => {
+    const sequence: string[] = [];
     const metrics = new ReadReceiptMetrics();
     const dispatcher = new ReadReceiptDispatcher({
       attemptTimeoutMs: 100,
@@ -81,18 +100,40 @@ describe("read-receipt isolation from Spectrum stream health", () => {
     });
     const space = fakeSpace();
     const read = vi.fn(async () => {
+      sequence.push("read");
       throw new Error("provider read failed");
+    });
+    const presence = fakePresence(async () => {
+      sequence.push("startTyping");
+    });
+    const wait = vi.fn(async (milliseconds: number) => {
+      sequence.push(`wait:${milliseconds}`);
     });
 
     await expect(
       handleSpectrumMessage(space, fakeMessage(space, { read }), {
-        authorizeAndIngest: ingestion(async () => "accepted"),
+        authorizeAndIngest: ingestion(async () => {
+          sequence.push("durably-ingested");
+          return "accepted";
+        }),
+        conversationPresence: presence,
+        readDelayMs: DEFAULT_READ_RECEIPT_DELAY_MS,
         readReceiptDispatcher: dispatcher,
+        typingStartDelayMs: DEFAULT_TYPING_START_DELAY_MS,
+        wait,
       }),
     ).resolves.toBe("accepted");
     await dispatcher.close();
 
     expect(read).toHaveBeenCalledTimes(1);
+    expect(presence.beginRoute).toHaveBeenCalledTimes(1);
+    expect(sequence).toEqual([
+      "durably-ingested",
+      `wait:${DEFAULT_READ_RECEIPT_DELAY_MS}`,
+      "read",
+      `wait:${DEFAULT_TYPING_START_DELAY_MS}`,
+      "startTyping",
+    ]);
     expect(metrics.snapshot()[READ_RECEIPT_METRICS.failures]).toBe(1);
   });
 
@@ -176,32 +217,80 @@ describe("read-receipt isolation from Spectrum stream health", () => {
     const dispatcher = new ReadReceiptDispatcher();
     const space = fakeSpace();
     const read = vi.fn(async () => undefined);
+    const presence = fakePresence();
 
     await expect(
       handleSpectrumMessage(space, fakeMessage(space, { read }), {
         authorizeAndIngest: ingestion(async () => "unauthorized"),
+        conversationPresence: presence,
         readReceiptDispatcher: dispatcher,
+        wait: async () => undefined,
       }),
     ).resolves.toBe("unauthorized");
     await dispatcher.close();
 
     expect(read).not.toHaveBeenCalled();
+    expect(presence.reserve).not.toHaveBeenCalled();
+    expect(presence.beginRoute).not.toHaveBeenCalled();
   });
 
   it("schedules a receipt for a duplicate message", async () => {
     const dispatcher = new ReadReceiptDispatcher();
     const space = fakeSpace();
     const read = vi.fn(async () => undefined);
+    const presence = fakePresence();
 
     await expect(
       handleSpectrumMessage(space, fakeMessage(space, { read }), {
         authorizeAndIngest: ingestion(async () => "duplicate"),
+        conversationPresence: presence,
         readReceiptDispatcher: dispatcher,
+        wait: async () => undefined,
       }),
     ).resolves.toBe("duplicate");
     await dispatcher.close();
 
     expect(read).toHaveBeenCalledTimes(1);
+    expect(presence.beginRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("contains read and typing failures without reconnecting the Spectrum stream", async () => {
+    const controller = new AbortController();
+    const readiness = new SpectrumReadiness();
+    const space = fakeSpace();
+    const presence = fakePresence(async () => {
+      controller.abort();
+      throw new Error("provider typing failed");
+    });
+    const messages = vi.fn(() =>
+      (async function* stream(): AsyncIterable<readonly [Space, Message]> {
+        yield [
+          space,
+          fakeMessage(space, {
+            read: vi.fn(async () => {
+              throw new Error("provider read failed");
+            }),
+          }),
+        ] as const;
+      })(),
+    );
+
+    await runSpectrumMessageLoop({
+      authorizeAndIngest: ingestion(async () => "accepted"),
+      conversationPresence: presence,
+      messages,
+      readiness,
+      signal: controller.signal,
+      wait: async () => undefined,
+    });
+
+    expect(messages).toHaveBeenCalledTimes(1);
+    expect(presence.beginRoute).toHaveBeenCalledTimes(1);
+    expect(readiness.snapshot()).toEqual({
+      component: "spectrum",
+      ready: false,
+      state: "stopped",
+    });
   });
 
   it("uses and closes an injected dispatcher during loop cleanup", async () => {

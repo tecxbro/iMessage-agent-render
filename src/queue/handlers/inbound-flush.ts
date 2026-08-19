@@ -12,6 +12,7 @@ export interface InboundFlushDependencies {
   deferredRetryMs?: number;
   enabled?: boolean;
   onChainsSuperseded?: (chainIds: readonly string[]) => void;
+  onChainCreated?: (chainId: string, spaceId: string) => void;
   now?: () => Date;
 }
 
@@ -43,6 +44,7 @@ export function createInboundFlushHandler(dependencies: InboundFlushDependencies
     if (flushed.canceledChainIds.length > 0) {
       dependencies.onChainsSuperseded?.(flushed.canceledChainIds);
     }
+    dependencies.onChainCreated?.(flushed.chainId, payload.spaceId);
 
     await dependencies.publisher.enqueueTurnPlan({
       chainId: flushed.chainId,

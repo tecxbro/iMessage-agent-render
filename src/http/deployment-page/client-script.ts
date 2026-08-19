@@ -22,17 +22,75 @@ export function renderDashboardScript(): string {
     window.focus();
     reload();
   };
+  function setAuthenticationStatus(control, message) {
+    const statusId = control.dataset.authStatus;
+    const status = statusId ? document.getElementById(statusId) : null;
+    if (status) status.textContent = message;
+  }
   function openAuthentication(event) {
     const control = event.currentTarget;
-    const popup = window.open("", "agent-provider-auth", "popup=yes,width=560,height=760");
-    if (!popup) return;
+    event.preventDefault();
+    setAuthenticationStatus(control, "");
+    closeAuthWindow();
+
+    const width = 560;
+    const height = 760;
+    const screenX = Number.isFinite(window.screenX) ? window.screenX : 0;
+    const screenY = Number.isFinite(window.screenY) ? window.screenY : 0;
+    const outerWidth = Number.isFinite(window.outerWidth)
+      ? window.outerWidth
+      : width;
+    const outerHeight = Number.isFinite(window.outerHeight)
+      ? window.outerHeight
+      : height;
+    const left = Math.max(0, Math.round(screenX + (outerWidth - width) / 2));
+    const top = Math.max(0, Math.round(screenY + (outerHeight - height) / 2));
+    const popup = window.open(
+      control.href,
+      "_blank",
+      [
+        "popup=yes",
+        "width=" + width,
+        "height=" + height,
+        "left=" + left,
+        "top=" + top,
+        "resizable=yes",
+        "scrollbars=yes"
+      ].join(",")
+    );
+    if (!popup) {
+      setAuthenticationStatus(
+        control,
+        "Pop-up blocked. Allow pop-ups for this site, then try again."
+      );
+      return;
+    }
+
+    authWindow = popup;
     try {
       popup.opener = null;
-      popup.location.replace(control.href);
-      authWindow = popup;
-      event.preventDefault();
+    } catch {}
+    try {
+      popup.focus();
+    } catch {}
+  }
+  async function copyAuthenticationCode(event) {
+    const control = event.currentTarget;
+    const targetId = control.dataset.copyTarget;
+    const statusId = control.dataset.copyStatus;
+    const status = statusId ? document.getElementById(statusId) : null;
+    const codeElement = targetId ? document.getElementById(targetId) : null;
+    const code = codeElement ? codeElement.textContent.trim() : "";
+    try {
+      if (!code) throw new Error("Authentication code is unavailable");
+      await navigator.clipboard.writeText(code);
+      control.textContent = "Copied";
+      if (status) status.textContent = "Authentication code copied.";
     } catch {
-      popup.close();
+      control.textContent = "Copy code";
+      if (status) {
+        status.textContent = "Could not copy. Select the code and copy it manually.";
+      }
     }
   }
   async function start(kind) {
@@ -395,6 +453,9 @@ export function renderDashboardScript(): string {
   }
   for (const control of document.querySelectorAll("[data-auth-link]")) {
     control.addEventListener("click", openAuthentication);
+  }
+  for (const control of document.querySelectorAll("[data-copy-target]")) {
+    control.addEventListener("click", copyAuthenticationCode);
   }
   void loadModelSettings();
   if (script && script.dataset.polling === "true") timer = window.setTimeout(refresh, 2000);

@@ -77,6 +77,7 @@ export interface TaskExecuteDependencies {
   maximumRuntimeMs?: number;
   /** Returns true when actor-origin work was woken instead of synthesized. */
   publishActorResultsReady?(chainId: string): Promise<boolean>;
+  onPresenceEnd?(chainId: string): void;
 }
 
 function safeRuntimeMessage(code: CodexRuntimeErrorCode): string {
@@ -200,19 +201,62 @@ export function createTaskExecuteHandler(dependencies: TaskExecuteDependencies) 
     payload: TaskExecutePayload,
     signal: AbortSignal = new AbortController().signal,
   ): Promise<void> => {
-    // Claim and version-check the durable task before Codex starts; completion
-    // is committed through the same authoritative expected-chain contract.
-    let context: TaskExecutionContext | null;
     try {
-      context = await dependencies.repository.claimTask(payload);
-    } catch (error) {
-      if (
-        error instanceof CodexStartDeniedError &&
-        dependencies.repository.denyTaskCodexStart !== undefined
-      ) {
-        const outcome = await dependencies.repository.denyTaskCodexStart({
+      // Claim and version-check the durable task before Codex starts; completion
+      // is committed through the same authoritative expected-chain contract.
+      let context: TaskExecutionContext | null;
+      try {
+        context = await dependencies.repository.claimTask(payload);
+      } catch (error) {
+        if (
+          error instanceof CodexStartDeniedError &&
+          dependencies.repository.denyTaskCodexStart !== undefined
+        ) {
+          const outcome = await dependencies.repository.denyTaskCodexStart({
+            payload,
+            errorCode: error.code,
+          });
+          await publishOutcome(
+            payload,
+            outcome,
+            dependencies.publisher,
+            dependencies.publishActorResultsReady,
+          );
+          return;
+        }
+        throw error;
+      }
+      if (context === null) {
+        return;
+      }
+      const task = executionTaskSchema.parse(context.task);
+
+      let run: Awaited<ReturnType<TaskExecuteDependencies["execution"]["run"]>>;
+      try {
+        run = await dependencies.execution.run({
+          chainId: context.chainId,
+          ownerId: context.ownerId,
+          task,
+          authorizedPermissionProfiles: context.authorizedPermissionProfiles,
+          modelProfile: asCodexModelProfile(context.modelSelection),
+          resolvedWorkspacePath: context.resolvedWorkspacePath,
+          policySections: executionPolicySections(
+            context,
+            dependencies.promptBundle,
+          ),
+          ...(context.recoverySummary === undefined
+            ? {}
+            : { recoverySummary: context.recoverySummary }),
+          signal,
+          ...(dependencies.maximumRuntimeMs === undefined
+            ? {}
+            : { maximumRuntimeMs: dependencies.maximumRuntimeMs }),
+        });
+      } catch (error) {
+        const failure = runtimeFailure(task.id, error);
+        const outcome = await dependencies.repository.failTaskAttempt({
           payload,
-          errorCode: error.code,
+          result: failure,
         });
         await publishOutcome(
           payload,
@@ -220,76 +264,37 @@ export function createTaskExecuteHandler(dependencies: TaskExecuteDependencies) 
           dependencies.publisher,
           dependencies.publishActorResultsReady,
         );
+        if (outcome.retry) {
+          throw error;
+        }
         return;
       }
-      throw error;
-    }
-    if (context === null) {
-      return;
-    }
-    const task = executionTaskSchema.parse(context.task);
 
-    let run: Awaited<ReturnType<TaskExecuteDependencies["execution"]["run"]>>;
-    try {
-      run = await dependencies.execution.run({
-        chainId: context.chainId,
-        ownerId: context.ownerId,
-        task,
-        authorizedPermissionProfiles: context.authorizedPermissionProfiles,
-        modelProfile: asCodexModelProfile(context.modelSelection),
-        resolvedWorkspacePath: context.resolvedWorkspacePath,
-        policySections: executionPolicySections(
-          context,
-          dependencies.promptBundle,
-        ),
-        ...(context.recoverySummary === undefined
-          ? {}
-          : { recoverySummary: context.recoverySummary }),
-        signal,
-        ...(dependencies.maximumRuntimeMs === undefined
-          ? {}
-          : { maximumRuntimeMs: dependencies.maximumRuntimeMs }),
-      });
-    } catch (error) {
-      const failure = runtimeFailure(task.id, error);
-      const outcome = await dependencies.repository.failTaskAttempt({
+      signal.throwIfAborted();
+      const outcome = await dependencies.repository.completeTask({
         payload,
-        result: failure,
+        result: executionResultSchema.parse(run.result),
+        ...(run.threadId === undefined ? {} : { threadId: run.threadId }),
+        promptSha256: run.promptSha256,
+        recovered: run.recovered,
       });
+      if (
+        outcome.accepted &&
+        run.result.status === "needs_approval" &&
+        dependencies.approvalPublisher !== undefined
+      ) {
+        await dependencies.approvalPublisher.enqueueApprovalRequest({
+          executionTaskId: payload.taskId,
+        });
+      }
       await publishOutcome(
         payload,
         outcome,
         dependencies.publisher,
         dependencies.publishActorResultsReady,
       );
-      if (outcome.retry) {
-        throw error;
-      }
-      return;
+    } finally {
+      dependencies.onPresenceEnd?.(payload.chainId);
     }
-
-    signal.throwIfAborted();
-    const outcome = await dependencies.repository.completeTask({
-      payload,
-      result: executionResultSchema.parse(run.result),
-      ...(run.threadId === undefined ? {} : { threadId: run.threadId }),
-      promptSha256: run.promptSha256,
-      recovered: run.recovered,
-    });
-    if (
-      outcome.accepted &&
-      run.result.status === "needs_approval" &&
-      dependencies.approvalPublisher !== undefined
-    ) {
-      await dependencies.approvalPublisher.enqueueApprovalRequest({
-        executionTaskId: payload.taskId,
-      });
-    }
-    await publishOutcome(
-      payload,
-      outcome,
-      dependencies.publisher,
-      dependencies.publishActorResultsReady,
-    );
   };
 }

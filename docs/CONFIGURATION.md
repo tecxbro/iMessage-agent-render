@@ -123,12 +123,14 @@ actor's finalized cursor, so finalized messages are not replayed.
 
 | Variable | Required | Default | Allowed range | Restart required |
 |---|---:|---:|---:|---:|
-| `INBOUND_DEBOUNCE_MS` | No | `4000` | 3000–5000 | Yes |
+| `INBOUND_DEBOUNCE_MS` | No | `0` | 0–5000 | Yes |
 | `MAX_EXECUTION_CONCURRENCY` | No | `3` | 1–20 | Yes |
 | `MAX_OWNER_EXECUTION_CONCURRENCY` | No | `2` | 1–20 and no greater than global | Yes |
 | `MESSAGE_RATE_LIMIT_PER_MINUTE` | No | `60` | 1–10000 | Yes |
 | `TASK_RATE_LIMIT_PER_HOUR` | No | `120` | 1–10000 | Yes |
 | `MAX_TASK_RUNTIME_MS` | No | `900000` | 1000–3600000 | Yes |
+
+`0` starts processing immediately and is the production default. A non-zero value batches messages sent within the configured window but adds the same amount of guaranteed latency before processing begins.
 
 These bounds protect provider load and child-process capacity. Increasing them changes resource and abuse risk; validate queue recovery, cancellation, and Render capacity before deployment.
 

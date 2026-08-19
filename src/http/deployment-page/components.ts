@@ -89,6 +89,26 @@ function renderOwnerAction(status: DeploymentIdentityStatus): string {
     ${renderOwnerForm(false)}`;
 }
 
+function renderAuthenticationCode(
+  provider: "photon" | "chatgpt",
+  providerLabel: string,
+  userCode: string,
+): string {
+  const codeId = `${provider}-device-code`;
+  const statusId = `${provider}-copy-status`;
+  return `<div class="device-code-row">
+      <code id="${codeId}" class="device-code">${escapeHtml(userCode)}</code>
+      <button
+        type="button"
+        class="button secondary-button copy-code-button"
+        data-copy-target="${codeId}"
+        data-copy-status="${statusId}"
+        title="Copy ${escapeHtml(providerLabel)} authentication code"
+      >Copy code</button>
+    </div>
+    <p id="${statusId}" class="copy-code-status" aria-live="polite"></p>`;
+}
+
 function renderPhotonAction(status: PhotonSetupStatus): string {
   if (status.state === "connected") {
     return "";
@@ -96,8 +116,17 @@ function renderPhotonAction(status: PhotonSetupStatus): string {
   if (status.state === "awaiting_authorization") {
     return `<div class="auth-flow">
       <p>Open Photon and enter this one-time code.</p>
-      <code class="device-code">${escapeHtml(status.userCode)}</code>
-      <a class="button" href="${escapeHtml(status.verificationUrl)}" target="_blank" rel="noreferrer" data-auth-link="photon">Open Photon</a>
+      ${renderAuthenticationCode("photon", "Photon", status.userCode)}
+      <a
+        class="button"
+        href="${escapeHtml(status.verificationUrl)}"
+        target="_blank"
+        rel="noreferrer"
+        data-auth-link="photon"
+        data-auth-status="photon-auth-status"
+        aria-describedby="photon-auth-status"
+      >Open Photon</a>
+      <p id="photon-auth-status" class="auth-link-status" aria-live="polite"></p>
     </div>`;
   }
   if (status.state === "provisioning") {
@@ -123,8 +152,17 @@ function renderChatGptAction(
   if (status.state === "awaiting_authorization") {
     return `<div class="auth-flow">
       <p>Open ChatGPT, sign in, and enter this one-time code.</p>
-      <code class="device-code">${escapeHtml(status.userCode)}</code>
-      <a class="button" href="${escapeHtml(status.verificationUrl)}" target="_blank" rel="noreferrer" data-auth-link="chatgpt">Sign in with ChatGPT</a>
+      ${renderAuthenticationCode("chatgpt", "ChatGPT", status.userCode)}
+      <a
+        class="button"
+        href="${escapeHtml(status.verificationUrl)}"
+        target="_blank"
+        rel="noreferrer"
+        data-auth-link="chatgpt"
+        data-auth-status="chatgpt-auth-status"
+        aria-describedby="chatgpt-auth-status"
+      >Sign in with ChatGPT</a>
+      <p id="chatgpt-auth-status" class="auth-link-status" aria-live="polite"></p>
     </div>`;
   }
   if (status.state === "starting") {
@@ -137,18 +175,41 @@ function renderChatGptAction(
   return `${error}<button id="chatgpt-start" class="button" type="button">Connect ChatGPT</button>`;
 }
 
+function normalizeAssignedPhoneNumber(
+  phoneNumber: string | undefined,
+): string | undefined {
+  if (phoneNumber === undefined) {
+    return undefined;
+  }
+  const normalized = phoneNumber.replaceAll(/\s/g, "");
+  return /^\+\d+$/.test(normalized) ? normalized : undefined;
+}
+
 function renderFinalPage(
   phoneNumber: string | undefined,
   maskedOwnerPhoneNumber: string,
   authMode: DeploymentPageOptions["authMode"],
 ): string {
-  const number =
-    phoneNumber === undefined
-      ? ""
-      : `<div class="agent-number">
+  const visiblePhoneNumber = phoneNumber?.trim();
+  const messagingPhoneNumber = normalizeAssignedPhoneNumber(phoneNumber);
+  const number = visiblePhoneNumber
+    ? `<div class="agent-start">
+        <div class="agent-number">
           <span>Your number:</span>
-          <strong>${escapeHtml(phoneNumber)}</strong>
-        </div>`;
+          <strong>${escapeHtml(visiblePhoneNumber)}</strong>
+        </div>
+        ${
+          messagingPhoneNumber === undefined
+            ? ""
+            : `<span class="agent-or">or</span>
+        <a
+          class="button text-agent-button"
+          href="sms:${escapeHtml(messagingPhoneNumber)}"
+          aria-label="Open Messages to text your iMessage agent"
+        >Text agent</a>`
+        }
+      </div>`
+    : "";
   return `<h1>Your iMessage Agent</h1>
     <section class="card ready-card" aria-labelledby="ready-title">
       <h2 id="ready-title" class="visually-hidden">Agent readiness</h2>
@@ -159,7 +220,7 @@ function renderFinalPage(
         <li>✓ Codex ready</li>
       </ul>
       ${number}
-      <p class="ready-message"><strong>Your agent is ready.</strong><br>Text it to get started.</p>
+      <p class="ready-message"><strong>Your agent is ready.</strong><br>Send “hi” to get started.</p>
     </section>${authMode === "chatgpt" ? renderAdvancedSettings() : ""}`;
 }
 

@@ -341,18 +341,42 @@ describeDatabase("transactional conversation ingestion", () => {
       chainStartedAt: new Date("2026-08-18T10:00:00Z"),
       completedAt: new Date("2026-08-18T10:01:00Z"),
     });
-    await client.database.insert(messages).values({
-      id: messageId(450),
+    await client.database.insert(messages).values([
+      {
+        id: messageId(449),
+        spaceId: ids.spaceA,
+        externalMessageId: "legacy-finalized-before-observe",
+        direction: "inbound",
+        inputSequence: 1,
+        senderIdentityId: ids.identity,
+        contentCiphertext: "cipher:legacy-finalized-before-observe",
+        contentHash: "hash:legacy-finalized-before-observe",
+        receivedAt: new Date("2026-08-18T09:59:00Z"),
+        retentionExpiresAt: new Date("2026-09-18T10:00:00Z"),
+        drainedChainId: ids.chain1,
+      },
+      {
+        id: messageId(450),
+        spaceId: ids.spaceA,
+        externalMessageId: "legacy-complete-before-observe",
+        direction: "inbound",
+        inputSequence: null,
+        senderIdentityId: ids.identity,
+        contentCiphertext: "cipher:legacy-complete-before-observe",
+        contentHash: "hash:legacy-complete-before-observe",
+        receivedAt: new Date("2026-08-18T10:00:00Z"),
+        retentionExpiresAt: new Date("2026-09-18T10:00:00Z"),
+        drainedChainId: ids.chain1,
+      },
+    ]);
+    await client.database.insert(conversationStates).values({
       spaceId: ids.spaceA,
-      externalMessageId: "legacy-complete-before-observe",
-      direction: "inbound",
-      inputSequence: null,
-      senderIdentityId: ids.identity,
-      contentCiphertext: "cipher:legacy-complete-before-observe",
-      contentHash: "hash:legacy-complete-before-observe",
-      receivedAt: new Date("2026-08-18T10:00:00Z"),
-      retentionExpiresAt: new Date("2026-09-18T10:00:00Z"),
-      drainedChainId: ids.chain1,
+      latestInputSequence: 1,
+      acceptedThroughSequence: 1,
+      finalizedThroughSequence: 1,
+      actorGeneration: 0,
+      activeInteractionRunId: null,
+      state: "idle",
     });
 
     const ingested = await repository.ingestObservedInput(
@@ -365,13 +389,13 @@ describeDatabase("transactional conversation ingestion", () => {
 
     expect(ingested).toMatchObject({
       status: "inserted",
-      input: { inputSequence: 2 },
+      input: { inputSequence: 3 },
     });
     const snapshot = await repository.loadActorSnapshot(ids.spaceA);
     expect(snapshot?.state).toMatchObject({
-      latestInputSequence: 2,
-      acceptedThroughSequence: 0,
-      finalizedThroughSequence: 0,
+      latestInputSequence: 3,
+      acceptedThroughSequence: 1,
+      finalizedThroughSequence: 1,
     });
   });
 

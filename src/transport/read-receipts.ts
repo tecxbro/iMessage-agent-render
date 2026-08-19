@@ -7,6 +7,9 @@ import {
 
 export type ReadReceiptAttempt = () => Promise<void> | void;
 
+export const DEFAULT_READ_RECEIPT_DELAY_MS = 350;
+export const DEFAULT_TYPING_START_DELAY_MS = 150;
+
 export interface ReadReceiptDispatcherPort {
   dispatch(attempt: ReadReceiptAttempt): boolean;
   close(): Promise<void>;

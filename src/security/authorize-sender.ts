@@ -490,26 +490,32 @@ export class SecureAuthorizeAndIngest {
 
   public async authorizeAndIngest(
     inbound: InboundTextForAuthorization,
-    context: { signal?: AbortSignal },
+    context: {
+      signal?: AbortSignal;
+      onHandledWithoutAgentPresence?: () => void;
+    },
   ): Promise<IngestDisposition> {
     const authorization = await this.authorizer.authorize(inbound);
     if (!authorization.authorized) {
       return "unauthorized";
     }
+    const downstreamContext =
+      context.signal === undefined ? {} : { signal: context.signal };
     if (
       this.commands !== undefined &&
       (await this.commands.interceptAuthorized(
         inbound,
         authorization.context,
-        context,
+        downstreamContext,
       ))
     ) {
+      context.onHandledWithoutAgentPresence?.();
       return "accepted";
     }
     return this.consumer.ingestAuthorized(
       inbound,
       authorization.context,
-      context,
+      downstreamContext,
     );
   }
 }

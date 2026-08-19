@@ -35,6 +35,25 @@ export function renderDashboardScript(): string {
       popup.close();
     }
   }
+  async function copyAuthenticationCode(event) {
+    const control = event.currentTarget;
+    const targetId = control.dataset.copyTarget;
+    const statusId = control.dataset.copyStatus;
+    const status = statusId ? document.getElementById(statusId) : null;
+    const codeElement = targetId ? document.getElementById(targetId) : null;
+    const code = codeElement ? codeElement.textContent.trim() : "";
+    try {
+      if (!code) throw new Error("Authentication code is unavailable");
+      await navigator.clipboard.writeText(code);
+      control.textContent = "Copied";
+      if (status) status.textContent = "Authentication code copied.";
+    } catch {
+      control.textContent = "Copy code";
+      if (status) {
+        status.textContent = "Could not copy. Select the code and copy it manually.";
+      }
+    }
+  }
   async function start(kind) {
     const control = document.getElementById(kind + "-start");
     if (control) control.disabled = true;
@@ -395,6 +414,9 @@ export function renderDashboardScript(): string {
   }
   for (const control of document.querySelectorAll("[data-auth-link]")) {
     control.addEventListener("click", openAuthentication);
+  }
+  for (const control of document.querySelectorAll("[data-copy-target]")) {
+    control.addEventListener("click", copyAuthenticationCode);
   }
   void loadModelSettings();
   if (script && script.dataset.polling === "true") timer = window.setTimeout(refresh, 2000);

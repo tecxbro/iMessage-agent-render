@@ -75,6 +75,7 @@ export interface TaskExecuteDependencies {
   approvalPublisher?: Pick<QueuePublisher, "enqueueApprovalRequest">;
   promptBundle: PromptBundle;
   maximumRuntimeMs?: number;
+  onPresenceEnd?(chainId: string): void;
 }
 
 function safeRuntimeMessage(code: CodexRuntimeErrorCode): string {
@@ -209,6 +210,7 @@ export function createTaskExecuteHandler(dependencies: TaskExecuteDependencies) 
           errorCode: error.code,
         });
         await publishOutcome(payload, outcome, dependencies.publisher);
+        dependencies.onPresenceEnd?.(payload.chainId);
         return;
       }
       throw error;
@@ -240,6 +242,7 @@ export function createTaskExecuteHandler(dependencies: TaskExecuteDependencies) 
           : { maximumRuntimeMs: dependencies.maximumRuntimeMs }),
       });
     } catch (error) {
+      dependencies.onPresenceEnd?.(context.chainId);
       const failure = runtimeFailure(task.id, error);
       const outcome = await dependencies.repository.failTaskAttempt({
         payload,

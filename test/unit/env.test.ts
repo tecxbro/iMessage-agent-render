@@ -36,7 +36,7 @@ describe("loadEnvironment", () => {
     expect(environment.AGENT_WORKSPACE_ROOT).toBe(
       resolve(".agent-workspaces"),
     );
-    expect(environment.INBOUND_DEBOUNCE_MS).toBe(4_000);
+    expect(environment.INBOUND_DEBOUNCE_MS).toBe(0);
     expect(environment.LOG_MESSAGE_CONTENT).toBe(false);
   });
 
@@ -108,12 +108,21 @@ describe("loadEnvironment", () => {
       { AGENT_WORKSPACE_ROOT: "./.codex-agent/workspaces" },
     ],
     ["duration", { MAX_TASK_RUNTIME_MS: "0" }],
-    ["debounce", { INBOUND_DEBOUNCE_MS: "2500" }],
+    ["negative debounce", { INBOUND_DEBOUNCE_MS: "-1" }],
+    ["excessive debounce", { INBOUND_DEBOUNCE_MS: "5001" }],
     ["boolean", { LOG_MESSAGE_CONTENT: "yes" }],
   ])("rejects malformed %s configuration", (_label, override) => {
     expect(() => loadEnvironment(validEnvironment(override))).toThrow(
       EnvironmentValidationError,
     );
+  });
+
+  it("allows an operator to restore a bounded inbound debounce", () => {
+    expect(
+      loadEnvironment(
+        validEnvironment({ INBOUND_DEBOUNCE_MS: "500" }),
+      ).INBOUND_DEBOUNCE_MS,
+    ).toBe(500);
   });
 
   it("ignores removed model-profile environment variables", () => {

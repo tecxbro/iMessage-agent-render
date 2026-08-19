@@ -111,6 +111,7 @@ export interface TurnSynthesizeDependencies {
   promptBundle: PromptBundle;
   encrypt(plaintext: string): Promise<string> | string;
   maximumBubbleCharacters?: number;
+  onPresenceEnd?(chainId: string): void;
 }
 
 function synthesisSections(
@@ -212,6 +213,7 @@ export function createTurnSynthesizeHandler(
           expectedState: "executing",
           errorCode: error.code,
         });
+        dependencies.onPresenceEnd?.(payload.chainId);
         return;
       }
       throw error;
@@ -254,6 +256,7 @@ export function createTurnSynthesizeHandler(
           expectedState: "executing",
           errorCode: error.code,
         });
+        dependencies.onPresenceEnd?.(context.chainId);
         return;
       }
       throw error;

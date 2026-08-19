@@ -153,4 +153,24 @@ describe("observe conversation actor", () => {
     expect(metrics.snapshot()).toHaveLength(1);
     expect(records).toEqual([spaceId, anotherSpaceId]);
   });
+
+  it("aborts the repository signal when a snapshot read times out", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const actor = new ObserveConversationActor({
+      spaceId,
+      repository: {
+        loadConversation: async (_spaceId, signal) => {
+          observedSignal = signal;
+          return await new Promise<ConversationSnapshot | null>(() => undefined);
+        },
+      },
+      metrics: new ConversationObservationMetrics(),
+      readTimeoutMs: 10,
+    });
+
+    await expect(actor.wake("recovery")).rejects.toThrow(
+      /snapshot read exceeded/u,
+    );
+    expect(observedSignal?.aborted).toBe(true);
+  });
 });

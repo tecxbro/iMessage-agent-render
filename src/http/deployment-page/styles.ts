@@ -79,7 +79,7 @@ export const DEPLOYMENT_PAGE_STYLES = `    @font-face {
     .owner-replace[open] .owner-form { margin-block-start: 1rem; }
     .codex-progress { position: relative; inline-size: 100%; block-size: 0.35rem; margin-block-start: 1.35rem; overflow: hidden; border-radius: 999rem; background: var(--line); }
     .codex-progress span { display: block; inline-size: 34%; block-size: 100%; border-radius: inherit; background: var(--accent); animation: codex-progress 1.4s ease-in-out infinite; transform: translateX(-110%); }
-    .device-code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
+    .device-code-row { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.75rem; }
     .device-code { display: block; padding: 0.85rem 1rem; border: 0.0625rem solid var(--line); border-radius: 0.4rem; background: var(--soft); font: 750 clamp(1.2rem, 6vw, 2rem) ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.08em; }
     .button { display: inline-flex; min-block-size: 3rem; align-items: center; justify-content: center; padding: 0.72rem 1.15rem; border: 0.0625rem solid var(--accent); border-radius: 999rem; background: var(--accent); color: white; font: inherit; font-size: 1rem; font-variation-settings: "wght" 550; text-decoration: none; cursor: pointer; transition: transform 160ms ease, background-color 160ms ease; }
     .button:hover, .button:focus-visible { background: var(--accent-hover); transform: translateY(-0.1rem); }
@@ -90,7 +90,7 @@ export const DEPLOYMENT_PAGE_STYLES = `    @font-face {
     .error + .button { margin-block-start: 0.75rem; }
     .ready-card { display: grid; gap: 1.5rem; margin-block-start: 2rem; padding-block: 2rem; border-block: 0.0625rem solid var(--line); }
     .ready-list { display: grid; gap: 0.7rem; margin: 0; padding: 0; list-style: none; font-size: 1.35rem; }
-    .agent-start { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem 1.5rem; }
+    .agent-start { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 1rem 1.5rem; }
     .agent-number { display: grid; gap: 0.2rem; }
     .agent-number span { color: var(--muted); }
     .agent-number strong { font-size: clamp(2rem, 7vw, 3.5rem); font-weight: 400; letter-spacing: -0.035em; }

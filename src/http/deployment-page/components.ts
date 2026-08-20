@@ -204,7 +204,7 @@ function renderFinalPage(
             : `<span class="agent-or">or</span>
         <a
           class="button text-agent-button"
-          href="sms:${escapeHtml(messagingPhoneNumber)}"
+          href="sms:${escapeHtml(messagingPhoneNumber)}?body=hi"
           aria-label="Open Messages to text your iMessage agent"
         >Text agent</a>`
         }

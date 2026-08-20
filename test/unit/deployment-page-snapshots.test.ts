@@ -119,7 +119,7 @@ describe("deployment page characterization snapshots", () => {
     ];
 
     expect(digest(pages.join("\n---PAGE---\n"))).toBe(
-      "ab3283d5e000f17af1df167323557433b70896278160bca1162aa2f4362d1320",
+      "5e287083f3f667284827e0dddb7b9cc094746602feb987f31375a4b5f96aa557",
     );
   });
 

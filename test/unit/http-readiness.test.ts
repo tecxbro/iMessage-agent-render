@@ -363,7 +363,7 @@ describe("health and readiness endpoints", () => {
     expect(page).toContain("✓ Photon connected");
     expect(page).toContain("Your number:");
     expect(page).toContain("+1 628 555 0123");
-    expect(page).toContain('href="sms:+16285550123"');
+    expect(page).toContain('href="sms:+16285550123?body=hi"');
     expect(page).not.toContain("Supermemory");
 
     const ready = await fetch(`${base}/readyz`);
@@ -552,7 +552,7 @@ describe("health and readiness endpoints", () => {
     expect(page).toContain("Your number:");
     expect(page).toContain("+16285550123");
     expect(page).toContain('<span class="agent-or">or</span>');
-    expect(page).toContain('href="sms:+16285550123"');
+    expect(page).toContain('href="sms:+16285550123?body=hi"');
     expect(page).toContain("Text agent");
     expect(page).toContain("Your agent is ready.");
     expect(page).toContain("Send “hi” to get started.");
